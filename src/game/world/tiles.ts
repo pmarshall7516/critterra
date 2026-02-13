@@ -1,0 +1,140 @@
+import { CUSTOM_TILE_DEFINITIONS } from '@/game/world/customTiles';
+import type { TileDefinition } from '@/game/world/types';
+
+export const FALLBACK_TILE_CODE = 'G';
+export const BLANK_TILE_CODE = '.';
+
+export const BASE_TILE_DEFINITIONS: Record<string, TileDefinition> = {
+  [BLANK_TILE_CODE]: {
+    code: BLANK_TILE_CODE,
+    label: 'Blank',
+    walkable: false,
+    color: '#00000000',
+    accentColor: '#4d5560',
+    height: 0,
+  },
+  X: {
+    code: 'X',
+    label: 'Boundary Wall',
+    walkable: false,
+    color: '#3a2f2b',
+    accentColor: '#4f4039',
+    height: 1,
+    atlasIndex: 0,
+  },
+  G: {
+    code: 'G',
+    label: 'Grass',
+    walkable: true,
+    color: '#5fba53',
+    accentColor: '#78cc6f',
+    height: 0,
+    atlasIndex: 1,
+  },
+  T: {
+    code: 'T',
+    label: 'Tree',
+    walkable: false,
+    color: '#2f7e3d',
+    accentColor: '#3d9750',
+    height: 2,
+    atlasIndex: 2,
+  },
+  P: {
+    code: 'P',
+    label: 'Path',
+    walkable: true,
+    color: '#cfb883',
+    accentColor: '#dbc998',
+    height: 0,
+    atlasIndex: 3,
+  },
+  H: {
+    code: 'H',
+    label: 'House Wall',
+    walkable: false,
+    color: '#b86144',
+    accentColor: '#d2785a',
+    height: 2,
+    atlasIndex: 4,
+  },
+  Q: {
+    code: 'Q',
+    label: 'Roof',
+    walkable: false,
+    color: '#8a3c30',
+    accentColor: '#a84e3f',
+    height: 2,
+    atlasIndex: 5,
+  },
+  U: {
+    code: 'U',
+    label: 'Window',
+    walkable: false,
+    color: '#688fa7',
+    accentColor: '#81a7be',
+    height: 1,
+    atlasIndex: 6,
+  },
+  D: {
+    code: 'D',
+    label: 'Door',
+    walkable: false,
+    color: '#73452f',
+    accentColor: '#8a5538',
+    height: 1,
+    atlasIndex: 7,
+  },
+  W: {
+    code: 'W',
+    label: 'Interior Wall',
+    walkable: false,
+    color: '#b49f83',
+    accentColor: '#c7b297',
+    height: 1,
+    atlasIndex: 8,
+  },
+  F: {
+    code: 'F',
+    label: 'Floor',
+    walkable: true,
+    color: '#d9c9ac',
+    accentColor: '#ead9be',
+    height: 0,
+    atlasIndex: 9,
+  },
+  R: {
+    code: 'R',
+    label: 'Rug',
+    walkable: true,
+    color: '#b2555a',
+    accentColor: '#c9676d',
+    height: 0,
+    atlasIndex: 10,
+  },
+  B: {
+    code: 'B',
+    label: 'Furniture',
+    walkable: false,
+    color: '#8f6a4f',
+    accentColor: '#a37b5f',
+    height: 1,
+    atlasIndex: 11,
+  },
+  C: {
+    code: 'C',
+    label: 'Decoration',
+    walkable: false,
+    color: '#6b8f5b',
+    accentColor: '#86aa77',
+    height: 1,
+    atlasIndex: 12,
+  },
+};
+
+export const BASE_TILE_CODES = Object.keys(BASE_TILE_DEFINITIONS);
+
+export const TILE_DEFINITIONS: Record<string, TileDefinition> = {
+  ...BASE_TILE_DEFINITIONS,
+  ...CUSTOM_TILE_DEFINITIONS,
+};

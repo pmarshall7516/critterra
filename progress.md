@@ -1,0 +1,274 @@
+Original prompt: Build a classic pokemon first town demo based on this current repo using the Develop Web Game skill
+
+## 2026-02-11
+- Initialized progress tracking for this turn.
+- Confirmed `develop-web-game` skill instructions and local Playwright client/action payload paths.
+- Context gathered: runtime movement/dialogue/warp system, current maps, tile legend, and UI flow.
+
+### TODO
+- Rebuild first-town map content and add a lab interior map.
+- Expand dialogue scripts to feel like a classic first-town intro.
+- Add `window.render_game_to_text` and deterministic `window.advanceTime(ms)` in the game view.
+- Add fullscreen toggle (`f`) and keep existing controls stable.
+- Run Playwright client, inspect screenshots + state JSON + console errors, and iterate.
+- Rebuilt map content for a more classic first-town flow:
+  - Updated `player-house` layout and swapped intro NPC to Mom.
+  - Reworked `starter-town` as Willowbrook Town with signs, locked houses, NPCs, and lab entrance.
+  - Added new `rowan-lab` map with professor/rival NPCs and interaction points.
+- Updated map registry and dialogue scripts to support the new town arc.
+- Added runtime/UI support for the develop-web-game test loop:
+  - `RuntimeSnapshot` now includes a live objective.
+  - Implemented `runtime.renderGameToText()` with map/player/dialogue/NPC/interaction state.
+  - Added deterministic stepping support via `window.advanceTime(ms)` in `GameView`.
+  - Added global `window.render_game_to_text` bridge in `GameView`.
+  - Added fullscreen toggle on `f` with `Esc` fullscreen exit handling.
+- Updated controls modal and HUD objective banner for clearer gameplay guidance.
+- Enabled automation-friendly startup by pre-filling the trainer name with `Player` on the New Game screen.
+- First Playwright run exposed a runtime crash: `rowan-lab` had one row with width 17 instead of 18.
+- Fixed malformed row in `src/game/data/maps/rowanLab.ts`.
+- Installed `playwright` and Chromium browser for automated validation runs.
+- Verified automated startup into gameplay works and `state-0.json` is produced with `render_game_to_text` output.
+- Verified objective progression updates after Mom dialogue (`flags: ["talked_to_mom"]`).
+
+### Remaining TODOs / Next Agent Suggestions
+- Improve Playwright action choreography to reliably traverse house -> town -> lab in a single automated run.
+- Add dedicated tests or scripted scenarios for:
+  - Door warp from `player-house` to `starter-town`.
+  - Lab warp + professor dialogue + starter table flag progression.
+  - Objective transitions through all early-game states.
+
+## 2026-02-12
+- Refreshed intro narrative on request:
+  - Home NPC changed from Mom to Brother (`Eli`).
+  - `rowan-lab` replaced with `rival-house` (`Kira House`) as the starter location.
+  - Starter-giver changed from professor to rival parent (`Aunt Mara`).
+- Updated warps/interactions/dialogue/objective text and flags to match the new story arc.
+- Renamed map file to `src/game/data/maps/rivalHouse.ts` and updated map registry + map docs.
+- Validation:
+  - `npm run build` passed.
+  - Playwright run captured screenshot + `state-0.json` confirming `Eli` dialogue and updated objective text.
+
+## 2026-02-12 (Admin Tool)
+- Original prompt continuation: build an admin tool with a map editor module for creating/editing maps, including warp setup and tileset-driven design.
+- Scanned current app architecture and discovered local `example_assets` packs (tileset/sprites/UI) to wire into editor UX.
+- Implemented admin shell with module navigation (`Map Editor`, placeholder modules for future tools).
+- Added full `MapEditorTool` with:
+  - Existing map load + blank map creation + map resize.
+  - Tile painting tools (paint/erase/fill/eyedropper) with zoom.
+  - Tileset URL/file loading and per-tile atlas index mapping.
+  - Warp CRUD with click-placement (`from`/`to`) and edge helper placement.
+  - NPC and interaction JSON editing.
+  - Export to JSON and TypeScript (`createMap(...)`) plus import from JSON.
+  - Basic map validation warnings (bounds and unknown warp target IDs).
+- Added admin entrypoint from title screen via `Admin Tools` button.
+- Added admin-specific documentation at `src/admin/README_ADMIN_MAP_EDITOR.md`.
+- Validation:
+  - `npm run build` passed.
+  - Playwright visual sanity checks rendered Admin Map Editor screen with no emitted error logs.
+- Refactored admin tools to a separate app entrypoint in the same repo:
+  - Added `admin.html` + `src/admin/main.tsx` + `src/admin/AdminApp.tsx`.
+  - Updated Vite multi-page build inputs for game + admin outputs.
+  - Game title now links to `/admin.html` instead of embedding admin in game state.
+- Updated admin UI shell for scrollability:
+  - Full-height admin screen with independent scrolling regions.
+  - Scrollable module content, left/right editor columns, tileset grid, saved paint list, and map canvas.
+- Implemented advanced tileset workflow in Map Editor:
+  - Default tileset loads and renders as a grid based on user-defined tile width/height.
+  - Manual selection of atlas cells from grid.
+  - Auto mode to generate default paint tiles.
+  - Manual mode to save selected atlas cells into paint tools with custom name + tile code.
+  - Saved paint tile management (rename/reassign/remove + remove selected button).
+- Updated admin docs to reflect separate app + new tileset/palette workflow.
+- Validation:
+  - `npm run build` passed with both `dist/index.html` and `dist/admin.html` outputs.
+  - Playwright checks against `/admin.html` rendered the standalone admin app with no emitted console error artifacts.
+- Updated manual tileset-picker save flow so tile codes are always auto-generated from an available single-character pool and stored on each saved paint tile entry (`SavedPaintTile.code`).
+- Code generation now avoids collisions with existing saved paint tile codes and codes already used on the active map, enabling tile IDs beyond the built-in base set.
+- Added map warning for custom tile codes not present in `src/game/world/tiles.ts`, so exported maps using generated codes flag required runtime tile-definition follow-up.
+- Expanded admin map tile picker to support rectangle selection via click-drag on the atlas grid.
+- Saved paint tiles now support multi-cell stamp definitions (`width`, `height`, `cells[]`) instead of only single atlas indices.
+- Painting now applies full stamp footprints to the map canvas (all cell offsets in the saved tile), enabling multi-tile structures (e.g., building chunks).
+- Admin startup now initializes blank by default:
+  - no map loaded,
+  - no tileset loaded,
+  - empty tile pixel width/height fields,
+  - empty JSON editors,
+  - no in-memory saved paint tiles.
+- Added explicit `Load Saved Tiles` action and IndexedDB persistence for saved paint tiles in `src/admin/indexedDbStore.ts`.
+- New/updated/removed saved paint tiles now persist to IndexedDB for future sessions.
+- Added migration-compatible tile sanitization so older single-cell saved tile shapes can still be loaded and normalized.
+- Updated paint tile and saved tile UI previews to render multi-cell stamps and show stamp dimensions.
+- Added map-canvas empty state when no map is loaded.
+- Validation:
+  - `npm run build` passed after refactor.
+  - Playwright screenshot check on `/admin.html` confirms blank-start admin state and no emitted console-error artifacts (`output/admin-map-editor/shot-0.png`).
+  - Additional Playwright run confirmed rectangle save metadata as multi-cell (`11x1 | 11 codes`).
+- Added direct map file saving from admin via new local API endpoint: `POST /api/admin/maps/save` (Vite plugin middleware in `vite.config.ts`).
+- Map save behavior:
+  - If editing a loaded existing map, save writes back to that map's original file.
+  - If creating/importing a new map, save creates/updates `src/game/data/maps/<derivedFileName>.ts` using existing map format (`createMap({...})` export).
+  - Regenerates `src/game/data/maps/index.ts` imports and `WORLD_MAPS` registry order.
+- Added bottom panel in Map Editor: `Save To Project` with `Save Map File + Tile IDs` action.
+- Added custom tile runtime sync on save:
+  - Save operation now writes `src/game/world/customTiles.ts` from saved paint tile cell metadata + map tile usage.
+  - Introduced runtime merge of base + custom tile definitions in `src/game/world/tiles.ts`.
+  - Runtime now optionally renders custom tiles from a configured tileset atlas (`CUSTOM_TILESET_CONFIG`) and falls back to color rendering if unavailable.
+- Relaxed tile code typing to support custom single-character IDs across world types/runtime path.
+- Build validation: `npm run build` passed.
+- Playwright visual sanity check on `/admin.html` confirms new bottom save panel is visible (`output/admin-map-save/shot-0.png`).
+- Added right-click blank-paint behavior in map canvas editing:
+  - Right mouse click on a map cell now writes blank tile code `.`.
+  - Context menu is suppressed for map-cell right-clicks.
+- Added multi-cell stamp hover preview shadow:
+  - When selected paint tile is larger than 1x1, hovering map cells shows an opaque placement shadow for all affected cells.
+- Added base blank tile definition in runtime tile registry (`BLANK_TILE_CODE = '.'`) and renderer/physics handling:
+  - Blank tiles are not rendered in runtime draw pass.
+  - Blank tiles are non-walkable.
+- Updated save pipeline base tile-code set to treat `.` as built-in (not custom-generated).
+- Validation: `npm run build` passed.
+- Implemented layered map editing + rotated painting in admin map editor.
+- Added new paint tool `Paint Rotated`:
+  - randomly rotates placed tiles by 0/90/180/270 degrees,
+  - supports multi-cell stamp tiles,
+  - preserves right-click blank erase behavior.
+- Refactored admin editable map model from single `tiles[]` to `layers[]` with per-layer:
+  - `tiles` rows,
+  - `rotations` rows (0-3),
+  - `visible` and `collision` flags,
+  - layer id/name metadata.
+- Added layer management UI in Active Map panel:
+  - select active layer,
+  - add/remove layers,
+  - rename layer id/name,
+  - toggle visibility + collision.
+- Updated map canvas rendering in admin to draw stacked visible layers and highlight active layer content.
+- Updated editor JSON/TS export and import to support `layers` while preserving legacy single-layer `tiles` output when possible.
+- Updated save API (`vite.config.ts`) to validate and persist layered maps:
+  - accepts `map.layers` payload,
+  - writes `layers` to map files when needed,
+  - writes legacy `tiles` format for simple base-only maps,
+  - scans tile codes across all layers for custom tile sync.
+- Updated runtime map drawing + collision handling for layers/rotations:
+  - renders all visible layers in order,
+  - applies per-cell quarter-turn atlas rotation during draw,
+  - collision checks only layers marked `collision`.
+- CSS updates for stacked tile rendering and active layer emphasis in map cells.
+
+Validation
+- `npm run build` passes after layer/rotation refactor.
+- Playwright sanity screenshot confirms admin loads with new `Paint Rotated` control.
+- Gameplay runtime screenshot sanity captured; no build/runtime crash observed.
+
+Follow-up suggestions
+- Add explicit rotation visualization in paint-tile palette (tiny rotation badge) when using `Paint Rotated` hover.
+- Add dedicated Playwright action scripts for full admin flows (load map, add layer, paint, save, reload).
+- Add map migration helper command to convert legacy `tiles` maps into a two-layer starter format automatically.
+- Addressed custom tile warning noise in editor:
+  - map validation now treats tile codes present in saved paint tiles as known custom codes,
+  - warning text now points to `Save Map File + Tile IDs` for runtime sync.
+- Updated manual atlas save flow to immediately persist the new saved tile list (including generated codes) to IndexedDB in one explicit update path.
+- Build validation: `npm run build` passed.
+- Added per-cell edge collision editing and runtime support.
+- World map schema updates:
+  - `WorldMapLayerInput.collisionEdges?: string[]`
+  - `WorldMapLayer.collisionEdges: number[][]`
+- Map parser (`createMap`) now reads hex edge masks (`0-f`) per cell with defaults to `0`.
+- Admin editor data model now tracks `collisionEdges` per layer.
+- Admin map editor new paint tool: `Collision Edges`:
+  - edge side toggles (`Top`, `Right`, `Bottom`, `Left`),
+  - add/remove mode,
+  - drag-paint support,
+  - right-click clears collision edges on hovered cell for active layer,
+  - visible edge overlay on map cells.
+- Runtime movement now respects edge collisions:
+  - blocks movement if source tile has blocking edge in move direction,
+  - blocks movement if target tile has opposite-side blocking edge.
+- Save/load pipeline updates:
+  - map import/export JSON/TS includes `collisionEdges` when non-zero,
+  - Vite save middleware validates and persists `collisionEdges` for layer maps.
+- Style updates for collision edge overlays in editor canvas.
+- Validation: `npm run build` passed after collision-edge integration.
+- Addressed reported in-game vertical line artifacts by stabilizing camera-to-screen tile placement math in runtime render:
+  - use rounded camera pixel offsets once per frame,
+  - derive tile screen positions from integer tile pixel positions minus camera pixel offset.
+- Added map-canvas axes in admin editor for coordinate debugging:
+  - X-axis labels across top (0-based),
+  - Y-axis labels down left (0-based),
+  - top-left corner marker `Y\\X`.
+- Validation:
+  - `npm run build` passed after runtime and editor axis changes.
+- Implemented NPC sprite + movement support across editor/runtime.
+- World NPC schema now supports optional:
+  - inline dialogue (`dialogueLines`, `dialogueSpeaker`, `dialogueSetFlag`),
+  - movement (`type: static|loop|random`, `pattern`, `stepIntervalMs`),
+  - sprite config (`url`, frame size, per-direction facing frames, optional walking frame sequences).
+- Runtime NPC updates:
+  - NPCs now use runtime state for position/facing/movement and can wander (`random`) or follow loop patterns.
+  - Added sprite-sheet rendering for NPCs with directional idle/walk animation; falls back to block actor draw if sprite missing/unloaded.
+  - Player collision now checks live NPC runtime positions.
+  - Interact checks now target runtime NPC positions.
+- Admin map editor updates for NPC workflow:
+  - Added paint tools: `NPC Paint`, `NPC Erase`.
+  - Added NPC template builder panel with fields for name/color/dialogue/movement.
+  - Added NPC spritesheet loader (URL/file), frame grid preview, and assignment workflow for up/down/left/right idle + optional walk frames.
+  - Saved NPC templates now persist via IndexedDB (`map-editor-npc-templates-v1`) and can be reloaded.
+  - Painting places template-derived NPC instances on map cells; erasing removes NPC at cell.
+  - Map canvas now overlays an NPC badge per occupied NPC cell for quick visual placement feedback.
+- Validation:
+  - `npm run build` passed.
+  - Playwright admin sanity screenshot captured after changes (`output/admin-npc-painter/shot-0.png`).
+
+Follow-up suggestions
+- Add direct NPC list table editor (click NPC badge to edit/delete selected NPC instance) to avoid JSON edits for per-instance tweaks.
+- Add patrol bounds mode (rectangle) for random movement so NPCs stay in local zones.
+- Add optional sprite preview in NPC template list cards.
+- Refactored NPC authoring model in admin to support reusable `sprite library` + `character library` split:
+  - Character entries now store name/dialogue/movement/(future) battle team ids and reference a sprite by id.
+  - Sprite entries store sheet URL, frame size, and directional idle/walk frame assignments.
+- Added default NPC catalog in `src/game/world/npcCatalog.ts`:
+  - default sprite `teen-boy` uses 4x4 row mapping at 32x32 (`Down`, `Left`, `Right`, `Up`).
+  - default character `Eli` references `teen-boy`.
+- Updated map NPC paint flow:
+  - NPC paint now places selected character template and resolves reusable sprite by `spriteId`.
+  - NPC erase unchanged (removes instance at clicked cell).
+- Added user-requested 4x4 animation helper:
+  - `Auto Fill 4x4 D/L/R/U` button for sprite frame assignments.
+  - manual frame assignment by clicking sheet cells per selected direction + idle/walk mode remains.
+- Added future-facing NPC data support in world types:
+  - `battleTeamIds?: string[]` on `NpcDefinition`.
+- Runtime updates:
+  - player now renders from dedicated sprite config (`src/game/world/playerSprite.ts`) with idle/walk animation support.
+  - fallback to old block actor draw remains if sprite image cannot load.
+- Added standalone Player Sprite admin module:
+  - new nav tab between Map Editor and Critters.
+  - full sheet loader + frame assignment + 4x4 preset for player sprite.
+  - save action writes directly to `src/game/world/playerSprite.ts` via new API route.
+- Added new admin API endpoint in Vite plugin:
+  - `POST /api/admin/player-sprite/save`.
+- Map update:
+  - seeded Eli (`playerHouse`) with explicit teen-boy sprite config to match new desired default behavior.
+- Validation:
+  - `npm run build` passed.
+  - Admin screenshots captured for map editor + player sprite tab:
+    - `output/admin-npc-character-split/shot-0.png`
+    - `output/admin-player-sprite-tab/shot-0.png`
+
+Follow-up suggestions
+- Add in-UI “Edit Existing” for sprite/character library items (currently flow is save new + remove old).
+- Add project-file persistence for NPC sprite/character catalogs (currently IndexedDB + defaults; map files retain resolved sprite config on placed NPCs).
+- Add visual row labels directly over sprite grid (`Row 0: Down`, etc.) for faster onboarding.
+## 2026-02-12 (White page fix)
+- Investigated reported white screen by running Playwright checks on game and admin routes.
+- Root cause: map parse crash on unknown tile code during startup:
+  - `Error: Map player-house layer base uses unknown tile code: `
+- Cause details:
+  - `src/game/data/maps/playerHouse.ts` referenced custom tile IDs not currently present in `src/game/world/customTiles.ts`.
+  - `createMap` previously threw on first unknown tile code, causing app boot failure (white page).
+- Fix implemented:
+  - Updated `src/game/world/mapBuilder.ts` to fail-soft on unknown tile codes:
+    - unknown tile codes are replaced with `FALLBACK_TILE_CODE` at parse time,
+    - warning is logged with the missing code list.
+  - This prevents complete app crash/white screen while preserving map loadability.
+- Validation:
+  - `npm run build` passed.
+  - Playwright checks for `/` and `/admin.html` now render normally with no `errors-0.json` emitted.

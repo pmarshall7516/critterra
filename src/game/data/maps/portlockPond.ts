@@ -1,0 +1,83 @@
+import { createMap } from '@/game/world/mapBuilder';
+
+export const portlockPondMap = createMap({
+  id: 'portlock-pond',
+  name: 'Portlock Pond',
+  layers: [
+    {
+      id: 'base',
+      name: 'Base',
+      tiles: [
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        ''
+      ],
+      rotations: [
+        '21021323103',
+        '20203231200',
+        '00000000021',
+        '13030203021',
+        '00010003022',
+        '00020002032',
+        '00020000012',
+        '32010311002',
+        '22000000000',
+        '31212011001',
+        '02100013300'
+      ]
+    }
+  ],
+  warps: [
+    {
+      id: 'portlock_pond_warp_1',
+      from: {
+        x: 0,
+        y: 4
+      },
+      toMapId: 'starter-town',
+      to: {
+        x: 22,
+        y: 4
+      },
+      requireInteract: false,
+      label: 'To Portlock',
+      fromPositions: [
+        {
+          x: 0,
+          y: 4
+        },
+        {
+          x: 0,
+          y: 5
+        },
+        {
+          x: 0,
+          y: 6
+        }
+      ],
+      toPositions: [
+        {
+          x: 22,
+          y: 4
+        },
+        {
+          x: 22,
+          y: 5
+        },
+        {
+          x: 22,
+          y: 6
+        }
+      ],
+      requiredFacing: 'left'
+    }
+  ]
+});

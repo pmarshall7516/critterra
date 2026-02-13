@@ -1,0 +1,87 @@
+import { createMap } from '@/game/world/mapBuilder';
+
+export const rivalHouseMap = createMap({
+  id: 'rival-house',
+  name: 'Kira House',
+  tiles: [
+    'WWWWWWWWWWWWWWWWWW',
+    'WFFFFFFFFFFFFFFFFW',
+    'WFFBBBBFFFFBBBBFFW',
+    'WFFBCCBFFFFBCCBFFW',
+    'WFFFFFFRRRRFFFFFFW',
+    'WFFFFFFFFFFFFFFFFW',
+    'WFFCFFFFFFFFFFCCFW',
+    'WFFFFFFFFFFFFFFFFW',
+    'WFFFFFRRRRRRFFFFFW',
+    'WFFFFFRRRRRRFFFFFW',
+    'WFFFFFFFFFFFFFFFFW',
+    'WWWWWWWWDDWWWWWWWW',
+  ],
+  npcs: [
+    {
+      id: 'rival_parent',
+      name: 'Aunt Mara',
+      position: { x: 8, y: 5 },
+      color: '#8e6bc2',
+      dialogueId: 'rival_parent_intro',
+    },
+    {
+      id: 'rival_kira',
+      name: 'Kira',
+      position: { x: 11, y: 7 },
+      color: '#d65a6a',
+      dialogueId: 'rival_intro',
+    },
+  ],
+  warps: [
+    {
+      id: 'rival_house_to_town_left',
+      from: { x: 8, y: 11 },
+      toMapId: 'starter-town',
+      to: { x: 11, y: 6 },
+      toFacing: 'down',
+      requireInteract: true,
+      requiredFacing: 'down',
+      label: 'Leave Kira House',
+    },
+    {
+      id: 'rival_house_to_town_right',
+      from: { x: 9, y: 11 },
+      toMapId: 'starter-town',
+      to: { x: 12, y: 6 },
+      toFacing: 'down',
+      requireInteract: true,
+      requiredFacing: 'down',
+      label: 'Leave Kira House',
+    },
+  ],
+  interactions: [
+    {
+      id: 'starter_crate_intro',
+      position: { x: 9, y: 4 },
+      speaker: 'Starter Crate',
+      lines: ['Three Critter balls wait in a padded basket.', 'Aunt Mara labeled one with your name.'],
+      setFlag: 'inspected_starter_crate',
+      hideIfFlag: 'inspected_starter_crate',
+    },
+    {
+      id: 'starter_crate_repeat',
+      position: { x: 9, y: 4 },
+      speaker: 'Starter Crate',
+      lines: ['Your starter is ready whenever you are.'],
+      requiresFlag: 'inspected_starter_crate',
+    },
+    {
+      id: 'bookshelf_left',
+      position: { x: 5, y: 2 },
+      speaker: 'Bookshelf',
+      lines: ['Photo albums show every neighborhood trainer with their first Critter.'],
+    },
+    {
+      id: 'bookshelf_right',
+      position: { x: 12, y: 2 },
+      speaker: 'Bookshelf',
+      lines: ['A note reads: "Take care of your partner, and it will take care of you."'],
+    },
+  ],
+});
