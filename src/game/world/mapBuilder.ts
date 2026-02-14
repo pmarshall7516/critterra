@@ -1,13 +1,19 @@
 import { BLANK_TILE_CODE, FALLBACK_TILE_CODE, TILE_DEFINITIONS } from '@/game/world/tiles';
 import type {
   TileCode,
+  TileDefinition,
   WorldMap,
   WorldMapInput,
   WorldMapLayer,
   WorldMapLayerInput,
 } from '@/game/world/types';
 
-export function createMap(input: WorldMapInput): WorldMap {
+interface CreateMapOptions {
+  tileDefinitions?: Record<string, TileDefinition>;
+}
+
+export function createMap(input: WorldMapInput, options?: CreateMapOptions): WorldMap {
+  const tileDefinitions = options?.tileDefinitions ?? TILE_DEFINITIONS;
   const layerInputs = normalizeLayerInputs(input);
   if (layerInputs.length === 0) {
     throw new Error(`Map ${input.id} has no layers or tiles`);
@@ -20,7 +26,7 @@ export function createMap(input: WorldMapInput): WorldMap {
   const height = layerInputs[0].tiles.length;
 
   const layers = layerInputs.map((layerInput, index) =>
-    parseLayer(input.id, layerInput, index, width, height),
+    parseLayer(input.id, layerInput, index, width, height, tileDefinitions),
   );
   const compositeTiles = composeVisibleTiles(layers, width, height);
 
@@ -63,6 +69,7 @@ function parseLayer(
   index: number,
   expectedWidth: number,
   expectedHeight: number,
+  tileDefinitions: Record<string, TileDefinition>,
 ): WorldMapLayer {
   if (!layerInput.id || typeof layerInput.id !== 'string') {
     throw new Error(`Map ${mapId} layer ${index} is missing string id`);
@@ -88,7 +95,7 @@ function parseLayer(
     }
 
     return row.split('').map((code) => {
-      if (!(code in TILE_DEFINITIONS)) {
+      if (!(code in tileDefinitions)) {
         unknownTileCodes.add(code);
         return FALLBACK_TILE_CODE as TileCode;
       }

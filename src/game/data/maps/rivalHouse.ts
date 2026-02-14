@@ -17,22 +17,6 @@ export const rivalHouseMap = createMap({
     'WFFFFFFFFFFFFFFFFW',
     'WWWWWWWWDDWWWWWWWW',
   ],
-  npcs: [
-    {
-      id: 'rival_parent',
-      name: 'Aunt Mara',
-      position: { x: 8, y: 5 },
-      color: '#8e6bc2',
-      dialogueId: 'rival_parent_intro',
-    },
-    {
-      id: 'rival_kira',
-      name: 'Kira',
-      position: { x: 11, y: 7 },
-      color: '#d65a6a',
-      dialogueId: 'rival_intro',
-    },
-  ],
   warps: [
     {
       id: 'rival_house_to_town_left',

@@ -272,3 +272,382 @@ Follow-up suggestions
 - Validation:
   - `npm run build` passed.
   - Playwright checks for `/` and `/admin.html` now render normally with no `errors-0.json` emitted.
+
+## 2026-02-13 (Admin overhaul: routed tabs + multi-window map workspace)
+- Refactored admin navigation from in-page module toggles to route-style tabs under `/admin/<section>`:
+  - `/admin/maps`
+  - `/admin/tiles`
+  - `/admin/npcs`
+  - `/admin/player-sprite`
+  - `/admin/critters`
+  - `/admin/encounters`
+- Added path parsing + history navigation in `src/admin/AdminView.tsx`, and kept `Critters` + `Encounters` placeholder tabs anchored at bottom of the nav.
+- Added `src/admin/MapWorkspaceTool.tsx`:
+  - supports multiple concurrent map editor windows,
+  - each window has independent map editor state,
+  - includes add/remove window and rename window controls.
+- Extended `MapEditorTool` with section modes and embedded mode:
+  - `section="map"`: map-focused workflow for map windows,
+  - `section="tiles"`: dedicated tile library tooling,
+  - `section="npcs"`: dedicated NPC studio tooling,
+  - `embedded`: compact mode for map workspace cards.
+- Map-focused mode now auto-loads saved tiles + NPC catalog for painting workflows and adds quick refresh controls in paint tools.
+- Split visibility of large panels by section mode so UI is less cramped and each world-building concern can be used independently.
+- Reset local admin catalog key versions to intentionally clear previous saved tile/NPC local data:
+  - `map-editor-saved-paint-tiles-v3`
+  - `map-editor-npc-sprite-library-v2`
+  - `map-editor-npc-character-library-v2`
+- Added `Clear NPC Catalog` action in NPC studio mode.
+- Updated game title screen admin launch path from `/admin.html` to `/admin/maps`.
+- Updated Vite middleware to rewrite `/admin`, `/admin.html`, and `/admin/<section>` requests to `/admin.html` in dev and preview servers so route-style paths work.
+- CSS updates:
+  - nav bottom spacer support,
+  - embedded map editor status row,
+  - single-column section layout mode,
+  - responsive multi-window map workspace styles.
+
+Validation
+- `npm run build` passed.
+- Playwright smoke checks (with screenshot capture, no error artifacts emitted):
+  - `output/admin-overhaul-maps/shot-0.png`
+  - `output/admin-overhaul-tiles/shot-0.png`
+  - `output/admin-overhaul-npcs/shot-0.png`
+  - `output/admin-overhaul-maps-multi/shot-0.png` (verifies "Add Map Window" flow)
+  - `output/admin-overhaul-player-sprite/shot-0.png`
+
+Follow-up suggestions
+- Split map editor internals into smaller files/hooks (`useMapEditorState`, panel components) to reduce `MapEditorTool.tsx` size and improve maintainability.
+- Add map-window persistence (restore open windows + labels + per-window route state) to IndexedDB.
+- Add lightweight tab-level e2e action payloads to automate create/edit/save flows for Tiles, NPC Studio, and multi-window map workflows.
+
+## 2026-02-13 (Follow-up: auto-apply uploaded sheets + more form space)
+- Updated file upload behavior to auto-apply object URLs immediately after selecting a file:
+  - `src/admin/MapEditorTool.tsx` tileset file picker now sets both `tilesetUrlInput` and `tilesetUrl`.
+  - `src/admin/MapEditorTool.tsx` NPC spritesheet file picker now sets both `npcSpriteUrlInput` and `npcSpriteUrl`.
+  - `src/admin/PlayerSpriteTool.tsx` player spritesheet file picker now sets both `spriteUrlInput` and `spriteUrl`.
+- Updated status messages to reflect immediate apply behavior (`Loaded and applied ...`).
+- Expanded form container/layout space for admin tabs/windows:
+  - `src/styles.css` map workspace windows now use larger min width (`minmax(980px, 1fr)`) to reduce cramped forms.
+  - Added `min-width: 0` safety on map windows/panels for proper overflow behavior.
+  - Tuned embedded map editor column distribution for better form+tool space in map windows.
+
+Validation
+- `npm run build` passed.
+- Playwright screenshot sanity checks:
+  - `output/admin-form-space-maps/shot-0.png`
+  - `output/admin-form-space-tiles/shot-0.png`
+  - `output/admin-form-space-npcs/shot-0.png`
+
+## 2026-02-13 (DB/auth foundation + runtime/admin data sync)
+- Added backend database/auth support in `vite.config.ts` using `DB_CONNECTION_STRING` and `pg` + `bcryptjs`.
+- Added schema initialization for:
+  - `app_users`, `app_sessions`
+  - `user_saves`
+  - `world_maps`, `tile_libraries`, `npc_libraries`, `player_sprite_configs`, `critter_libraries`
+- Added auth endpoints:
+  - `POST /api/auth/signup`
+  - `POST /api/auth/login`
+  - `GET /api/auth/session`
+  - `POST /api/auth/logout`
+- Added game/save/content endpoints:
+  - `GET/POST /api/game/save`
+  - `POST /api/game/reset` (password required)
+  - `GET /api/content/bootstrap`
+- Added admin CRUD endpoints:
+  - maps: `GET /api/admin/maps/list`, `POST /api/admin/maps/save`
+  - tiles: `GET /api/admin/tiles/list`, `POST /api/admin/tiles/save`
+  - npc catalogs: `GET /api/admin/npc/list`, `POST /api/admin/npc/save`
+  - player sprite: `GET /api/admin/player-sprite/get`, `POST /api/admin/player-sprite/save`
+  - critters: `GET /api/admin/critters/list`, `POST /api/admin/critters/save`
+- Added shared auth/API helpers:
+  - `src/shared/authStorage.ts`
+  - `src/shared/apiClient.ts`
+- Added account-first title flow (`src/ui/AuthScreen.tsx`, `src/App.tsx`) with sign in/up, logout, and start-over password confirmation.
+- Added admin auth gate in `src/admin/AdminView.tsx` so admin routes require a valid session.
+- Added world-content bootstrap persistence (`src/game/content/worldContentStore.ts`) and runtime hydration (`src/game/engine/runtime.ts`) so maps/custom tiles/player sprite can come from DB content.
+- Updated map builder to accept injected tile definitions (`src/game/world/mapBuilder.ts`) for DB custom tile codes.
+- Updated save manager to sync saves to DB and reset save via password (`src/game/saves/saveManager.ts`).
+- Updated admin tools (`MapEditorTool`, `PlayerSpriteTool`) to read/write DB endpoints for maps/tiles/npcs/player sprite.
+
+Validation
+- `npm run build` passed.
+
+## 2026-02-13 (Follow-up fix: eliminate "Checking Session" hang)
+- Root cause: auth/session fetch paths could hang indefinitely on network/DB stalls, leaving admin on `Checking Session` and app on `Loading...`.
+- Fixes:
+  - `src/shared/apiClient.ts` now applies an 8s request timeout and converts abort/network failures into structured `{ ok: false }` API results.
+  - `src/admin/AdminView.tsx` now wraps session verification in guarded try/catch and always resolves to `ok` or `blocked` state.
+  - `src/App.tsx` bootstrap flow now catches auth/bootstrap failures and returns users to auth screen instead of hanging.
+  - `src/game/saves/saveManager.ts` now preserves local save on transient server failures and migrates local save to DB when server save is empty.
+  - `vite.config.ts` DB pool now uses connection/idle timeouts to fail faster on unreachable DB.
+- Layout tuning follow-up:
+  - `src/styles.css` widened single-tab forms and map-window layouts for better form space in Tiles/NPC/Map windows.
+
+Validation
+- `npm run build` passed.
+- Playwright screenshots:
+  - root auth page renders: `output/db-auth-root-fix/shot-0.png`
+  - admin route resolves to blocked state (no perpetual checking): `output/db-auth-admin-fix/shot-0.png`
+
+Follow-up suggestions
+- Add explicit admin UI modules for Critters/Encounters wired to `/api/admin/critters/*`.
+- Add a first-login migration action to seed DB maps/catalogs from existing local/static content for smoother onboarding.
+- Add automated e2e auth test payloads (signup/login/logout/start-over) once DB access is available in CI/dev.
+- 2026-02-13 quick tweak: `/admin/tiles` now defaults tile pixel dimensions to `16x16` by initializing `tilePixelWidthInput`/`tilePixelHeightInput` to `16` when `section === 'tiles'` in `src/admin/MapEditorTool.tsx`.
+- Validation: `npm run build` passed.
+- 2026-02-13 UI cleanup: removed the Tiles tab "Tile Code" field from the manual atlas save form in `src/admin/MapEditorTool.tsx`; tile codes remain auto-generated internally.
+- Validation: `npm run build` passed.
+- 2026-02-13 DB-only map source + spawn baseline:
+  - Admin `MapEditorTool` map source now reads from DB only (removed fallback/merge with static `WORLD_MAPS`).
+  - Added DB world baseline migration in `vite.config.ts`:
+    - new table `user_world_state` with `map_init_version`.
+    - one-time per-user reset (`WORLD_MAP_BASELINE_VERSION=1`) deletes existing `world_maps` rows and inserts only:
+      - id: `spawn`
+      - name: `Portlock Beach`
+      - size: `11x9` blank base layer.
+    - baseline enforcement runs before `/api/content/bootstrap` and `/api/admin/maps/list` responses.
+  - New-game defaults now start at `spawn` center `(5,4)` in `src/game/saves/saveManager.ts`.
+  - Runtime no longer uses static `WORLD_MAP_REGISTRY`; it boots from DB-hydrated content (with local `spawn` safety fallback map only).
+- Validation: `npm run build` passed.
+- 2026-02-13 map-window canvas visibility fix:
+  - Added dedicated map-canvas panel class to `MapEditorTool` (`admin-panel--map-canvas`).
+  - Added CSS minimum-height constraints so map canvas cannot collapse in map windows:
+    - `.admin-panel--map-canvas { min-height: 420px; }`
+    - `.admin-panel--map-canvas .map-grid-wrap { min-height: 340px; max-height: 62vh; }`
+  - Goal: when a map is loaded, the full map grid section is visibly rendered in the map window instead of appearing missing/collapsed.
+- Validation: `npm run build` passed.
+- 2026-02-13 map editor paint transform features:
+  - Added new paint tool `Fill Rotated` in `MapEditorTool`.
+  - `Fill Rotated` flood-fills the clicked contiguous area and applies a 90-degree rotation progression per cell (based on cell distance from fill origin).
+  - Added brush transform controls in Paint Tools:
+    - `Rotate Left`
+    - `Rotate Right`
+    - `Mirror Horizontal`
+    - `Mirror Vertical`
+  - Transform controls now affect selected stamp painting/preview behavior (non-destructive to saved tile assets).
+  - Standard `Fill` now honors current brush rotation quarter for placed tile rotations.
+- Validation: `npm run build` passed.
+- 2026-02-13 map save/game blank follow-up:
+  - Added `ensureWorldBaselineForUser(auth.user.id)` to `/api/admin/maps/save` so save requests are baseline-safe even if they are the first map API call for that user.
+  - Updated title-screen transitions in `App.tsx` to refresh world content from DB immediately before entering gameplay (`Continue`, `Start Game`, and after `Start Over`).
+  - Goal: eliminate stale/blank map runtime caused by old cached world content or delayed baseline initialization.
+- Validation: `npm run build` passed.
+- 2026-02-13 blank-map render fallback fix:
+  - Runtime tileset draw now validates atlas bounds (`atlasIndex < tilesetCellCount`) before drawing from tilesheet.
+  - Added `tilesetRows` + `tilesetCellCount` tracking in runtime loader.
+  - If atlas index is out of bounds, renderer now falls back to color tile rendering instead of silent no-op (blank tile).
+- Validation: `npm run build` passed.
+- 2026-02-13 baseline behavior correction:
+  - Updated `ensureWorldBaselineForUser` to stop destructive map resets.
+  - New behavior:
+    - If user has no maps, seed blank `spawn`.
+    - If user already has maps (including a created `spawn`), do not overwrite/delete them.
+    - Still records baseline version in `user_world_state`.
+  - This prevents game start/bootstrap from replacing user-authored maps with a fresh blank `spawn`.
+- Validation: `npm run build` passed.
+- 2026-02-13 runtime terrain visibility hardening:
+  - Updated map render pipeline to always draw fallback tile color first, then overlay tileset atlas art.
+  - This prevents full-map blank visuals when atlas cells are transparent or misaligned for saved custom tile IDs.
+  - Combined with atlas bounds checks, map tile placement remains visible based on saved tile IDs/positions even when sprite-sheet sampling fails.
+- Validation: `npm run build` passed.
+- 2026-02-13 tileset persistence fix for runtime rendering:
+  - Tiles tab file upload now converts selected tileset image to a persistent `data:` URL instead of temporary `blob:` URL.
+  - Saved map/tileset data now keeps a runtime-loadable tileset URL across reloads/sessions.
+  - Updated `loadExampleTileset` to report missing bundled example tileset instead of setting an invalid path.
+- Validation: `npm run build` passed.
+- 2026-02-13 DB tile-library source of truth:
+  - `/api/content/bootstrap` now returns raw `savedPaintTiles` from tile library table.
+  - `worldContentStore` now persists `savedPaintTiles` in local world-content cache.
+  - Runtime now rebuilds custom tile definitions directly from `savedPaintTiles` (code + atlasIndex), then merges them into active tile definitions.
+  - This makes map tile rendering explicitly sourced from saved tiles DB records.
+- Validation: `npm run build` passed.
+- 2026-02-13 DB schema mismatch fix for fallback-only terrain rendering:
+  - Ran live Supabase SQL probes (via `DB_CONNECTION_STRING`) and confirmed:
+    - `world_maps` has `spawn` for the active user with non-blank tile content (99 non-blank cells).
+    - `tile_libraries.saved_tiles` has 47 tile stamps / 248 atlas cells.
+    - all tile codes used in `spawn` exist in `saved_tiles` (0 missing codes).
+    - `tile_libraries.tileset_config` stores dimensions as `tilePixelWidth/tilePixelHeight`.
+  - Identified client/runtime mismatch: runtime expects `CustomTilesetConfig` as `tileWidth/tileHeight`, so atlas draw path never activated and map showed fallback colors only.
+  - Patched `src/game/content/worldContentStore.ts`:
+    - added `sanitizeCustomTilesetConfig(raw)` that accepts either shape (`tileWidth/tileHeight` or `tilePixelWidth/tilePixelHeight`) and normalizes to runtime shape.
+    - applied sanitizer in both `readStoredWorldContent` and `hydrateWorldContentFromServer`.
+- Validation: `npm run build` passed.
+- 2026-02-13 layer overlay render fix:
+  - Updated runtime terrain draw order in `src/game/engine/runtime.ts` so each cell now tries atlas draw first and only falls back to color when atlas draw fails.
+  - This preserves transparency on higher layers, allowing lower-layer tiles to show through in the same cell.
+- Validation: `npm run build` passed.
+- 2026-02-13 runtime z-depth pass for actor vs overhead tiles:
+  - Added a depth-sorted draw queue in `src/game/engine/runtime.ts` that combines actors and overhead tile overlays.
+  - Overhead candidates: tiles on non-base layers (`layerIndex > 0`) or tiles with `height > 0`.
+  - Sorting key uses `depthY` (tile/actor foot Y), so actor appears in front when lower on screen (higher y), and behind when above (lower y).
+  - Tie-break keeps overlay before actor at equal Y, and lower layers before higher layers.
+- Validation: `npm run build` passed.
+- 2026-02-13 z-depth tuning fix (tree/building front-back inversion):
+  - Updated runtime tile pass to avoid duplicate drawing of overhead tiles.
+  - New behavior:
+    - ground tiles (`layerIndex === 0` and `tile.height === 0`) draw in base pass,
+    - overhead tiles (`layerIndex > 0` or `tile.height > 0`) draw only in depth queue.
+  - Changed depth tie-break at equal Y so `actor` draws before `overlay`.
+    - Result: actor in same cell as overhead tile appears behind it.
+    - Actor in the cell below appears in front (higher Y wins).
+- Validation: `npm run build` passed.
+- 2026-02-13 UI tweak: removed the in-game Objective banner from `src/game/engine/GameView.tsx`.
+- Validation: `npm run build` passed.
+- 2026-02-13 gameplay-only HUD update + fixed camera viewport:
+  - Removed top HUD bar (name/location/save/time) from `src/game/engine/GameView.tsx`.
+  - Kept dialogue and pause menu overlays.
+  - Set default render camera to fixed `19x15` tiles (`TILE_SIZE * 19` by `TILE_SIZE * 15`) in `GameView`.
+  - Updated canvas resize behavior to keep fixed camera resolution and scale display in viewport.
+  - Updated runtime camera centering in `src/game/engine/runtime.ts` so maps larger than the viewport keep the player centered (no edge clamp).
+  - Updated `src/styles.css` viewport layout to center the scaled fixed-resolution canvas.
+- Validation: `npm run build` passed.
+- 2026-02-13 warp proximity popup:
+  - Added runtime warp hint state (`warpHintLabel`) in `src/game/engine/runtime.ts`.
+  - Added `updateWarpHint()` to detect nearby labeled warps and expose popup text when within 1 tile (including facing-tile checks for interact-only warps).
+  - Added `warpHint` to `RuntimeSnapshot` and `render_game_to_text` payload.
+  - Added UI overlay in `src/game/engine/GameView.tsx` to display warp label popup when near a warp.
+  - Added `.warp-popup` styling in `src/styles.css`.
+- Validation: `npm run build` passed.
+- 2026-02-13 in-game menu expansion (Squad first pass):
+  - Added side menu entries: `Collection (Soon)`, `Squad`, `Backpack (Soon)` in `src/game/engine/GameView.tsx`.
+  - Added side-menu subview state (`root` / `squad`) and reset-to-root on menu close.
+  - Implemented `Squad` panel UI with 8 pill slots in a 2x4 grid:
+    - top row (2 slots) unlocked and shown as `Empty`,
+    - remaining 6 slots shown as `Locked`.
+  - Added new menu styles in `src/styles.css` for section/actions layout and squad pill grid.
+- Validation: `npm run build` passed.
+- 2026-02-14 map tweak: Updated `uncle-hank` NPC sprite in `src/game/data/maps/uncleSHouse.ts` from `ow3.png` to `ow7.png`.
+- Validation: `npm run build` passed.
+- 2026-02-14 runtime map hydration patch: added `ensureDefaultStoryNpcs` in `src/game/engine/runtime.ts` to inject `Uncle Hank` into `uncle-s-house` when DB/stored map content is missing him (prevents static-file vs DB map drift).
+- Validation: `npm run build` passed.
+- 2026-02-14 NPC/data reset + sprite animation extensibility:
+  - Executed DB reset script using `DB_CONNECTION_STRING` to purge current NPC content:
+    - `world_maps`: set `map_data.npcs = []` for all rows (`mapsUpdated: 4`).
+    - `npc_libraries`: cleared `sprite_library` + `character_library` (`npcLibrariesCleared: 1`).
+    - `player_sprite_configs`: deleted rows (`playerSpriteConfigsDeleted: 0`, none existed).
+  - Removed all source-map NPC arrays from:
+    - `src/game/data/maps/portlock.ts`
+    - `src/game/data/maps/starterTown.ts`
+    - `src/game/data/maps/rivalHouse.ts`
+    - `src/game/data/maps/uncleSHouse.ts`
+  - Removed runtime NPC auto-injection fallback in `src/game/engine/runtime.ts` so NPC population is fully data-driven.
+  - Emptied default NPC sprite/character catalogs in `src/game/world/npcCatalog.ts` for a clean overhaul baseline.
+  - Added extensible sprite animation schema support:
+    - `NpcSpriteConfig.animationSets` (named directional frame sets)
+    - `NpcSpriteConfig.defaultIdleAnimation` / `defaultMoveAnimation`
+    - `NpcDefinition.idleAnimation` / `moveAnimation` (character-level animation selection)
+    - Files updated: `src/game/world/types.ts`, `src/game/engine/runtime.ts`, `vite.config.ts`, `src/admin/mapEditorUtils.ts`, `src/admin/MapEditorTool.tsx`.
+  - Updated player sprite workflow to emit named animation sets (`idle`, `walk`) while preserving existing frame fields:
+    - `src/game/world/playerSprite.ts`
+    - `src/admin/PlayerSpriteTool.tsx`
+  - Bumped local NPC catalog IndexedDB keys to prevent stale local NPC catalogs from rehydrating server-cleared data:
+    - `map-editor-npc-sprite-library-v3`
+    - `map-editor-npc-character-library-v3`
+- Validation:
+  - `npm run build` passed after all changes.
+  - Playwright smoke script reached auth screen only (no authenticated session in headless run), so gameplay-level visual verification requires signed-in test run.
+- 2026-02-14 admin animation-authoring pass (multi-animation support):
+  - Extended NPC Studio UI (`src/admin/MapEditorTool.tsx`) to support arbitrary named directional animation sets:
+    - Added editable `Animation Sets JSON` field for sprite entries.
+    - Added sprite defaults: `Default Idle Animation`, `Default Move Animation`.
+    - Atlas assignment + 4x4 autofill now keep `idle`/`walk` sets synchronized inside the JSON draft while preserving extra custom sets.
+    - Sprite save now validates JSON/default animation names before persisting.
+  - Extended Character Template UI in NPC Studio:
+    - Added per-character animation selectors: `Character Idle Animation`, `Character Move Animation`.
+    - Character save validates selected animation names exist on the chosen sprite.
+    - Template load/use now restores these animation names.
+  - Extended Player Sprite admin tool (`src/admin/PlayerSpriteTool.tsx`) with the same animation-set workflow:
+    - Added `Animation Sets JSON`, `Default Idle Animation`, and `Default Move Animation` controls.
+    - Save endpoint payload now persists custom animation sets/default names (not just hardcoded idle/walk).
+    - Atlas assignment + 4x4 autofill sync the `idle`/`walk` sets in draft JSON while preserving extras.
+  - Added shared parsing/sanitization helpers in both admin tools for robust JSON handling and fallback generation from legacy `facingFrames`/`walkFrames`.
+- Validation:
+  - `npm run build` passed after UI + parser updates.
+
+## 2026-02-14 (Admin Animation UI)
+- Refactored NPC sprite animation editing in `/src/admin/MapEditorTool.tsx`:
+  - Added list-based animation management (add, rename, delete animations).
+  - Added per-direction frame management (add selected frame, remove frame, clear direction).
+  - Removed user-facing animation JSON editing from NPC sprite workflow.
+  - Kept file-based sheet loading flow and removed URL/example-button path from NPC studio UI.
+  - Updated sprite "Use" action to restore animation data and auto-select a valid current animation.
+  - Fixed save validation/status text and corrected JSX tag mismatches.
+  - Added legacy `facingFrames`/`walkFrames` derivation from chosen default idle/move animations.
+- Refactored player sprite animation editing in `/src/admin/PlayerSpriteTool.tsx`:
+  - Removed URL/default-example editing controls from UI and kept file upload workflow.
+  - Replaced idle/walk assign-mode controls with the same list-based animation editor used for NPC sprites.
+  - Added frame removal controls and direction clearing.
+  - Removed user-facing animation JSON textarea.
+  - Save now validates default animation names against animation sets and derives legacy `facingFrames`/`walkFrames` from animation sets for compatibility.
+- Validation:
+  - `npm run build` passed.
+  - Playwright admin smoke run succeeded technically, but UI verification was blocked by auth gate (`Sign In Required` page, 401 on admin data endpoint), so no authenticated admin screenshot was captured in this run.
+
+### Follow-up
+- After signing in, re-run the admin Playwright/screenshot pass to visually confirm the new animation controls in both Player Sprite and NPC Studio panels.
+- 2026-02-14 player sprite persistence fix:
+  - Diagnosed missing in-game sprite rendering as temporary `blob:` URLs being persisted for player sprites.
+  - Updated `/src/admin/PlayerSpriteTool.tsx` file upload flow to convert selected images to persistent `data:` URLs before save.
+  - Added server-side safety in `/vite.config.ts`:
+    - reject saving `blob:` URLs in `/api/admin/player-sprite/save`.
+    - sanitize loaded player sprite config (ignore blob-based rows) for both `/api/admin/player-sprite/get` and `/api/content/bootstrap`.
+  - Replaced broken blob URL in `/src/game/world/playerSprite.ts` with stable project asset path `/example_assets/character_npc_spritesheets/main_character_spritesheet.png`.
+  - Validation: `npm run build` passed.
+- 2026-02-14 follow-up sprite rendering reliability fixes:
+  - Added client-side player sprite config sanitizer in `src/game/content/worldContentStore.ts` to ignore stale/invalid `blob:` sprite URLs from local cache.
+  - Added defensive `persistWorldContent` fallback: if localStorage quota write fails, retry without `playerSpriteConfig` so world content hydration still succeeds.
+  - Updated NPC file upload in `src/admin/MapEditorTool.tsx` to use persistent data URLs (no temporary object URLs).
+  - Validation: `npm run build` passed.
+- 2026-02-14 NPC admin performance stabilization:
+  - Added atlas preview cell cap (`MAX_ATLAS_PREVIEW_CELLS = 4096`) to NPC and player sprite editors to prevent rendering huge tens-of-thousands-cell grids that lock the UI.
+  - NPC Studio now shows a warning when preview is truncated and advises increasing atlas cell size.
+  - Removed duplicate NPC URL state assignment to reduce memory churn during sheet load.
+- 2026-02-14 source bundle bloat fix:
+  - Prevented `data:` player sprite URLs from being written into `src/game/world/playerSprite.ts` during save (DB keeps full URL; source file keeps stable fallback URL).
+  - Restored `src/game/world/playerSprite.ts` URL to project asset path.
+  - Validation: `npm run build` passed and bundle size returned to normal range.
+- 2026-02-14 default sprite cell size update:
+  - Set NPC atlas cell width/height admin defaults to `64x64` in `src/admin/MapEditorTool.tsx`.
+  - Updated NPC sprite sanitize fallbacks to `64x64` when frame size fields are missing.
+  - Updated player-sprite save API fallback frame width/height to `64x64` in `vite.config.ts`.
+  - Validation: `npm run build` passed.
+- 2026-02-14 animation add/save persistence fix:
+  - Root cause: empty animations were being removed by animation-set sanitization, so newly added animations vanished from dropdowns.
+  - Updated animation-set sanitization in both admin tools to preserve animation names even when direction frame arrays are empty.
+  - Updated parse validation messaging to require at least one animation name (not at least one populated frame list).
+  - Updated player-sprite backend parser in `vite.config.ts` to preserve empty animations/directions when saving to DB/source payload.
+  - Result: new animations now appear immediately in dropdowns, remain selected for editing, and persist across save/load.
+  - Validation: `npm run build` passed.
+- 2026-02-14 Supabase spritesheet bucket integration:
+  - Completed Supabase storage wiring in `vite.config.ts`:
+    - `createAdminMapApiPlugin` now receives `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` config via `normalizeSupabaseStorageConfig(...)`.
+    - Enabled authenticated `GET /api/admin/spritesheets/list` usage with bucket/prefix support for PNG discovery.
+  - Added searchable Supabase spritesheet browsers in both admin sprite workflows:
+    - `src/admin/PlayerSpriteTool.tsx`:
+      - New Bucket/Prefix/Search controls.
+      - Alphabetized scrollable list of PNG objects from Supabase.
+      - One-click `Load` applies selected spritesheet public URL as active player sheet.
+    - `src/admin/MapEditorTool.tsx` (NPC Studio):
+      - Same Bucket/Prefix/Search + alphabetical scrollable list.
+      - One-click `Load` applies selected spritesheet URL to NPC sheet and optionally seeds label from filename.
+  - Added shared list styling in `src/styles.css` (`spritesheet-browser*` classes).
+  - Validation:
+    - `npm run build` passed.
+    - Playwright smoke (`output/admin-supabase-picker/shot-0.png`) reached unauthenticated admin gate (`Sign In Required`), so logged-in picker UI verification is pending an authenticated run.
+- 2026-02-14 NPC Studio UI cleanup:
+  - Removed `Clear NPC Catalog` button from NPC Studio controls (`src/admin/MapEditorTool.tsx`).
+  - Removed NPC `Auto Fill 4x4 D/L/R/U` button and related note text.
+  - Sprite label behavior is now fully manual in NPC Studio:
+    - no auto-label assignment from file upload,
+    - no auto-label assignment from Supabase sheet selection,
+    - added explicit note that sprite label saves exactly as entered.
+  - Validation: `npm run build` passed.
+- 2026-02-14 Supabase bucket connection fix:
+  - Diagnosed empty picker root cause as bucket-name typo mismatch:
+    - empty bucket checked by app default: `character-spirtesheets` (0 PNGs)
+    - actual populated bucket: `character-spritesheets` (7 PNGs)
+  - Updated default Supabase bucket fallback in:
+    - `src/admin/PlayerSpriteTool.tsx`
+    - `src/admin/MapEditorTool.tsx`
+    - `vite.config.ts` (`sanitizeStorageBucketName` default)
+  - Validation: `npm run build` passed.

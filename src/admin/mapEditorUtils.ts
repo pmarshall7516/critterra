@@ -554,9 +554,26 @@ function cloneNpc(npc: NpcDefinition): NpcDefinition {
           pattern: npc.movement.pattern ? [...npc.movement.pattern] : undefined,
         }
       : undefined,
+    idleAnimation: npc.idleAnimation,
+    moveAnimation: npc.moveAnimation,
     sprite: npc.sprite
       ? {
-          ...npc.sprite,
+        ...npc.sprite,
+        animationSets: npc.sprite.animationSets
+          ? Object.fromEntries(
+              Object.entries(npc.sprite.animationSets).map(([name, directions]) => [
+                name,
+                {
+                  up: directions?.up ? [...directions.up] : undefined,
+                  down: directions?.down ? [...directions.down] : undefined,
+                  left: directions?.left ? [...directions.left] : undefined,
+                  right: directions?.right ? [...directions.right] : undefined,
+                },
+              ]),
+            )
+          : undefined,
+        defaultIdleAnimation: npc.sprite.defaultIdleAnimation,
+        defaultMoveAnimation: npc.sprite.defaultMoveAnimation,
           facingFrames: { ...npc.sprite.facingFrames },
           walkFrames: npc.sprite.walkFrames
             ? {

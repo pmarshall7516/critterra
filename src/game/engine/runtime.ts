@@ -1,21 +1,22 @@
 import { DIALOGUES } from '@/game/data/dialogues';
-import { WORLD_MAP_REGISTRY } from '@/game/data/maps';
 import { AUTOSAVE_INTERVAL_MS, MOVE_DURATION_MS, TILE_SIZE, WARP_COOLDOWN_MS } from '@/shared/constants';
 import type { Direction, Vector2 } from '@/shared/types';
 import { createNewSave, loadSave, persistSave } from '@/game/saves/saveManager';
 import type { SaveProfile } from '@/game/saves/types';
-import { collisionEdgeMaskAt, tileAt } from '@/game/world/mapBuilder';
-import { CUSTOM_TILESET_CONFIG } from '@/game/world/customTiles';
+import { collisionEdgeMaskAt, createMap, tileAt } from '@/game/world/mapBuilder';
+import { CUSTOM_TILESET_CONFIG, type CustomTilesetConfig } from '@/game/world/customTiles';
 import { PLAYER_SPRITE_CONFIG } from '@/game/world/playerSprite';
-import { BLANK_TILE_CODE, FALLBACK_TILE_CODE, TILE_DEFINITIONS } from '@/game/world/tiles';
+import { BASE_TILE_DEFINITIONS, BLANK_TILE_CODE, FALLBACK_TILE_CODE, TILE_DEFINITIONS } from '@/game/world/tiles';
 import type {
   InteractionDefinition,
   NpcDefinition,
   NpcSpriteConfig,
   TileDefinition,
+  WorldMapInput,
   WarpDefinition,
   WorldMap,
 } from '@/game/world/types';
+import { readStoredWorldContent } from '@/game/content/worldContentStore';
 
 interface MoveStep {
   from: Vector2;
@@ -57,6 +58,7 @@ export interface RuntimeSnapshot {
   mapName: string;
   mapId: string;
   objective: string;
+  warpHint: string | null;
   dialogue: {
     speaker: string;
     text: string;
@@ -81,12 +83,35 @@ const COLLISION_EDGE_BIT: Record<Direction, number> = {
   left: 8,
 };
 
+const SPAWN_MAP_INPUT: WorldMapInput = {
+  id: 'spawn',
+  name: 'Portlock Beach',
+  layers: [
+    {
+      id: 'base',
+      name: 'Base',
+      tiles: Array.from({ length: 9 }, () => '.'.repeat(11)),
+      rotations: Array.from({ length: 9 }, () => '0'.repeat(11)),
+      collisionEdges: Array.from({ length: 9 }, () => '0'.repeat(11)),
+      visible: true,
+      collision: true,
+    },
+  ],
+  npcs: [],
+  warps: [],
+  interactions: [],
+};
+
 export interface RuntimeInitOptions {
   forceNewGame?: boolean;
   playerName?: string;
 }
 
 export class GameRuntime {
+  private mapRegistry: Record<string, WorldMap> = buildMapRegistryFromInputs([SPAWN_MAP_INPUT], TILE_DEFINITIONS);
+  private tileDefinitions: Record<string, TileDefinition> = TILE_DEFINITIONS;
+  private customTilesetConfig: CustomTilesetConfig | null = CUSTOM_TILESET_CONFIG;
+  private playerSpriteConfig: NpcSpriteConfig = PLAYER_SPRITE_CONFIG;
   private currentMapId: string;
   private playerPosition: Vector2;
   private facing: Direction;
@@ -102,6 +127,7 @@ export class GameRuntime {
   private dirty = false;
   private lastSavedAt: string | null = null;
   private transientMessage: TransientMessage | null = null;
+  private warpHintLabel: string | null = null;
   private npcRuntimeStates: Record<string, NpcRuntimeState> = {};
   private npcSpriteSheets: Record<string, NpcSpriteSheetState> = {};
   private playerSpriteSheet: NpcSpriteSheetState = {
@@ -111,9 +137,28 @@ export class GameRuntime {
   };
   private tilesetImage: HTMLImageElement | null = null;
   private tilesetColumns = 0;
+  private tilesetRows = 0;
+  private tilesetCellCount = 0;
   private tilesetLoadAttempted = false;
 
   constructor(options?: RuntimeInitOptions) {
+    const storedWorldContent = readStoredWorldContent();
+    if (storedWorldContent) {
+      const tileDefinitionsFromSavedTiles = buildTileDefinitionsFromSavedPaintTiles(storedWorldContent.savedPaintTiles);
+      this.tileDefinitions = {
+        ...BASE_TILE_DEFINITIONS,
+        ...tileDefinitionsFromSavedTiles,
+        ...storedWorldContent.customTileDefinitions,
+      };
+      this.customTilesetConfig = storedWorldContent.customTilesetConfig ?? CUSTOM_TILESET_CONFIG;
+      this.playerSpriteConfig = storedWorldContent.playerSpriteConfig ?? PLAYER_SPRITE_CONFIG;
+
+      const registry = buildMapRegistryFromInputs(storedWorldContent.maps, this.tileDefinitions);
+      if (Object.keys(registry).length > 0) {
+        this.mapRegistry = registry;
+      }
+    }
+
     const save = !options?.forceNewGame ? loadSave() : null;
     const state = save && this.isValidSave(save) ? save : createNewSave(options?.playerName ?? 'Player');
 
@@ -127,6 +172,7 @@ export class GameRuntime {
     this.ensureNpcRuntimeState();
     this.ensurePlayerSpriteLoaded();
     this.ensureTilesetLoaded();
+    this.updateWarpHint();
 
     if (!save || options?.forceNewGame) {
       this.dirty = true;
@@ -181,6 +227,7 @@ export class GameRuntime {
     }
 
     this.tickAutosave(deltaMs);
+    this.updateWarpHint();
   }
 
   public render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
@@ -189,17 +236,15 @@ export class GameRuntime {
 
     const viewTilesX = width / TILE_SIZE;
     const viewTilesY = height / TILE_SIZE;
-    const maxCamX = Math.max(0, map.width - viewTilesX);
-    const maxCamY = Math.max(0, map.height - viewTilesY);
 
     const cameraX =
       map.width <= viewTilesX
         ? -(viewTilesX - map.width) / 2
-        : clamp(playerRenderPos.x - viewTilesX / 2, 0, maxCamX);
+        : playerRenderPos.x - viewTilesX / 2;
     const cameraY =
       map.height <= viewTilesY
         ? -(viewTilesY - map.height) / 2
-        : clamp(playerRenderPos.y - viewTilesY / 2, 0, maxCamY);
+        : playerRenderPos.y - viewTilesY / 2;
 
     ctx.fillStyle = '#101419';
     ctx.fillRect(0, 0, width, height);
@@ -211,8 +256,19 @@ export class GameRuntime {
     const cameraPixelX = Math.round(cameraX * TILE_SIZE);
     const cameraPixelY = Math.round(cameraY * TILE_SIZE);
 
-    const visibleLayers = map.layers.filter((layer) => layer.visible);
-    for (const layer of visibleLayers) {
+    type DepthDrawEntry = {
+      depthY: number;
+      layerOrder: number;
+      kind: 'overlay' | 'actor';
+      draw: () => void;
+    };
+
+    const depthDraws: DepthDrawEntry[] = [];
+    const visibleLayers = map.layers
+      .map((layer, index) => ({ layer, index }))
+      .filter((entry) => entry.layer.visible);
+
+    for (const { layer, index: layerIndex } of visibleLayers) {
       for (let y = startY; y < endY; y += 1) {
         const tileRow = layer.tiles[y];
         if (!tileRow) {
@@ -234,36 +290,65 @@ export class GameRuntime {
           const screenY = y * TILE_SIZE - cameraPixelY;
           const rotationQuarter = sanitizeRotationQuarter(rotationRow[x] ?? 0);
 
-          const drewFromTileset = this.drawTileFromTileset(ctx, tile, screenX, screenY, rotationQuarter);
-          if (!drewFromTileset) {
-            this.drawTile(ctx, tile.color, tile.accentColor ?? tile.color, screenX, screenY, tile.height);
+          // Draw atlas first so transparent pixels on higher layers reveal lower layers.
+          // Only use color fallback when atlas art is unavailable for this tile.
+          const isOverhead = layerIndex > 0 || tile.height > 0;
+          if (!isOverhead) {
+            const drewAtlas = this.drawTileFromTileset(ctx, tile, screenX, screenY, rotationQuarter);
+            if (!drewAtlas) {
+              this.drawTile(ctx, tile.color, tile.accentColor ?? tile.color, screenX, screenY, tile.height);
+            }
+          } else {
+            depthDraws.push({
+              depthY: y + 1,
+              layerOrder: layerIndex,
+              kind: 'overlay',
+              draw: () => {
+                const drewOverlayAtlas = this.drawTileFromTileset(ctx, tile, screenX, screenY, rotationQuarter);
+                if (!drewOverlayAtlas) {
+                  this.drawTile(ctx, tile.color, tile.accentColor ?? tile.color, screenX, screenY, tile.height);
+                }
+              },
+            });
           }
         }
       }
     }
 
-    const actorDraws: Array<{ y: number; draw: () => void }> = [];
-
     for (const npc of map.npcs) {
       const npcState = this.getNpcRuntimeState(npc);
       const npcRenderPosition = this.getNpcRenderPosition(npc);
-      actorDraws.push({
-        y: npcRenderPosition.y,
+      depthDraws.push({
+        depthY: npcRenderPosition.y + 1,
+        layerOrder: Number.MAX_SAFE_INTEGER,
+        kind: 'actor',
         draw: () => {
           this.drawNpc(ctx, npc, npcRenderPosition, cameraX, cameraY, npcState.facing, npcState.moveStep !== null);
         },
       });
     }
 
-    actorDraws.push({
-      y: playerRenderPos.y,
+    depthDraws.push({
+      depthY: playerRenderPos.y + 1,
+      layerOrder: Number.MAX_SAFE_INTEGER,
+      kind: 'actor',
       draw: () => {
         this.drawPlayer(ctx, playerRenderPos, cameraX, cameraY, this.facing, this.moveStep !== null);
       },
     });
 
-    actorDraws.sort((a, b) => a.y - b.y);
-    for (const entry of actorDraws) {
+    depthDraws.sort((a, b) => {
+      if (a.depthY !== b.depthY) {
+        return a.depthY - b.depthY;
+      }
+      if (a.kind !== b.kind) {
+        // At equal Y: draw actor first, then overlay.
+        // This makes same-cell tall tiles (trees/buildings) cover the actor.
+        return a.kind === 'actor' ? -1 : 1;
+      }
+      return a.layerOrder - b.layerOrder;
+    });
+    for (const entry of depthDraws) {
       entry.draw();
     }
 
@@ -284,6 +369,7 @@ export class GameRuntime {
       mapName: map.name,
       mapId: map.id,
       objective: this.getObjectiveText(),
+      warpHint: this.warpHintLabel,
       dialogue: this.dialogue
         ? {
             speaker: this.dialogue.speaker,
@@ -335,6 +421,7 @@ export class GameRuntime {
           tileCode: facingTileCode,
         },
       },
+      warpHint: this.warpHintLabel,
       dialogue: this.dialogue
         ? {
             speaker: this.dialogue.speaker,
@@ -397,11 +484,11 @@ export class GameRuntime {
   }
 
   private isValidSave(save: SaveProfile): boolean {
-    return save.currentMapId in WORLD_MAP_REGISTRY;
+    return save.currentMapId in this.mapRegistry;
   }
 
   private getCurrentMap(): WorldMap {
-    const map = WORLD_MAP_REGISTRY[this.currentMapId];
+    const map = this.mapRegistry[this.currentMapId];
     if (!map) {
       throw new Error(`Missing map ${this.currentMapId}`);
     }
@@ -410,7 +497,7 @@ export class GameRuntime {
   }
 
   private getTileDefinition(code: string): TileDefinition {
-    return TILE_DEFINITIONS[code] ?? TILE_DEFINITIONS[FALLBACK_TILE_CODE];
+    return this.tileDefinitions[code] ?? this.tileDefinitions[FALLBACK_TILE_CODE];
   }
 
   private ensureTilesetLoaded(): void {
@@ -419,7 +506,7 @@ export class GameRuntime {
     }
 
     this.tilesetLoadAttempted = true;
-    const config = CUSTOM_TILESET_CONFIG;
+    const config = this.customTilesetConfig;
     if (!config || !config.url) {
       return;
     }
@@ -430,13 +517,21 @@ export class GameRuntime {
       if (columns <= 0) {
         return;
       }
+      const rows = Math.floor(image.height / config.tileHeight);
+      if (rows <= 0) {
+        return;
+      }
 
       this.tilesetImage = image;
       this.tilesetColumns = columns;
+      this.tilesetRows = rows;
+      this.tilesetCellCount = columns * rows;
     };
     image.onerror = () => {
       this.tilesetImage = null;
       this.tilesetColumns = 0;
+      this.tilesetRows = 0;
+      this.tilesetCellCount = 0;
     };
     image.src = config.url;
   }
@@ -448,11 +543,20 @@ export class GameRuntime {
     y: number,
     rotationQuarter = 0,
   ): boolean {
-    if (!this.tilesetImage || !CUSTOM_TILESET_CONFIG) {
+    if (!this.tilesetImage || !this.customTilesetConfig) {
       return false;
     }
-    const config = CUSTOM_TILESET_CONFIG;
-    if (typeof tile.atlasIndex !== 'number' || tile.atlasIndex < 0 || this.tilesetColumns <= 0) {
+    const config = this.customTilesetConfig;
+    if (
+      typeof tile.atlasIndex !== 'number' ||
+      tile.atlasIndex < 0 ||
+      this.tilesetColumns <= 0 ||
+      this.tilesetRows <= 0 ||
+      this.tilesetCellCount <= 0
+    ) {
+      return false;
+    }
+    if (tile.atlasIndex >= this.tilesetCellCount) {
       return false;
     }
 
@@ -505,7 +609,7 @@ export class GameRuntime {
   }
 
   private ensurePlayerSpriteLoaded(): void {
-    const sprite = PLAYER_SPRITE_CONFIG;
+    const sprite = this.playerSpriteConfig;
     if (!sprite?.url) {
       return;
     }
@@ -943,6 +1047,7 @@ export class GameRuntime {
     this.moveStep = null;
     this.ensureNpcRuntimeState();
     this.warpCooldownMs = WARP_COOLDOWN_MS;
+    this.warpHintLabel = null;
     this.showMessage(this.getCurrentMap().name);
     this.markDirty();
   }
@@ -1008,6 +1113,45 @@ export class GameRuntime {
     }
 
     return null;
+  }
+
+  private updateWarpHint(): void {
+    if (this.dialogue) {
+      this.warpHintLabel = null;
+      return;
+    }
+
+    const map = this.getCurrentMap();
+    const facingTile = this.getFacingTile();
+    let best: { label: string; distance: number } | null = null;
+
+    for (const warp of map.warps) {
+      const label = typeof warp.label === 'string' ? warp.label.trim() : '';
+      if (!label) {
+        continue;
+      }
+
+      const fromPositions = this.getWarpFromPositions(warp);
+      let minDistance = Number.POSITIVE_INFINITY;
+      for (const from of fromPositions) {
+        const playerDistance = Math.abs(from.x - this.playerPosition.x) + Math.abs(from.y - this.playerPosition.y);
+        minDistance = Math.min(minDistance, playerDistance);
+        if (warp.requireInteract) {
+          const facingDistance = Math.abs(from.x - facingTile.x) + Math.abs(from.y - facingTile.y);
+          minDistance = Math.min(minDistance, facingDistance);
+        }
+      }
+
+      if (minDistance > 1) {
+        continue;
+      }
+
+      if (!best || minDistance < best.distance) {
+        best = { label, distance: minDistance };
+      }
+    }
+
+    this.warpHintLabel = best?.label ?? null;
   }
 
   private tickAutosave(deltaMs: number): void {
@@ -1161,7 +1305,7 @@ export class GameRuntime {
     isMoving: boolean,
   ): void {
     this.ensurePlayerSpriteLoaded();
-    const frameIndex = this.getSpriteFrameIndex(PLAYER_SPRITE_CONFIG, facing, isMoving, this.playerAnimationMs);
+    const frameIndex = this.getSpriteFrameIndex(this.playerSpriteConfig, facing, isMoving, this.playerAnimationMs);
     if (
       this.playerSpriteSheet.status === 'ready' &&
       this.playerSpriteSheet.image &&
@@ -1169,7 +1313,7 @@ export class GameRuntime {
       frameIndex >= 0 &&
       this.drawSpriteFrame(
         ctx,
-        PLAYER_SPRITE_CONFIG,
+        this.playerSpriteConfig,
         this.playerSpriteSheet,
         frameIndex,
         position,
@@ -1190,7 +1334,10 @@ export class GameRuntime {
     }
 
     const state = this.getNpcRuntimeState(npc);
-    return this.getSpriteFrameIndex(sprite, facing, isMoving, state.animationMs);
+    return this.getSpriteFrameIndex(sprite, facing, isMoving, state.animationMs, {
+      idleAnimationName: npc.idleAnimation,
+      moveAnimationName: npc.moveAnimation,
+    });
   }
 
   private drawSpriteFrame(
@@ -1248,11 +1395,44 @@ export class GameRuntime {
   }
 
   private getSpriteFrameIndex(
-    sprite: { facingFrames: Record<Direction, number>; walkFrames?: Partial<Record<Direction, number[]>> },
+    sprite: {
+      facingFrames: Record<Direction, number>;
+      walkFrames?: Partial<Record<Direction, number[]>>;
+      animationSets?: Partial<Record<string, Partial<Record<Direction, number[]>>>>;
+      defaultIdleAnimation?: string;
+      defaultMoveAnimation?: string;
+    },
     facing: Direction,
     isMoving: boolean,
     animationMs: number,
+    options?: {
+      idleAnimationName?: string;
+      moveAnimationName?: string;
+    },
   ): number {
+    const requestedIdleAnimation = options?.idleAnimationName?.trim();
+    const requestedMoveAnimation = options?.moveAnimationName?.trim();
+    const idleAnimationName = requestedIdleAnimation || sprite.defaultIdleAnimation?.trim() || 'idle';
+    const moveAnimationName = requestedMoveAnimation || sprite.defaultMoveAnimation?.trim() || 'walk';
+
+    if (isMoving) {
+      const moveFramesFromSet = this.getDirectionalAnimationFrames(sprite.animationSets, moveAnimationName, facing);
+      if (moveFramesFromSet.length > 0) {
+        const frame = moveFramesFromSet[Math.floor(animationMs / 140) % moveFramesFromSet.length];
+        if (Number.isFinite(frame) && frame >= 0) {
+          return Math.floor(frame);
+        }
+      }
+    }
+
+    const idleFramesFromSet = this.getDirectionalAnimationFrames(sprite.animationSets, idleAnimationName, facing);
+    if (idleFramesFromSet.length > 0) {
+      const frame = idleFramesFromSet[0];
+      if (Number.isFinite(frame) && frame >= 0) {
+        return Math.floor(frame);
+      }
+    }
+
     if (isMoving) {
       const walkFrames = sprite.walkFrames?.[facing];
       if (Array.isArray(walkFrames) && walkFrames.length > 0) {
@@ -1269,6 +1449,29 @@ export class GameRuntime {
     }
 
     return -1;
+  }
+
+  private getDirectionalAnimationFrames(
+    animationSets: Partial<Record<string, Partial<Record<Direction, number[]>>>> | undefined,
+    animationName: string,
+    direction: Direction,
+  ): number[] {
+    if (!animationSets || !animationName) {
+      return [];
+    }
+
+    const set = animationSets[animationName];
+    if (!set) {
+      return [];
+    }
+    const frames = set[direction];
+    if (!Array.isArray(frames)) {
+      return [];
+    }
+
+    return frames
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+      .map((value) => Math.max(0, Math.floor(value)));
   }
 
   private drawActor(
@@ -1313,6 +1516,74 @@ export class GameRuntime {
     ctx.lineTo(centerX + delta.x * (TILE_SIZE * 0.16), bodyY + bodyH * 0.45 + delta.y * (TILE_SIZE * 0.16));
     ctx.stroke();
   }
+}
+
+function buildMapRegistryFromInputs(
+  mapInputs: WorldMapInput[],
+  tileDefinitions: Record<string, TileDefinition>,
+): Record<string, WorldMap> {
+  const registry: Record<string, WorldMap> = {};
+  for (const input of mapInputs) {
+    if (!input || typeof input !== 'object' || typeof input.id !== 'string' || typeof input.name !== 'string') {
+      continue;
+    }
+    try {
+      const map = createMap(input, { tileDefinitions });
+      registry[map.id] = map;
+    } catch {
+      continue;
+    }
+  }
+  return registry;
+}
+
+function buildTileDefinitionsFromSavedPaintTiles(
+  savedPaintTiles: Array<{
+    name?: string;
+    cells?: Array<{ code?: string; atlasIndex?: number }>;
+  }> | null | undefined,
+): Record<string, TileDefinition> {
+  if (!Array.isArray(savedPaintTiles)) {
+    return {};
+  }
+
+  const definitions: Record<string, TileDefinition> = {};
+  const seenCodes = new Set<string>();
+
+  for (const tile of savedPaintTiles) {
+    const tileName = typeof tile?.name === 'string' && tile.name.trim() ? tile.name.trim() : 'Custom Tile';
+    const cells = Array.isArray(tile?.cells) ? tile.cells : [];
+    for (const cell of cells) {
+      const code = typeof cell?.code === 'string' ? cell.code.trim().slice(0, 1) : '';
+      if (!code || code in BASE_TILE_DEFINITIONS || seenCodes.has(code)) {
+        continue;
+      }
+      const atlasIndex =
+        typeof cell?.atlasIndex === 'number' && Number.isFinite(cell.atlasIndex) ? Math.max(0, Math.floor(cell.atlasIndex)) : 0;
+
+      seenCodes.add(code);
+      definitions[code] = {
+        code,
+        label: `${tileName} ${code}`.slice(0, 60),
+        walkable: true,
+        color: colorForCode(code, 0),
+        accentColor: colorForCode(code, 1),
+        height: 0,
+        atlasIndex,
+      };
+    }
+  }
+
+  return definitions;
+}
+
+function colorForCode(code: string, shift = 0): string {
+  const safe = code || 'X';
+  const value = safe.codePointAt(0) ?? 88;
+  const hue = (value * 17 + shift * 13) % 360;
+  const saturation = 45 + ((value + shift * 7) % 20);
+  const lightness = 38 + ((value + shift * 5) % 16);
+  return `hsl(${hue} ${saturation}% ${lightness}%)`;
 }
 
 function toDirection(key: string): Direction | null {

@@ -1,14 +1,12 @@
 import { CSSProperties, ChangeEvent, MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { WORLD_MAPS } from '@/game/data/maps';
 import { SAVED_PAINT_TILE_DATABASE } from '@/game/world/customTiles';
 import {
-  DEFAULT_NPC_CHARACTER_LIBRARY,
-  DEFAULT_NPC_SPRITE_LIBRARY,
   type NpcCharacterTemplateEntry,
   type NpcSpriteLibraryEntry,
 } from '@/game/world/npcCatalog';
 import { BLANK_TILE_CODE, TILE_DEFINITIONS } from '@/game/world/tiles';
 import { getAdminDbValue, setAdminDbValue } from '@/admin/indexedDbStore';
+import { apiFetchJson } from '@/shared/apiClient';
 import type {
   InteractionDefinition,
   NpcMovementDefinition,
@@ -38,7 +36,6 @@ import {
   resizeEditableMap,
   updateCollisionEdgeMask,
   updateTile,
-  worldMapToEditable,
 } from '@/admin/mapEditorUtils';
 
 type PaintTool =
@@ -46,6 +43,7 @@ type PaintTool =
   | 'paint-rotated'
   | 'erase'
   | 'fill'
+  | 'fill-rotated'
   | 'pick'
   | 'npc-paint'
   | 'npc-erase'
@@ -104,14 +102,60 @@ interface SaveTileDatabaseResponse {
   error?: string;
 }
 
+interface LoadTileLibraryResponse {
+  ok: boolean;
+  savedPaintTiles?: unknown;
+  tileset?: {
+    url?: unknown;
+    tilePixelWidth?: unknown;
+    tilePixelHeight?: unknown;
+  } | null;
+  error?: string;
+}
+
+interface LoadNpcLibraryResponse {
+  ok: boolean;
+  npcSpriteLibrary?: unknown;
+  npcCharacterLibrary?: unknown;
+  error?: string;
+}
+
+interface SaveNpcLibraryResponse {
+  ok: boolean;
+  error?: string;
+}
+
+interface SupabaseSpriteSheetListItem {
+  name: string;
+  path: string;
+  publicUrl: string;
+  updatedAt: string | null;
+}
+
+interface LoadSupabaseSpriteSheetsResponse {
+  ok: boolean;
+  bucket?: string;
+  prefix?: string;
+  spritesheets?: SupabaseSpriteSheetListItem[];
+  error?: string;
+}
+
+interface LoadMapsResponse {
+  ok: boolean;
+  maps?: unknown[];
+  error?: string;
+}
+
 type BaseTileCode = keyof typeof TILE_DEFINITIONS;
 const TILE_CODES = Object.keys(TILE_DEFINITIONS) as BaseTileCode[];
-const SAVED_PAINT_TILES_DB_KEY = 'map-editor-saved-paint-tiles-v2';
-const NPC_SPRITE_LIBRARY_DB_KEY = 'map-editor-npc-sprite-library-v1';
-const NPC_CHARACTER_LIBRARY_DB_KEY = 'map-editor-npc-character-library-v1';
+const SAVED_PAINT_TILES_DB_KEY = 'map-editor-saved-paint-tiles-v3';
+const NPC_SPRITE_LIBRARY_DB_KEY = 'map-editor-npc-sprite-library-v3';
+const NPC_CHARACTER_LIBRARY_DB_KEY = 'map-editor-npc-character-library-v3';
 const MIN_CELL_SIZE = 14;
 const MAX_CELL_SIZE = 52;
 const ATLAS_PREVIEW_SIZE = 28;
+const MAX_ATLAS_PREVIEW_CELLS = 4096;
+const DEFAULT_SUPABASE_BUCKET = 'character-spritesheets';
 const TILE_CODE_GENERATION_RANGES: Array<[number, number]> = [
   [0xe000, 0xf8ff],
   [0x3400, 0x4dbf],
@@ -152,8 +196,15 @@ const EMPTY_EDITABLE_MAP: EditableMap = {
   interactions: [],
 };
 
-export function MapEditorTool() {
-  const sourceMaps = useMemo(() => WORLD_MAPS.map((map) => worldMapToEditable(map)), []);
+export type MapEditorSection = 'full' | 'map' | 'tiles' | 'npcs';
+
+interface MapEditorToolProps {
+  section?: MapEditorSection;
+  embedded?: boolean;
+}
+
+export function MapEditorTool({ section = 'full', embedded = false }: MapEditorToolProps) {
+  const [sourceMaps, setSourceMaps] = useState<EditableMap[]>([]);
   const sourceMapIds = useMemo(() => sourceMaps.map((map) => map.id), [sourceMaps]);
   const [selectedSourceMapId, setSelectedSourceMapId] = useState('');
   const [loadedSourceMapIdForSave, setLoadedSourceMapIdForSave] = useState<string | null>(null);
@@ -162,6 +213,9 @@ export function MapEditorTool() {
   const [tool, setTool] = useState<PaintTool>('paint');
   const [selectedTileCode, setSelectedTileCode] = useState<EditorTileCode>('');
   const [selectedPaintTileId, setSelectedPaintTileId] = useState('');
+  const [brushRotationQuarter, setBrushRotationQuarter] = useState(0);
+  const [brushMirrorHorizontal, setBrushMirrorHorizontal] = useState(false);
+  const [brushMirrorVertical, setBrushMirrorVertical] = useState(false);
   const [activeLayerId, setActiveLayerId] = useState('');
   const [newLayerName, setNewLayerName] = useState('');
   const [cellSize, setCellSize] = useState(24);
@@ -173,8 +227,8 @@ export function MapEditorTool() {
 
   const [tilesetUrlInput, setTilesetUrlInput] = useState('');
   const [tilesetUrl, setTilesetUrl] = useState('');
-  const [tilePixelWidthInput, setTilePixelWidthInput] = useState('');
-  const [tilePixelHeightInput, setTilePixelHeightInput] = useState('');
+  const [tilePixelWidthInput, setTilePixelWidthInput] = useState(section === 'tiles' ? '16' : '');
+  const [tilePixelHeightInput, setTilePixelHeightInput] = useState(section === 'tiles' ? '16' : '');
   const [atlasMeta, setAtlasMeta] = useState<TileAtlasMeta>({
     loaded: false,
     width: 0,
@@ -189,15 +243,14 @@ export function MapEditorTool() {
 
   const [savedPaintTiles, setSavedPaintTiles] = useState<SavedPaintTile[]>([]);
   const [manualPaintTileName, setManualPaintTileName] = useState('');
-  const [npcSpriteLibrary, setNpcSpriteLibrary] = useState<NpcSpriteLibraryEntry[]>(DEFAULT_NPC_SPRITE_LIBRARY);
-  const [selectedNpcSpriteId, setSelectedNpcSpriteId] = useState(DEFAULT_NPC_SPRITE_LIBRARY[0]?.id ?? '');
-  const [npcSpriteLabelInput, setNpcSpriteLabelInput] = useState(DEFAULT_NPC_SPRITE_LIBRARY[0]?.label ?? '');
-  const [npcCharacterLibrary, setNpcCharacterLibrary] =
-    useState<NpcCharacterTemplateEntry[]>(DEFAULT_NPC_CHARACTER_LIBRARY);
-  const [selectedNpcCharacterId, setSelectedNpcCharacterId] = useState(DEFAULT_NPC_CHARACTER_LIBRARY[0]?.id ?? '');
-  const [npcCharacterLabelInput, setNpcCharacterLabelInput] = useState(DEFAULT_NPC_CHARACTER_LIBRARY[0]?.label ?? '');
-  const [npcCharacterNameInput, setNpcCharacterNameInput] = useState(DEFAULT_NPC_CHARACTER_LIBRARY[0]?.npcName ?? '');
-  const [npcCharacterColorInput, setNpcCharacterColorInput] = useState(DEFAULT_NPC_CHARACTER_LIBRARY[0]?.color ?? '#9b73b8');
+  const [npcSpriteLibrary, setNpcSpriteLibrary] = useState<NpcSpriteLibraryEntry[]>([]);
+  const [selectedNpcSpriteId, setSelectedNpcSpriteId] = useState('');
+  const [npcSpriteLabelInput, setNpcSpriteLabelInput] = useState('');
+  const [npcCharacterLibrary, setNpcCharacterLibrary] = useState<NpcCharacterTemplateEntry[]>([]);
+  const [selectedNpcCharacterId, setSelectedNpcCharacterId] = useState('');
+  const [npcCharacterLabelInput, setNpcCharacterLabelInput] = useState('');
+  const [npcCharacterNameInput, setNpcCharacterNameInput] = useState('');
+  const [npcCharacterColorInput, setNpcCharacterColorInput] = useState('#9b73b8');
   const [npcDialogueIdInput, setNpcDialogueIdInput] = useState('');
   const [npcDialogueSpeakerInput, setNpcDialogueSpeakerInput] = useState('');
   const [npcDialogueLinesInput, setNpcDialogueLinesInput] = useState('');
@@ -206,10 +259,15 @@ export function MapEditorTool() {
   const [npcMovementTypeInput, setNpcMovementTypeInput] = useState<'static' | 'loop' | 'random'>('static');
   const [npcMovementPatternInput, setNpcMovementPatternInput] = useState('');
   const [npcStepIntervalInput, setNpcStepIntervalInput] = useState('850');
-  const [npcSpriteUrlInput, setNpcSpriteUrlInput] = useState('');
   const [npcSpriteUrl, setNpcSpriteUrl] = useState('');
-  const [npcFrameWidthInput, setNpcFrameWidthInput] = useState('32');
-  const [npcFrameHeightInput, setNpcFrameHeightInput] = useState('32');
+  const [npcSpriteBucketInput, setNpcSpriteBucketInput] = useState(DEFAULT_SUPABASE_BUCKET);
+  const [npcSpritePrefixInput, setNpcSpritePrefixInput] = useState('');
+  const [npcSpriteSearchInput, setNpcSpriteSearchInput] = useState('');
+  const [npcSupabaseSpriteSheets, setNpcSupabaseSpriteSheets] = useState<SupabaseSpriteSheetListItem[]>([]);
+  const [isLoadingNpcSupabaseSpriteSheets, setIsLoadingNpcSupabaseSpriteSheets] = useState(false);
+  const [selectedNpcSupabaseSheetPath, setSelectedNpcSupabaseSheetPath] = useState('');
+  const [npcFrameWidthInput, setNpcFrameWidthInput] = useState('64');
+  const [npcFrameHeightInput, setNpcFrameHeightInput] = useState('64');
   const [npcFrameCellsWideInput, setNpcFrameCellsWideInput] = useState('1');
   const [npcFrameCellsTallInput, setNpcFrameCellsTallInput] = useState('2');
   const [npcRenderWidthTilesInput, setNpcRenderWidthTilesInput] = useState('1');
@@ -226,7 +284,6 @@ export function MapEditorTool() {
   const [selectedNpcAtlasEndIndex, setSelectedNpcAtlasEndIndex] = useState<number | null>(null);
   const [isSelectingNpcAtlas, setIsSelectingNpcAtlas] = useState(false);
   const [npcAssignDirection, setNpcAssignDirection] = useState<Direction>('down');
-  const [npcAssignMode, setNpcAssignMode] = useState<'idle' | 'walk'>('idle');
   const [npcFacingFrames, setNpcFacingFrames] = useState<Record<Direction, number>>({
     up: 0,
     down: 0,
@@ -239,6 +296,29 @@ export function MapEditorTool() {
     left: [],
     right: [],
   });
+  const [npcDefaultIdleAnimationInput, setNpcDefaultIdleAnimationInput] = useState('idle');
+  const [npcDefaultMoveAnimationInput, setNpcDefaultMoveAnimationInput] = useState('walk');
+  const [npcAnimationSetsInput, setNpcAnimationSetsInput] = useState(
+    JSON.stringify(buildDirectionalAnimationSetsFromLegacyFrames(
+      {
+        up: 0,
+        down: 0,
+        left: 0,
+        right: 0,
+      },
+      {
+        up: [],
+        down: [],
+        left: [],
+        right: [],
+      },
+    ), null, 2),
+  );
+  const [npcCharacterIdleAnimationInput, setNpcCharacterIdleAnimationInput] = useState('');
+  const [npcCharacterMoveAnimationInput, setNpcCharacterMoveAnimationInput] = useState('');
+  const [selectedNpcAnimationName, setSelectedNpcAnimationName] = useState('walk');
+  const [newNpcAnimationNameInput, setNewNpcAnimationNameInput] = useState('');
+  const [renameNpcAnimationNameInput, setRenameNpcAnimationNameInput] = useState('');
 
   const [newMapId, setNewMapId] = useState('');
   const [newMapName, setNewMapName] = useState('');
@@ -270,7 +350,15 @@ export function MapEditorTool() {
   const [importJsonDraft, setImportJsonDraft] = useState('');
 
   const uploadedObjectUrlRef = useRef<string | null>(null);
-  const uploadedNpcObjectUrlRef = useRef<string | null>(null);
+  const hasAutoLoadedLibrariesRef = useRef(false);
+
+  const isMapSection = section === 'map';
+  const isTilesSection = section === 'tiles';
+  const isNpcsSection = section === 'npcs';
+  const showMapEditing = section === 'full' || isMapSection;
+  const showTilesLibrary = section === 'full' || isTilesSection;
+  const showNpcStudio = section === 'full' || isNpcsSection;
+  const showTwoColumnLayout = showMapEditing;
 
   const mapSize = useMemo(() => getMapSize(editableMap), [editableMap]);
   const hasMapLoaded = mapSize.width > 0 && mapSize.height > 0;
@@ -325,9 +413,26 @@ export function MapEditorTool() {
     () => npcSpriteLibrary.find((sprite) => sprite.id === selectedNpcSpriteId) ?? null,
     [npcSpriteLibrary, selectedNpcSpriteId],
   );
+  const filteredNpcSupabaseSpriteSheets = useMemo(() => {
+    const query = npcSpriteSearchInput.trim().toLowerCase();
+    const sorted = [...npcSupabaseSpriteSheets].sort((left, right) =>
+      left.path.localeCompare(right.path, undefined, { sensitivity: 'base' }),
+    );
+    if (!query) {
+      return sorted;
+    }
+    return sorted.filter(
+      (entry) => entry.name.toLowerCase().includes(query) || entry.path.toLowerCase().includes(query),
+    );
+  }, [npcSupabaseSpriteSheets, npcSpriteSearchInput]);
 
   const atlasCellCount = useMemo(() => Math.max(0, atlasMeta.columns * atlasMeta.rows), [atlasMeta]);
   const npcAtlasCellCount = useMemo(() => Math.max(0, npcSpriteMeta.columns * npcSpriteMeta.rows), [npcSpriteMeta]);
+  const npcPreviewCellCount = useMemo(
+    () => Math.min(npcAtlasCellCount, MAX_ATLAS_PREVIEW_CELLS),
+    [npcAtlasCellCount],
+  );
+  const isNpcPreviewTruncated = npcAtlasCellCount > npcPreviewCellCount;
   const selectedNpcAtlasRect = useMemo(
     () =>
       buildAtlasSelectionRect(
@@ -338,6 +443,18 @@ export function MapEditorTool() {
       ),
     [selectedNpcAtlasEndIndex, selectedNpcAtlasStartIndex, npcSpriteMeta.columns, npcSpriteMeta.rows],
   );
+  const parsedNpcAnimationSets = useMemo(() => {
+    const parsed = parseDirectionalAnimationSetsInput(npcAnimationSetsInput, npcFacingFrames, npcWalkFrames);
+    if (parsed.ok) {
+      return parsed.animationSets;
+    }
+    return sanitizeDirectionalAnimationSets(buildDirectionalAnimationSetsFromLegacyFrames(npcFacingFrames, npcWalkFrames));
+  }, [npcAnimationSetsInput, npcFacingFrames, npcWalkFrames]);
+  const npcAnimationNames = useMemo(() => Object.keys(parsedNpcAnimationSets), [parsedNpcAnimationSets]);
+  const selectedNpcAnimationFramesForDirection = useMemo(() => {
+    const frames = parsedNpcAnimationSets[selectedNpcAnimationName]?.[npcAssignDirection];
+    return Array.isArray(frames) ? frames : [];
+  }, [parsedNpcAnimationSets, selectedNpcAnimationName, npcAssignDirection]);
   const selectedAtlasRect = useMemo(
     () => buildAtlasSelectionRect(selectedAtlasStartIndex, selectedAtlasEndIndex, atlasMeta.columns, atlasMeta.rows),
     [selectedAtlasEndIndex, selectedAtlasStartIndex, atlasMeta.columns, atlasMeta.rows],
@@ -385,8 +502,8 @@ export function MapEditorTool() {
     return codes;
   }, [savedPaintTiles]);
   const mapWarnings = useMemo(
-    () => buildWarnings(editableMap, savedCustomTileCodes),
-    [editableMap, savedCustomTileCodes],
+    () => buildWarnings(editableMap, savedCustomTileCodes, sourceMapIds),
+    [editableMap, savedCustomTileCodes, sourceMapIds],
   );
   const selectedCollisionEdgeMask = useMemo(() => {
     let mask = 0;
@@ -464,8 +581,13 @@ export function MapEditorTool() {
       return new Set<string>();
     }
 
-    const previewRotation = tool === 'paint-rotated' ? pseudoRandomQuarter(hoveredCell.x, hoveredCell.y) : 0;
-    const transformedCells = rotateStampCells(selectedPaintTile, previewRotation);
+    const previewRotationOffset = tool === 'paint-rotated' ? pseudoRandomQuarter(hoveredCell.x, hoveredCell.y) : 0;
+    const transformedCells = transformStampCells(
+      selectedPaintTile,
+      brushRotationQuarter + previewRotationOffset,
+      brushMirrorHorizontal,
+      brushMirrorVertical,
+    );
     const cells = new Set<string>();
     for (const cell of transformedCells) {
       const x = hoveredCell.x + cell.dx;
@@ -477,7 +599,17 @@ export function MapEditorTool() {
     }
 
     return cells;
-  }, [hasMapLoaded, hoveredCell, mapSize.height, mapSize.width, selectedPaintTile, tool]);
+  }, [
+    brushMirrorHorizontal,
+    brushMirrorVertical,
+    brushRotationQuarter,
+    hasMapLoaded,
+    hoveredCell,
+    mapSize.height,
+    mapSize.width,
+    selectedPaintTile,
+    tool,
+  ]);
   const hoverCollisionEdgeMask = useMemo(() => {
     if (!hoveredCell || tool !== 'collision-edge') {
       return 0;
@@ -600,6 +732,24 @@ export function MapEditorTool() {
     }
     setSelectedNpcSpriteId(npcSpriteLibrary[0]?.id ?? '');
   }, [npcSpriteLibrary, selectedNpcSpriteId]);
+
+  useEffect(() => {
+    if (npcAnimationNames.length === 0) {
+      setSelectedNpcAnimationName('');
+      return;
+    }
+    if (!selectedNpcAnimationName || !npcAnimationNames.includes(selectedNpcAnimationName)) {
+      setSelectedNpcAnimationName(npcAnimationNames.includes('walk') ? 'walk' : npcAnimationNames[0]);
+    }
+  }, [npcAnimationNames, selectedNpcAnimationName]);
+
+  useEffect(() => {
+    if (!selectedNpcAnimationName) {
+      setRenameNpcAnimationNameInput('');
+      return;
+    }
+    setRenameNpcAnimationNameInput(selectedNpcAnimationName);
+  }, [selectedNpcAnimationName]);
 
   useEffect(() => {
     const onMouseUp = () => {
@@ -835,9 +985,6 @@ export function MapEditorTool() {
       if (uploadedObjectUrlRef.current) {
         URL.revokeObjectURL(uploadedObjectUrlRef.current);
       }
-      if (uploadedNpcObjectUrlRef.current) {
-        URL.revokeObjectURL(uploadedNpcObjectUrlRef.current);
-      }
     };
   }, []);
 
@@ -857,7 +1004,7 @@ export function MapEditorTool() {
       const tilePixelWidth = parseInteger(tilePixelWidthInput);
       const tilePixelHeight = parseInteger(tilePixelHeightInput);
 
-      const response = await fetch('/api/admin/tiles/save', {
+      const result = await apiFetchJson<SaveTileDatabaseResponse>('/api/admin/tiles/save', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -875,18 +1022,38 @@ export function MapEditorTool() {
               : null,
         }),
       });
-      const payload = (await response.json()) as SaveTileDatabaseResponse;
-      if (!response.ok || !payload.ok) {
-        throw new Error(payload.error ?? 'Unable to sync tile database.');
+      if (!result.ok) {
+        throw new Error(result.error ?? result.data?.error ?? 'Unable to sync tile database.');
       }
     } catch {
       setError('Unable to save paint tiles to database/project tile catalog.');
     }
   };
 
+  const persistNpcLibraries = async (
+    nextSprites: NpcSpriteLibraryEntry[],
+    nextCharacters: NpcCharacterTemplateEntry[],
+  ) => {
+    const result = await apiFetchJson<SaveNpcLibraryResponse>('/api/admin/npc/save', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        npcSpriteLibrary: nextSprites,
+        npcCharacterLibrary: nextCharacters,
+      }),
+    });
+
+    if (!result.ok) {
+      throw new Error(result.error ?? result.data?.error ?? 'Unable to save NPC libraries.');
+    }
+  };
+
   const persistNpcSpriteLibrary = async (nextSprites: NpcSpriteLibraryEntry[]) => {
     try {
       await setAdminDbValue(NPC_SPRITE_LIBRARY_DB_KEY, nextSprites);
+      await persistNpcLibraries(nextSprites, npcCharacterLibrary);
     } catch {
       setError('Unable to save NPC sprites.');
     }
@@ -895,8 +1062,33 @@ export function MapEditorTool() {
   const persistNpcCharacterLibrary = async (nextCharacters: NpcCharacterTemplateEntry[]) => {
     try {
       await setAdminDbValue(NPC_CHARACTER_LIBRARY_DB_KEY, nextCharacters);
+      await persistNpcLibraries(npcSpriteLibrary, nextCharacters);
     } catch {
       setError('Unable to save NPC characters.');
+    }
+  };
+
+  const loadSourceMapsFromDatabase = async () => {
+    try {
+      const result = await apiFetchJson<LoadMapsResponse>('/api/admin/maps/list');
+      if (!result.ok) {
+        throw new Error(result.error ?? result.data?.error ?? 'Unable to load maps.');
+      }
+
+      const loadedMaps = Array.isArray(result.data?.maps)
+        ? result.data.maps
+            .map((entry) => {
+              try {
+                return parseEditableMapJson(JSON.stringify(entry));
+              } catch {
+                return null;
+              }
+            })
+            .filter((entry): entry is EditableMap => entry !== null)
+        : [];
+      setSourceMaps(loadedMaps);
+    } catch {
+      setError('Unable to load maps from database.');
     }
   };
 
@@ -905,8 +1097,13 @@ export function MapEditorTool() {
       const raw = await getAdminDbValue<unknown>(SAVED_PAINT_TILES_DB_KEY);
       const loadedFromIndexedDb = sanitizeSavedPaintTiles(raw);
       const loadedFromProjectDb = sanitizeSavedPaintTiles(SAVED_PAINT_TILE_DATABASE as unknown);
+      const tilesResponse = await apiFetchJson<LoadTileLibraryResponse>('/api/admin/tiles/list');
+      const loadedFromServer = sanitizeSavedPaintTiles(tilesResponse.data?.savedPaintTiles as unknown);
       const mergedById = new Map<string, SavedPaintTile>();
       for (const tile of loadedFromProjectDb) {
+        mergedById.set(tile.id, tile);
+      }
+      for (const tile of loadedFromServer) {
         mergedById.set(tile.id, tile);
       }
       for (const tile of loadedFromIndexedDb) {
@@ -914,9 +1111,24 @@ export function MapEditorTool() {
       }
       const loaded = Array.from(mergedById.values());
       setSavedPaintTiles(loaded);
+      await setAdminDbValue(SAVED_PAINT_TILES_DB_KEY, loaded);
       const first = loaded[0];
       setSelectedPaintTileId(first?.id ?? '');
       setSelectedTileCode(first?.primaryCode ?? '');
+      const serverTileset = tilesResponse.data?.tileset;
+      if (serverTileset?.url && typeof serverTileset.url === 'string') {
+        setTilesetUrlInput(serverTileset.url);
+        setTilesetUrl(serverTileset.url);
+      }
+      if (typeof serverTileset?.tilePixelWidth === 'number' && serverTileset.tilePixelWidth > 0) {
+        setTilePixelWidthInput(String(serverTileset.tilePixelWidth));
+      }
+      if (typeof serverTileset?.tilePixelHeight === 'number' && serverTileset.tilePixelHeight > 0) {
+        setTilePixelHeightInput(String(serverTileset.tilePixelHeight));
+      }
+      if (loaded.length > loadedFromServer.length) {
+        void persistSavedPaintTiles(loaded);
+      }
       setStatus(
         loaded.length > 0
           ? `Loaded ${loaded.length} saved paint tile(s) from tile database.`
@@ -931,34 +1143,40 @@ export function MapEditorTool() {
     try {
       const rawSpriteLibrary = await getAdminDbValue<unknown>(NPC_SPRITE_LIBRARY_DB_KEY);
       const rawCharacterLibrary = await getAdminDbValue<unknown>(NPC_CHARACTER_LIBRARY_DB_KEY);
+      const serverResult = await apiFetchJson<LoadNpcLibraryResponse>('/api/admin/npc/list');
+      const serverSprites = sanitizeNpcSpriteLibrary(serverResult.data?.npcSpriteLibrary as unknown);
+      const serverCharacters = sanitizeNpcCharacterLibrary(serverResult.data?.npcCharacterLibrary as unknown);
 
-      const spriteLibraryIndexedDb = sanitizeNpcSpriteLibrary(rawSpriteLibrary);
-      const characterLibraryIndexedDb = sanitizeNpcCharacterLibrary(rawCharacterLibrary);
-
-      const spriteById = new Map<string, NpcSpriteLibraryEntry>();
-      for (const sprite of DEFAULT_NPC_SPRITE_LIBRARY) {
-        spriteById.set(sprite.id, sprite);
+      const loadedSprites = sanitizeNpcSpriteLibrary(rawSpriteLibrary);
+      const loadedCharacters = sanitizeNpcCharacterLibrary(rawCharacterLibrary);
+      const mergedSpriteById = new Map<string, NpcSpriteLibraryEntry>();
+      for (const sprite of serverSprites) {
+        mergedSpriteById.set(sprite.id, sprite);
       }
-      for (const sprite of spriteLibraryIndexedDb) {
-        spriteById.set(sprite.id, sprite);
+      for (const sprite of loadedSprites) {
+        mergedSpriteById.set(sprite.id, sprite);
       }
-      const mergedSprites = Array.from(spriteById.values());
-
-      const characterById = new Map<string, NpcCharacterTemplateEntry>();
-      for (const character of DEFAULT_NPC_CHARACTER_LIBRARY) {
-        characterById.set(character.id, character);
+      const mergedCharacterById = new Map<string, NpcCharacterTemplateEntry>();
+      for (const character of serverCharacters) {
+        mergedCharacterById.set(character.id, character);
       }
-      for (const character of characterLibraryIndexedDb) {
-        characterById.set(character.id, character);
+      for (const character of loadedCharacters) {
+        mergedCharacterById.set(character.id, character);
       }
-      const mergedCharacters = Array.from(characterById.values());
+      const mergedSprites = Array.from(mergedSpriteById.values());
+      const mergedCharacters = Array.from(mergedCharacterById.values());
 
       setNpcSpriteLibrary(mergedSprites);
       setNpcCharacterLibrary(mergedCharacters);
       setSelectedNpcSpriteId(mergedSprites[0]?.id ?? '');
       setSelectedNpcCharacterId(mergedCharacters[0]?.id ?? '');
+      await setAdminDbValue(NPC_SPRITE_LIBRARY_DB_KEY, mergedSprites);
+      await setAdminDbValue(NPC_CHARACTER_LIBRARY_DB_KEY, mergedCharacters);
+      if (mergedSprites.length > serverSprites.length || mergedCharacters.length > serverCharacters.length) {
+        void persistNpcLibraries(mergedSprites, mergedCharacters);
+      }
       setStatus(
-        mergedCharacters.length > 0
+        mergedCharacters.length > 0 || mergedSprites.length > 0
           ? `Loaded ${mergedSprites.length} NPC sprite(s) and ${mergedCharacters.length} NPC character(s).`
           : 'No NPC sprites/characters found in database.',
       );
@@ -967,6 +1185,23 @@ export function MapEditorTool() {
     }
   };
 
+  useEffect(() => {
+    if (section === 'full' || hasAutoLoadedLibrariesRef.current) {
+      return;
+    }
+
+    if (isMapSection) {
+      void loadSourceMapsFromDatabase();
+    }
+    if (isMapSection || isTilesSection) {
+      void loadSavedPaintTilesFromDatabase();
+    }
+    if (isMapSection || isNpcsSection) {
+      void loadNpcTemplatesFromDatabase();
+    }
+    hasAutoLoadedLibrariesRef.current = true;
+  }, [isMapSection, isNpcsSection, isTilesSection, section]);
+
   const applyPaintTileStamp = (
     map: EditableMap,
     layerId: string,
@@ -974,6 +1209,8 @@ export function MapEditorTool() {
     originY: number,
     tile: SavedPaintTile,
     rotationQuarter: number,
+    mirrorHorizontal: boolean,
+    mirrorVertical: boolean,
   ): EditableMap => {
     const next = cloneEditableMap(map);
     const layer = getLayerById(next, layerId);
@@ -985,7 +1222,7 @@ export function MapEditorTool() {
       return map;
     }
 
-    const transformedCells = rotateStampCells(tile, rotationQuarter);
+    const transformedCells = transformStampCells(tile, rotationQuarter, mirrorHorizontal, mirrorVertical);
     let changed = false;
     for (const cell of transformedCells) {
       const x = originX + cell.dx;
@@ -1004,6 +1241,71 @@ export function MapEditorTool() {
       layer.tiles[y] = `${row.slice(0, x)}${cell.code}${row.slice(x + 1)}`;
       layer.rotations[y] = `${rotationRow.slice(0, x)}${rotationChar}${rotationRow.slice(x + 1)}`;
       changed = true;
+    }
+
+    return changed ? next : map;
+  };
+
+  const fillWithRotatedPattern = (
+    map: EditableMap,
+    layerId: string,
+    startX: number,
+    startY: number,
+    code: EditorTileCode,
+    baseRotationQuarter: number,
+  ): EditableMap => {
+    const targetCode = getTileCodeAt(map, startX, startY, layerId);
+    if (!targetCode) {
+      return map;
+    }
+
+    const next = cloneEditableMap(map);
+    const layer = getLayerById(next, layerId);
+    if (!layer) {
+      return map;
+    }
+
+    const { width, height } = getMapSize(next);
+    const queue: Array<{ x: number; y: number }> = [{ x: startX, y: startY }];
+    const visited = new Set<string>();
+    let changed = false;
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current) {
+        continue;
+      }
+
+      const key = `${current.x},${current.y}`;
+      if (visited.has(key)) {
+        continue;
+      }
+      visited.add(key);
+
+      if (current.x < 0 || current.y < 0 || current.x >= width || current.y >= height) {
+        continue;
+      }
+
+      const existing = getTileCodeAt(next, current.x, current.y, layerId);
+      if (existing !== targetCode) {
+        continue;
+      }
+
+      const row = layer.tiles[current.y];
+      const rotationRow = layer.rotations[current.y] ?? '0'.repeat(row.length);
+      const delta = Math.abs(current.x - startX) + Math.abs(current.y - startY);
+      const rotationQuarter = normalizeQuarter(baseRotationQuarter + (delta % 4));
+      const rotationChar = String(code === BLANK_TILE_CODE ? 0 : rotationQuarter);
+      if (row[current.x] !== code || (rotationRow[current.x] ?? '0') !== rotationChar) {
+        layer.tiles[current.y] = `${row.slice(0, current.x)}${code}${row.slice(current.x + 1)}`;
+        layer.rotations[current.y] = `${rotationRow.slice(0, current.x)}${rotationChar}${rotationRow.slice(current.x + 1)}`;
+        changed = true;
+      }
+
+      queue.push({ x: current.x + 1, y: current.y });
+      queue.push({ x: current.x - 1, y: current.y });
+      queue.push({ x: current.x, y: current.y + 1 });
+      queue.push({ x: current.x, y: current.y - 1 });
     }
 
     return changed ? next : map;
@@ -1059,7 +1361,7 @@ export function MapEditorTool() {
       return;
     }
 
-    if (tool === 'fill') {
+    if (tool === 'fill' || tool === 'fill-rotated') {
       if (source === 'click') {
         if (!selectedTileCode) {
           setError('Select a paint tile or map cell first.');
@@ -1069,7 +1371,13 @@ export function MapEditorTool() {
           setError('Select an active layer before using fill.');
           return;
         }
-        setEditableMap((current) => floodFill(current, activeLayer.id, x, y, selectedTileCode, 0));
+        if (tool === 'fill-rotated') {
+          setEditableMap((current) =>
+            fillWithRotatedPattern(current, activeLayer.id, x, y, selectedTileCode, brushRotationQuarter),
+          );
+        } else {
+          setEditableMap((current) => floodFill(current, activeLayer.id, x, y, selectedTileCode, brushRotationQuarter));
+        }
       }
       return;
     }
@@ -1152,9 +1460,19 @@ export function MapEditorTool() {
       return;
     }
 
-    const rotationQuarter = tool === 'paint-rotated' ? Math.floor(Math.random() * 4) : 0;
+    const randomRotationQuarter = tool === 'paint-rotated' ? Math.floor(Math.random() * 4) : 0;
+    const rotationQuarter = normalizeQuarter(brushRotationQuarter + randomRotationQuarter);
     setEditableMap((current) =>
-      applyPaintTileStamp(current, activeLayer.id, x, y, selectedPaintTile, rotationQuarter),
+      applyPaintTileStamp(
+        current,
+        activeLayer.id,
+        x,
+        y,
+        selectedPaintTile,
+        rotationQuarter,
+        brushMirrorHorizontal,
+        brushMirrorVertical,
+      ),
     );
   };
 
@@ -1456,7 +1774,7 @@ export function MapEditorTool() {
       const tilePixelWidth = parseInteger(tilePixelWidthInput);
       const tilePixelHeight = parseInteger(tilePixelHeightInput);
 
-      const response = await fetch('/api/admin/maps/save', {
+      const result = await apiFetchJson<SaveMapResponse>('/api/admin/maps/save', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1476,10 +1794,10 @@ export function MapEditorTool() {
         }),
       });
 
-      const payload = (await response.json()) as SaveMapResponse;
-      if (!response.ok || !payload.ok) {
-        throw new Error(payload.error ?? 'Map save failed.');
+      if (!result.ok || !result.data) {
+        throw new Error(result.error ?? 'Map save failed.');
       }
+      const payload = result.data;
 
       const nextMapId = payload.mapId ?? editableMap.id;
       if (nextMapId !== editableMap.id) {
@@ -1490,6 +1808,7 @@ export function MapEditorTool() {
       }
       setLoadedSourceMapIdForSave(nextMapId);
       setSelectedSourceMapId(nextMapId);
+      void loadSourceMapsFromDatabase();
 
       const customCount = payload.customTileCodes?.length ?? 0;
       const blobTilesetWarning =
@@ -1539,8 +1858,7 @@ export function MapEditorTool() {
   };
 
   const loadExampleTileset = () => {
-    setTilesetUrlInput('/example_assets/tileset/tileset.png');
-    setStatus('Loaded example tileset path.');
+    setError('No bundled example tileset is available. Upload a tileset file instead.');
   };
 
   const onTilesetFileSelected = (event: ChangeEvent<HTMLInputElement>) => {
@@ -1548,16 +1866,20 @@ export function MapEditorTool() {
     if (!file) {
       return;
     }
-
-    if (uploadedObjectUrlRef.current) {
-      URL.revokeObjectURL(uploadedObjectUrlRef.current);
-      uploadedObjectUrlRef.current = null;
-    }
-
-    const objectUrl = URL.createObjectURL(file);
-    uploadedObjectUrlRef.current = objectUrl;
-    setTilesetUrlInput(objectUrl);
-    setStatus(`Loaded tileset file ${file.name}`);
+    void (async () => {
+      try {
+        const dataUrl = await fileToDataUrl(file);
+        if (uploadedObjectUrlRef.current) {
+          URL.revokeObjectURL(uploadedObjectUrlRef.current);
+          uploadedObjectUrlRef.current = null;
+        }
+        setTilesetUrlInput(dataUrl);
+        setTilesetUrl(dataUrl);
+        setStatus(`Loaded and applied tileset file ${file.name} (persisted URL).`);
+      } catch {
+        setError(`Unable to load tileset file ${file.name}.`);
+      }
+    })();
   };
 
   const autoGeneratePaintTiles = () => {
@@ -1696,119 +2018,218 @@ export function MapEditorTool() {
     setStatus('Cleared saved paint tiles in memory and IndexedDB.');
   };
 
-  const applyNpcSpriteUrl = () => {
-    if (!npcSpriteUrlInput.trim()) {
-      setError('NPC sheet URL cannot be empty.');
-      return;
-    }
-    if (!parseInteger(npcFrameWidthInput) || !parseInteger(npcFrameHeightInput)) {
-      setError('Set NPC frame width and height before applying NPC sheet URL.');
-      return;
-    }
-
-    setNpcSpriteUrl(npcSpriteUrlInput.trim());
-    setStatus('NPC spritesheet URL applied.');
+  const setNpcAnimationSetsDraft = (nextSets: DirectionalAnimationSets) => {
+    const sanitized = sanitizeDirectionalAnimationSets(nextSets);
+    const safeSets =
+      Object.keys(sanitized).length > 0
+        ? sanitized
+        : sanitizeDirectionalAnimationSets(buildDirectionalAnimationSetsFromLegacyFrames(npcFacingFrames, npcWalkFrames));
+    setNpcAnimationSetsInput(stringifyDirectionalAnimationSetsForEditor(safeSets));
   };
 
-  const loadExampleNpcSprite = () => {
-    setNpcSpriteUrlInput('/example_assets/character_npc_spritesheets/ow1.png');
-    setNpcSpriteLabelInput('Teen Boy');
-    setNpcFrameWidthInput('32');
-    setNpcFrameHeightInput('32');
-    setNpcFrameCellsWideInput('1');
-    setNpcFrameCellsTallInput('1');
-    setNpcRenderWidthTilesInput('1');
-    setNpcRenderHeightTilesInput('2');
-    setSelectedNpcAtlasStartIndex(null);
-    setSelectedNpcAtlasEndIndex(null);
-    setNpcFacingFrames({
-      down: 0,
-      left: 4,
-      right: 8,
-      up: 12,
-    });
-    setNpcWalkFrames({
-      down: [1, 2, 3],
-      left: [5, 6, 7],
-      right: [9, 10, 11],
-      up: [13, 14, 15],
-    });
-    setStatus('Loaded example NPC spritesheet path.');
+  const loadNpcSupabaseSpriteSheets = async () => {
+    const bucket = npcSpriteBucketInput.trim() || DEFAULT_SUPABASE_BUCKET;
+    const prefix = npcSpritePrefixInput.trim();
+    const params = new URLSearchParams();
+    params.set('bucket', bucket);
+    if (prefix) {
+      params.set('prefix', prefix);
+    }
+    setIsLoadingNpcSupabaseSpriteSheets(true);
+    try {
+      const result = await apiFetchJson<LoadSupabaseSpriteSheetsResponse>(
+        `/api/admin/spritesheets/list?${params.toString()}`,
+      );
+      if (!result.ok || !result.data?.ok) {
+        throw new Error(result.error ?? result.data?.error ?? 'Unable to load NPC spritesheets from Supabase.');
+      }
+      const loadedSheets = Array.isArray(result.data.spritesheets) ? result.data.spritesheets : [];
+      setNpcSupabaseSpriteSheets(loadedSheets);
+      setStatus(`Loaded ${loadedSheets.length} spritesheet(s) from bucket "${bucket}".`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to load NPC spritesheets from Supabase.';
+      setError(message);
+    } finally {
+      setIsLoadingNpcSupabaseSpriteSheets(false);
+    }
   };
 
-  const onNpcSpriteFileSelected = (event: ChangeEvent<HTMLInputElement>) => {
+  useEffect(() => {
+    void loadNpcSupabaseSpriteSheets();
+    // Run once on mount with the default bucket.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const onNpcSpriteFileSelected = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) {
       return;
     }
-
-    if (uploadedNpcObjectUrlRef.current) {
-      URL.revokeObjectURL(uploadedNpcObjectUrlRef.current);
-      uploadedNpcObjectUrlRef.current = null;
+    event.target.value = '';
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      setNpcSpriteUrl(dataUrl);
+      setStatus(`Loaded and applied NPC sheet file ${file.name}`);
+    } catch {
+      setError(`Unable to read NPC sheet file ${file.name}.`);
     }
-
-    const objectUrl = URL.createObjectURL(file);
-    uploadedNpcObjectUrlRef.current = objectUrl;
-    setNpcSpriteUrlInput(objectUrl);
-    setStatus(`Loaded NPC sheet file ${file.name}`);
   };
 
-  const assignNpcFrameFromAtlas = () => {
+  const addNpcAnimation = () => {
+    const animationName = newNpcAnimationNameInput.trim();
+    if (!animationName) {
+      setError('Animation name is required.');
+      return;
+    }
+    if (parsedNpcAnimationSets[animationName]) {
+      setError(`Animation "${animationName}" already exists.`);
+      return;
+    }
+
+    setNpcAnimationSetsDraft({
+      ...parsedNpcAnimationSets,
+      [animationName]: {
+        up: [],
+        down: [],
+        left: [],
+        right: [],
+      },
+    });
+    setSelectedNpcAnimationName(animationName);
+    setNewNpcAnimationNameInput('');
+    setStatus(`Added animation "${animationName}".`);
+  };
+
+  const renameSelectedNpcAnimation = () => {
+    if (!selectedNpcAnimationName) {
+      setError('Select an animation to rename.');
+      return;
+    }
+    const nextName = renameNpcAnimationNameInput.trim();
+    if (!nextName) {
+      setError('New animation name is required.');
+      return;
+    }
+    if (nextName !== selectedNpcAnimationName && parsedNpcAnimationSets[nextName]) {
+      setError(`Animation "${nextName}" already exists.`);
+      return;
+    }
+
+    const currentSet = parsedNpcAnimationSets[selectedNpcAnimationName];
+    if (!currentSet) {
+      setError('Selected animation no longer exists.');
+      return;
+    }
+    const nextSets: DirectionalAnimationSets = {};
+    for (const [name, set] of Object.entries(parsedNpcAnimationSets)) {
+      if (name === selectedNpcAnimationName) {
+        nextSets[nextName] = set;
+      } else {
+        nextSets[name] = set;
+      }
+    }
+    setNpcAnimationSetsDraft(nextSets);
+    setSelectedNpcAnimationName(nextName);
+    if (npcDefaultIdleAnimationInput.trim() === selectedNpcAnimationName) {
+      setNpcDefaultIdleAnimationInput(nextName);
+    }
+    if (npcDefaultMoveAnimationInput.trim() === selectedNpcAnimationName) {
+      setNpcDefaultMoveAnimationInput(nextName);
+    }
+    setStatus(`Renamed animation "${selectedNpcAnimationName}" to "${nextName}".`);
+  };
+
+  const deleteSelectedNpcAnimation = () => {
+    if (!selectedNpcAnimationName) {
+      setError('Select an animation to delete.');
+      return;
+    }
+    const names = Object.keys(parsedNpcAnimationSets);
+    if (names.length <= 1) {
+      setError('At least one animation must remain.');
+      return;
+    }
+
+    const nextSets: DirectionalAnimationSets = {};
+    for (const [name, set] of Object.entries(parsedNpcAnimationSets)) {
+      if (name === selectedNpcAnimationName) {
+        continue;
+      }
+      nextSets[name] = set;
+    }
+    const nextNames = Object.keys(nextSets);
+    const fallbackName = nextNames.includes('walk') ? 'walk' : nextNames[0];
+    setNpcAnimationSetsDraft(nextSets);
+    setSelectedNpcAnimationName(fallbackName ?? '');
+    if (npcDefaultIdleAnimationInput.trim() === selectedNpcAnimationName) {
+      setNpcDefaultIdleAnimationInput(fallbackName ?? 'idle');
+    }
+    if (npcDefaultMoveAnimationInput.trim() === selectedNpcAnimationName) {
+      setNpcDefaultMoveAnimationInput(fallbackName ?? 'walk');
+    }
+    setStatus(`Deleted animation "${selectedNpcAnimationName}".`);
+  };
+
+  const addSelectedNpcFrameToAnimation = () => {
     if (!selectedNpcAtlasRect || npcSpriteMeta.columns <= 0) {
       setError('Select a rectangle on the NPC sheet first.');
+      return;
+    }
+    if (!selectedNpcAnimationName) {
+      setError('Select an animation before adding frames.');
       return;
     }
 
     const frameIndex = selectedNpcAtlasRect.minRow * npcSpriteMeta.columns + selectedNpcAtlasRect.minCol;
     setNpcFrameCellsWideInput(String(selectedNpcAtlasRect.width));
     setNpcFrameCellsTallInput(String(selectedNpcAtlasRect.height));
-
-    if (npcAssignMode === 'idle') {
-      setNpcFacingFrames((current) => ({
-        ...current,
-        [npcAssignDirection]: frameIndex,
-      }));
-      setStatus(
-        `Assigned ${npcAssignDirection} idle frame ${frameIndex} (${selectedNpcAtlasRect.width}x${selectedNpcAtlasRect.height} cells).`,
-      );
-      return;
+    const currentSet = parsedNpcAnimationSets[selectedNpcAnimationName] ?? {};
+    const currentFrames = currentSet[npcAssignDirection] ? [...currentSet[npcAssignDirection]!] : [];
+    if (!currentFrames.includes(frameIndex)) {
+      currentFrames.push(frameIndex);
     }
-
-    setNpcWalkFrames((current) => {
-      const next = [...current[npcAssignDirection]];
-      const existingIndex = next.indexOf(frameIndex);
-      if (existingIndex >= 0) {
-        next.splice(existingIndex, 1);
-      } else {
-        next.push(frameIndex);
-        next.sort((a, b) => a - b);
-      }
-      setStatus(
-        `Updated ${npcAssignDirection} walk frames: ${next.length > 0 ? next.join(', ') : 'none'} (${selectedNpcAtlasRect.width}x${selectedNpcAtlasRect.height} cells).`,
-      );
-      return {
-        ...current,
-        [npcAssignDirection]: next,
-      };
+    setNpcAnimationSetsDraft({
+      ...parsedNpcAnimationSets,
+      [selectedNpcAnimationName]: {
+        ...currentSet,
+        [npcAssignDirection]: currentFrames,
+      },
     });
+    setStatus(
+      `Added frame ${frameIndex} to "${selectedNpcAnimationName}" ${npcAssignDirection} (${selectedNpcAtlasRect.width}x${selectedNpcAtlasRect.height} cells).`,
+    );
   };
 
-  const autoFillNpcFramesFrom4x4 = () => {
-    setNpcFrameCellsWideInput('1');
-    setNpcFrameCellsTallInput('1');
-    setNpcFacingFrames({
-      down: 0,
-      left: 4,
-      right: 8,
-      up: 12,
+  const removeNpcFrameFromAnimation = (frameIndex: number) => {
+    if (!selectedNpcAnimationName) {
+      return;
+    }
+    const currentSet = parsedNpcAnimationSets[selectedNpcAnimationName] ?? {};
+    const currentFrames = currentSet[npcAssignDirection] ? [...currentSet[npcAssignDirection]!] : [];
+    const nextFrames = currentFrames.filter((entry) => entry !== frameIndex);
+    setNpcAnimationSetsDraft({
+      ...parsedNpcAnimationSets,
+      [selectedNpcAnimationName]: {
+        ...currentSet,
+        [npcAssignDirection]: nextFrames,
+      },
     });
-    setNpcWalkFrames({
-      down: [1, 2, 3],
-      left: [5, 6, 7],
-      right: [9, 10, 11],
-      up: [13, 14, 15],
+    setStatus(`Removed frame ${frameIndex} from "${selectedNpcAnimationName}" ${npcAssignDirection}.`);
+  };
+
+  const clearNpcDirectionFrames = () => {
+    if (!selectedNpcAnimationName) {
+      return;
+    }
+    const currentSet = parsedNpcAnimationSets[selectedNpcAnimationName] ?? {};
+    setNpcAnimationSetsDraft({
+      ...parsedNpcAnimationSets,
+      [selectedNpcAnimationName]: {
+        ...currentSet,
+        [npcAssignDirection]: [],
+      },
     });
-    setStatus('Applied 4x4 row preset (Down, Left, Right, Up).');
+    setStatus(`Cleared frames for "${selectedNpcAnimationName}" ${npcAssignDirection}.`);
   };
 
   const saveNpcSprite = () => {
@@ -1840,9 +2261,28 @@ export function MapEditorTool() {
     }
     const frameWidth = atlasCellWidth * frameCellsWide;
     const frameHeight = atlasCellHeight * frameCellsTall;
+    const animationSets = sanitizeDirectionalAnimationSets(parsedNpcAnimationSets);
+    const defaultIdleAnimation = npcDefaultIdleAnimationInput.trim() || 'idle';
+    const defaultMoveAnimation = npcDefaultMoveAnimationInput.trim() || 'walk';
+    if (!animationSets[defaultIdleAnimation]) {
+      setError(`Default idle animation "${defaultIdleAnimation}" is not defined in animation sets.`);
+      return;
+    }
+    if (!animationSets[defaultMoveAnimation]) {
+      setError(`Default move animation "${defaultMoveAnimation}" is not defined in animation sets.`);
+      return;
+    }
+    const legacyFrames = deriveLegacyFramesFromAnimationSets(
+      animationSets,
+      defaultIdleAnimation,
+      defaultMoveAnimation,
+    );
 
     const spriteEntry: NpcSpriteLibraryEntry = {
-      id: makeNpcSpriteId(label, npcSpriteLibrary),
+      id:
+        selectedNpcSpriteId && npcSpriteLibrary.some((entry) => entry.id === selectedNpcSpriteId)
+          ? selectedNpcSpriteId
+          : makeNpcSpriteId(label, npcSpriteLibrary),
       label,
       sprite: {
         url: npcSpriteUrl.trim(),
@@ -1854,21 +2294,27 @@ export function MapEditorTool() {
         frameCellsTall,
         renderWidthTiles,
         renderHeightTiles,
-        facingFrames: { ...npcFacingFrames },
-        walkFrames: {
-          up: [...npcWalkFrames.up],
-          down: [...npcWalkFrames.down],
-          left: [...npcWalkFrames.left],
-          right: [...npcWalkFrames.right],
-        },
+        animationSets,
+        defaultIdleAnimation,
+        defaultMoveAnimation,
+        facingFrames: legacyFrames.facingFrames,
+        walkFrames: legacyFrames.walkFrames,
       },
     };
 
-    const next = [...npcSpriteLibrary, spriteEntry];
+    const existingIndex = npcSpriteLibrary.findIndex((entry) => entry.id === spriteEntry.id);
+    const next =
+      existingIndex >= 0
+        ? npcSpriteLibrary.map((entry, index) => (index === existingIndex ? spriteEntry : entry))
+        : [...npcSpriteLibrary, spriteEntry];
     setNpcSpriteLibrary(next);
     setSelectedNpcSpriteId(spriteEntry.id);
     void persistNpcSpriteLibrary(next);
-    setStatus(`Saved NPC sprite "${spriteEntry.label}".`);
+    setStatus(
+      existingIndex >= 0
+        ? `Updated NPC sprite "${spriteEntry.label}" without reloading atlas.`
+        : `Saved NPC sprite "${spriteEntry.label}".`,
+    );
   };
 
   const removeNpcSprite = (spriteId: string) => {
@@ -1892,6 +2338,11 @@ export function MapEditorTool() {
       setError('Select an NPC sprite to attach to this character.');
       return;
     }
+    const selectedSpriteEntry = npcSpriteLibrary.find((entry) => entry.id === selectedNpcSpriteId);
+    if (!selectedSpriteEntry) {
+      setError('Selected NPC sprite does not exist in the sprite library.');
+      return;
+    }
 
     const dialogueLines = npcDialogueLinesInput
       .split('\n')
@@ -1912,7 +2363,31 @@ export function MapEditorTool() {
             type: npcMovementTypeInput,
             pattern: npcMovementTypeInput === 'loop' ? pattern : undefined,
             stepIntervalMs: clampInt(parseInteger(npcStepIntervalInput) ?? 850, 180, 4000),
-          };
+        };
+
+    const idleAnimation = npcCharacterIdleAnimationInput.trim() || undefined;
+    const moveAnimation = npcCharacterMoveAnimationInput.trim() || undefined;
+    const availableAnimations = sanitizeDirectionalAnimationSets(
+      selectedSpriteEntry.sprite.animationSets && Object.keys(selectedSpriteEntry.sprite.animationSets).length > 0
+        ? selectedSpriteEntry.sprite.animationSets
+        : buildDirectionalAnimationSetsFromLegacyFrames(
+            selectedSpriteEntry.sprite.facingFrames,
+            {
+              up: [...(selectedSpriteEntry.sprite.walkFrames?.up ?? [])],
+              down: [...(selectedSpriteEntry.sprite.walkFrames?.down ?? [])],
+              left: [...(selectedSpriteEntry.sprite.walkFrames?.left ?? [])],
+              right: [...(selectedSpriteEntry.sprite.walkFrames?.right ?? [])],
+            },
+          ),
+    );
+    if (idleAnimation && !availableAnimations[idleAnimation]) {
+      setError(`Idle animation "${idleAnimation}" does not exist on the selected sprite.`);
+      return;
+    }
+    if (moveAnimation && !availableAnimations[moveAnimation]) {
+      setError(`Move animation "${moveAnimation}" does not exist on the selected sprite.`);
+      return;
+    }
 
     const characterTemplate: NpcCharacterTemplateEntry = {
       id: makeNpcCharacterId(label, npcCharacterLibrary),
@@ -1926,6 +2401,8 @@ export function MapEditorTool() {
       battleTeamIds: parseStringList(npcBattleTeamsInput),
       movement,
       spriteId: selectedNpcSpriteId,
+      idleAnimation,
+      moveAnimation,
     };
 
     const next = [...npcCharacterLibrary, characterTemplate];
@@ -2112,21 +2589,37 @@ export function MapEditorTool() {
     });
   };
 
+  const headerTitle = isTilesSection ? 'Tile Library' : isNpcsSection ? 'NPC Studio' : 'Map Editor';
+  const headerDescription = isTilesSection
+    ? 'Load tilesets, pick 1x1 or larger tile regions, and save reusable tile stamps.'
+    : isNpcsSection
+      ? 'Build reusable NPC sprite animations and character templates in a dedicated catalog.'
+      : 'Create new maps, edit existing ones, and configure warps between maps.';
+
   return (
-    <section className="admin-tool">
-      <header className="admin-tool__header">
-        <div>
-          <h2>Map Editor</h2>
-          <p>Create new maps, edit existing ones, and configure warps between maps.</p>
-        </div>
-        <div className="admin-tool__status">
+    <section className={`admin-tool ${embedded ? 'admin-tool--embedded' : ''}`}>
+      {!embedded && (
+        <header className="admin-tool__header">
+          <div>
+            <h2>{headerTitle}</h2>
+            <p>{headerDescription}</p>
+          </div>
+          <div className="admin-tool__status">
+            {statusMessage && <span className="status-chip">{statusMessage}</span>}
+            {errorMessage && <span className="status-chip is-error">{errorMessage}</span>}
+          </div>
+        </header>
+      )}
+      {embedded && (
+        <div className="admin-tool__status admin-tool__status--embedded">
           {statusMessage && <span className="status-chip">{statusMessage}</span>}
           {errorMessage && <span className="status-chip is-error">{errorMessage}</span>}
         </div>
-      </header>
+      )}
 
-      <div className="admin-layout">
+      <div className={`admin-layout ${showTwoColumnLayout ? '' : 'admin-layout--single'}`}>
         <aside className="admin-layout__left">
+          {showMapEditing && (
           <section className="admin-panel">
             <h3>Map Source</h3>
             <div className="admin-row">
@@ -2141,12 +2634,17 @@ export function MapEditorTool() {
               <button type="button" className="secondary" onClick={loadSelectedSourceMap}>
                 Load Existing
               </button>
+              <button type="button" className="secondary" onClick={loadSourceMapsFromDatabase}>
+                Refresh Maps
+              </button>
             </div>
             <p className="admin-note">
               Editor starts blank. Load a map, create one, or import JSON to begin.
             </p>
           </section>
+          )}
 
+          {showMapEditing && (
           <section className="admin-panel">
             <h3>New Map</h3>
             <div className="admin-grid-2">
@@ -2194,7 +2692,9 @@ export function MapEditorTool() {
               Create Blank Map
             </button>
           </section>
+          )}
 
+          {showMapEditing && (
           <section className="admin-panel">
             <h3>Active Map</h3>
             <div className="admin-grid-2">
@@ -2363,7 +2863,9 @@ export function MapEditorTool() {
                 : 'No active map loaded.'}
             </p>
           </section>
+          )}
 
+          {showTilesLibrary && (
           <section className="admin-panel">
             <h3>Tileset</h3>
             <div className="admin-grid-2">
@@ -2468,10 +2970,6 @@ export function MapEditorTool() {
                 />
               </label>
               <label>
-                Tile Code
-                <input value="Auto-generated" readOnly />
-              </label>
-              <label>
                 Saved Tile Name
                 <input value={manualPaintTileName} onChange={(event) => setManualPaintTileName(event.target.value)} />
               </label>
@@ -2531,7 +3029,9 @@ export function MapEditorTool() {
               ))}
             </div>
           </section>
+          )}
 
+          {showMapEditing && (
           <section className="admin-panel">
             <h3>Warp Editor</h3>
             <div className="admin-row">
@@ -2711,24 +3211,30 @@ export function MapEditorTool() {
               </>
             )}
           </section>
+          )}
 
+          {showNpcStudio && (
           <section className="admin-panel">
-            <h3>NPC Painter</h3>
+            <h3>{isNpcsSection ? 'NPC Studio' : 'NPC Painter'}</h3>
             <div className="admin-row">
-              <button
-                type="button"
-                className={`secondary ${tool === 'npc-paint' ? 'is-selected' : ''}`}
-                onClick={() => setTool('npc-paint')}
-              >
-                NPC Paint
-              </button>
-              <button
-                type="button"
-                className={`secondary ${tool === 'npc-erase' ? 'is-selected' : ''}`}
-                onClick={() => setTool('npc-erase')}
-              >
-                NPC Erase
-              </button>
+              {showMapEditing && (
+                <>
+                  <button
+                    type="button"
+                    className={`secondary ${tool === 'npc-paint' ? 'is-selected' : ''}`}
+                    onClick={() => setTool('npc-paint')}
+                  >
+                    NPC Paint
+                  </button>
+                  <button
+                    type="button"
+                    className={`secondary ${tool === 'npc-erase' ? 'is-selected' : ''}`}
+                    onClick={() => setTool('npc-erase')}
+                  >
+                    NPC Erase
+                  </button>
+                </>
+              )}
               <button type="button" className="secondary" onClick={loadNpcTemplatesFromDatabase}>
                 Load NPC Catalog
               </button>
@@ -2738,16 +3244,16 @@ export function MapEditorTool() {
             <div className="admin-grid-2">
               <label>
                 Sprite Label
-                <input value={npcSpriteLabelInput} onChange={(event) => setNpcSpriteLabelInput(event.target.value)} />
+                <input
+                  value={npcSpriteLabelInput}
+                  onChange={(event) => setNpcSpriteLabelInput(event.target.value)}
+                  placeholder="Custom sprite label"
+                />
               </label>
             </div>
 
             <h4>NPC Spritesheet</h4>
             <div className="admin-grid-2">
-              <label>
-                Sheet URL
-                <input value={npcSpriteUrlInput} onChange={(event) => setNpcSpriteUrlInput(event.target.value)} />
-              </label>
               <label>
                 Atlas Cell Width
                 <input value={npcFrameWidthInput} onChange={(event) => setNpcFrameWidthInput(event.target.value)} />
@@ -2761,28 +3267,83 @@ export function MapEditorTool() {
                 <input type="file" accept="image/*" onChange={onNpcSpriteFileSelected} />
               </label>
             </div>
+            <h4>Supabase Spritesheets</h4>
+            <div className="admin-grid-2">
+              <label>
+                Bucket
+                <input value={npcSpriteBucketInput} onChange={(event) => setNpcSpriteBucketInput(event.target.value)} />
+              </label>
+              <label>
+                Prefix (Optional)
+                <input value={npcSpritePrefixInput} onChange={(event) => setNpcSpritePrefixInput(event.target.value)} />
+              </label>
+            </div>
             <div className="admin-row">
-              <button type="button" className="secondary" onClick={applyNpcSpriteUrl}>
-                Apply NPC Sheet URL
-              </button>
-              <button type="button" className="secondary" onClick={loadExampleNpcSprite}>
-                Use Example NPC Sheet
-              </button>
-              <button type="button" className="secondary" onClick={autoFillNpcFramesFrom4x4}>
-                Auto Fill 4x4 D/L/R/U
+              <label>
+                Search
+                <input
+                  value={npcSpriteSearchInput}
+                  onChange={(event) => setNpcSpriteSearchInput(event.target.value)}
+                  placeholder="Search by file name or path"
+                />
+              </label>
+              <button
+                type="button"
+                className="secondary"
+                onClick={loadNpcSupabaseSpriteSheets}
+                disabled={isLoadingNpcSupabaseSpriteSheets}
+              >
+                {isLoadingNpcSupabaseSpriteSheets ? 'Loading...' : 'Reload Bucket'}
               </button>
             </div>
-            <p className="admin-note">
-              For a 4x4 sheet at 32x32 frames: rows are Down, Left, Right, Up.
-            </p>
+            <div className="spritesheet-browser">
+              {filteredNpcSupabaseSpriteSheets.length === 0 && (
+                <p className="admin-note">
+                  {isLoadingNpcSupabaseSpriteSheets ? 'Loading spritesheets...' : 'No PNG spritesheets found.'}
+                </p>
+              )}
+              {filteredNpcSupabaseSpriteSheets.map((entry) => (
+                <div
+                  key={`npc-supabase-sheet-${entry.path}`}
+                  className={`spritesheet-browser__row ${selectedNpcSupabaseSheetPath === entry.path ? 'is-selected' : ''}`}
+                >
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => {
+                      setNpcSpriteUrl(entry.publicUrl);
+                      setSelectedNpcSupabaseSheetPath(entry.path);
+                      setStatus(`Loaded spritesheet "${entry.path}" from Supabase.`);
+                    }}
+                  >
+                    Load
+                  </button>
+                  <span className="spritesheet-browser__meta" title={entry.path}>
+                    {entry.path}
+                  </span>
+                  <span className="spritesheet-browser__meta">
+                    {entry.updatedAt ? new Date(entry.updatedAt).toLocaleDateString() : '-'}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <p className="admin-note">Sprite label is fully manual and will be saved exactly as entered.</p>
             <p className="admin-note">
               Default NPC size: render 1 tile wide x 2 tiles tall (16x32 world pixels).
+            </p>
+            <p className="admin-note">
+              Active NPC sheet: {npcSpriteUrl ? 'Loaded from file.' : 'No file loaded yet.'}
             </p>
             <p className="admin-note">
               {npcSpriteMeta.loaded
                 ? `Loaded ${npcSpriteMeta.width}x${npcSpriteMeta.height} (${npcSpriteMeta.columns} columns x ${npcSpriteMeta.rows} rows)`
                 : npcSpriteMeta.error ?? 'No NPC sheet loaded.'}
             </p>
+            {isNpcPreviewTruncated && (
+              <p className="admin-note">
+                Preview limited to first {npcPreviewCellCount} cells (of {npcAtlasCellCount}). Increase atlas cell size for a smaller grid.
+              </p>
+            )}
             <div className="admin-grid-2">
               <label>
                 Frame Cells Wide
@@ -2815,7 +3376,48 @@ export function MapEditorTool() {
             </div>
             <div className="admin-row">
               <label>
-                Assign Direction
+                Animation
+                <select
+                  value={selectedNpcAnimationName}
+                  onChange={(event) => setSelectedNpcAnimationName(event.target.value)}
+                >
+                  {npcAnimationNames.map((name) => (
+                    <option key={`npc-animation-${name}`} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                New Animation
+                <input
+                  value={newNpcAnimationNameInput}
+                  onChange={(event) => setNewNpcAnimationNameInput(event.target.value)}
+                  placeholder="attack"
+                />
+              </label>
+              <button type="button" className="secondary" onClick={addNpcAnimation}>
+                Add Animation
+              </button>
+            </div>
+            <div className="admin-row">
+              <label>
+                Rename Selected Animation
+                <input
+                  value={renameNpcAnimationNameInput}
+                  onChange={(event) => setRenameNpcAnimationNameInput(event.target.value)}
+                />
+              </label>
+              <button type="button" className="secondary" onClick={renameSelectedNpcAnimation}>
+                Rename Animation
+              </button>
+              <button type="button" className="secondary" onClick={deleteSelectedNpcAnimation}>
+                Delete Animation
+              </button>
+            </div>
+            <div className="admin-row">
+              <label>
+                Direction
                 <select
                   value={npcAssignDirection}
                   onChange={(event) => setNpcAssignDirection(event.target.value as Direction)}
@@ -2826,18 +3428,11 @@ export function MapEditorTool() {
                   <option value="right">Right</option>
                 </select>
               </label>
-              <label>
-                Assign Mode
-                <select
-                  value={npcAssignMode}
-                  onChange={(event) => setNpcAssignMode(event.target.value as 'idle' | 'walk')}
-                >
-                  <option value="idle">Idle Frame</option>
-                  <option value="walk">Walk Frame Toggle</option>
-                </select>
-              </label>
-              <button type="button" className="secondary" onClick={assignNpcFrameFromAtlas}>
-                Assign Selected Rectangle
+              <button type="button" className="secondary" onClick={addSelectedNpcFrameToAnimation}>
+                Add Selected Frame
+              </button>
+              <button type="button" className="secondary" onClick={clearNpcDirectionFrames}>
+                Clear Direction Frames
               </button>
             </div>
             <div className="tileset-grid-wrap npc-sheet-grid-wrap">
@@ -2848,16 +3443,14 @@ export function MapEditorTool() {
                     gridTemplateColumns: `repeat(${npcSpriteMeta.columns}, ${ATLAS_PREVIEW_SIZE}px)`,
                   }}
                 >
-                  {Array.from({ length: npcAtlasCellCount }, (_, frameIndex) => {
-                    const isIdleSelected = npcFacingFrames[npcAssignDirection] === frameIndex;
-                    const isWalkSelected = npcWalkFrames[npcAssignDirection].includes(frameIndex);
+                  {Array.from({ length: npcPreviewCellCount }, (_, frameIndex) => {
+                    const isAnimationFrameSelected = selectedNpcAnimationFramesForDirection.includes(frameIndex);
                     return (
                       <button
                         key={`npc-frame-${frameIndex}`}
                         type="button"
                         className={`tileset-grid__cell ${
-                          isIdleSelected ||
-                          isWalkSelected ||
+                          isAnimationFrameSelected ||
                           isAtlasCellInRect(selectedNpcAtlasRect, frameIndex, npcSpriteMeta.columns)
                             ? 'is-selected'
                             : ''
@@ -2892,18 +3485,41 @@ export function MapEditorTool() {
               )}
             </div>
 
-            <div className="admin-grid-2">
-              {(Object.keys(npcFacingFrames) as Direction[]).map((direction) => (
-                <label key={`npc-facing-${direction}`}>
-                  {direction} Idle
-                  <input value={String(npcFacingFrames[direction])} readOnly />
-                </label>
+            <p className="admin-note">
+              Frames for {selectedNpcAnimationName || '-'} {npcAssignDirection}: [
+              {selectedNpcAnimationFramesForDirection.join(', ')}]
+            </p>
+            <div className="admin-row">
+              {selectedNpcAnimationFramesForDirection.length === 0 && (
+                <span className="admin-note">No frames in this direction yet.</span>
+              )}
+              {selectedNpcAnimationFramesForDirection.map((frame) => (
+                <button
+                  key={`npc-frame-remove-${selectedNpcAnimationName}-${npcAssignDirection}-${frame}`}
+                  type="button"
+                  className="secondary"
+                  onClick={() => removeNpcFrameFromAnimation(frame)}
+                >
+                  Remove {frame}
+                </button>
               ))}
             </div>
-            <p className="admin-note">
-              Walk Frames: up[{npcWalkFrames.up.join(', ')}] down[{npcWalkFrames.down.join(', ')}] left[
-              {npcWalkFrames.left.join(', ')}] right[{npcWalkFrames.right.join(', ')}]
-            </p>
+            <div className="admin-grid-2">
+              <label>
+                Default Idle Animation
+                <input
+                  value={npcDefaultIdleAnimationInput}
+                  onChange={(event) => setNpcDefaultIdleAnimationInput(event.target.value)}
+                />
+              </label>
+              <label>
+                Default Move Animation
+                <input
+                  value={npcDefaultMoveAnimationInput}
+                  onChange={(event) => setNpcDefaultMoveAnimationInput(event.target.value)}
+                />
+              </label>
+            </div>
             <p className="admin-note">
               Selected Rectangle: {selectedNpcAtlasRect ? `${selectedNpcAtlasRect.width}x${selectedNpcAtlasRect.height}` : 'none'}
             </p>
@@ -2932,7 +3548,6 @@ export function MapEditorTool() {
                         Math.max(1, Math.round(sprite.sprite.frameHeight / Math.max(1, atlasCellHeight)));
                       setSelectedNpcSpriteId(sprite.id);
                       setNpcSpriteLabelInput(sprite.label);
-                      setNpcSpriteUrlInput(sprite.sprite.url);
                       setNpcSpriteUrl(sprite.sprite.url);
                       setNpcFrameWidthInput(String(atlasCellWidth));
                       setNpcFrameHeightInput(String(atlasCellHeight));
@@ -2947,6 +3562,35 @@ export function MapEditorTool() {
                         left: [...(sprite.sprite.walkFrames?.left ?? [])],
                         right: [...(sprite.sprite.walkFrames?.right ?? [])],
                       });
+                      const nextAnimationSets =
+                        sprite.sprite.animationSets &&
+                        Object.keys(sprite.sprite.animationSets).length > 0
+                          ? sanitizeDirectionalAnimationSets(
+                              sprite.sprite.animationSets as Partial<
+                                Record<string, Partial<Record<Direction, number[]>>>
+                              >,
+                            )
+                          : buildDirectionalAnimationSetsFromLegacyFrames(
+                              sprite.sprite.facingFrames,
+                              {
+                                up: [...(sprite.sprite.walkFrames?.up ?? [])],
+                                down: [...(sprite.sprite.walkFrames?.down ?? [])],
+                                left: [...(sprite.sprite.walkFrames?.left ?? [])],
+                                right: [...(sprite.sprite.walkFrames?.right ?? [])],
+                              },
+                            );
+                      setNpcAnimationSetsInput(stringifyDirectionalAnimationSetsForEditor(nextAnimationSets));
+                      const nextIdleAnimation = sprite.sprite.defaultIdleAnimation ?? 'idle';
+                      const nextMoveAnimation = sprite.sprite.defaultMoveAnimation ?? 'walk';
+                      const nextAnimationNames = Object.keys(nextAnimationSets);
+                      const nextSelectedAnimation = nextAnimationNames.includes(nextMoveAnimation)
+                        ? nextMoveAnimation
+                        : nextAnimationNames.includes('walk')
+                          ? 'walk'
+                          : nextAnimationNames[0] ?? '';
+                      setSelectedNpcAnimationName(nextSelectedAnimation);
+                      setNpcDefaultIdleAnimationInput(nextIdleAnimation);
+                      setNpcDefaultMoveAnimationInput(nextMoveAnimation);
                     }}
                   >
                     Use
@@ -3025,6 +3669,22 @@ export function MapEditorTool() {
                 Step Interval (ms)
                 <input value={npcStepIntervalInput} onChange={(event) => setNpcStepIntervalInput(event.target.value)} />
               </label>
+              <label>
+                Character Idle Animation
+                <input
+                  value={npcCharacterIdleAnimationInput}
+                  onChange={(event) => setNpcCharacterIdleAnimationInput(event.target.value)}
+                  placeholder="idle"
+                />
+              </label>
+              <label>
+                Character Move Animation
+                <input
+                  value={npcCharacterMoveAnimationInput}
+                  onChange={(event) => setNpcCharacterMoveAnimationInput(event.target.value)}
+                  placeholder="walk"
+                />
+              </label>
             </div>
             <label>
               Dialogue Lines (one line per row)
@@ -3075,6 +3735,8 @@ export function MapEditorTool() {
                       setNpcMovementPatternInput((template.movement?.pattern ?? []).join(', '));
                       setNpcStepIntervalInput(String(template.movement?.stepIntervalMs ?? 850));
                       setNpcBattleTeamsInput((template.battleTeamIds ?? []).join(', '));
+                      setNpcCharacterIdleAnimationInput(template.idleAnimation ?? '');
+                      setNpcCharacterMoveAnimationInput(template.moveAnimation ?? '');
                       setSelectedNpcSpriteId(template.spriteId ?? '');
                     }}
                   >
@@ -3086,6 +3748,9 @@ export function MapEditorTool() {
                     {template.spriteId ?? 'No Sprite'}
                   </span>
                   <span className="saved-paint-row__meta">{template.movement?.type ?? 'static'}</span>
+                  <span className="saved-paint-row__meta">
+                    {template.idleAnimation ?? '-'} / {template.moveAnimation ?? '-'}
+                  </span>
                   <button type="button" className="secondary" onClick={() => removeNpcTemplate(template.id)}>
                     Remove
                   </button>
@@ -3093,7 +3758,9 @@ export function MapEditorTool() {
               ))}
             </div>
           </section>
+          )}
 
+          {showMapEditing && (
           <section className="admin-panel">
             <h3>NPCs JSON</h3>
             <textarea
@@ -3107,7 +3774,9 @@ export function MapEditorTool() {
               Apply NPC JSON
             </button>
           </section>
+          )}
 
+          {showMapEditing && (
           <section className="admin-panel">
             <h3>Interactions JSON</h3>
             <textarea
@@ -3121,7 +3790,9 @@ export function MapEditorTool() {
               Apply Interaction JSON
             </button>
           </section>
+          )}
 
+          {showMapEditing && (
           <section className="admin-panel">
             <h3>Import / Export</h3>
             <div className="admin-row">
@@ -3179,8 +3850,10 @@ export function MapEditorTool() {
               Import JSON Into Editor
             </button>
           </section>
+          )}
         </aside>
 
+        {showMapEditing && (
         <main className="admin-layout__center">
           <section className="admin-panel">
             <h3>Paint Tools</h3>
@@ -3215,6 +3888,13 @@ export function MapEditorTool() {
               </button>
               <button
                 type="button"
+                className={`secondary ${tool === 'fill-rotated' ? 'is-selected' : ''}`}
+                onClick={() => setTool('fill-rotated')}
+              >
+                Fill Rotated
+              </button>
+              <button
+                type="button"
                 className={`secondary ${tool === 'pick' ? 'is-selected' : ''}`}
                 onClick={() => setTool('pick')}
               >
@@ -3244,6 +3924,50 @@ export function MapEditorTool() {
               <button type="button" className="secondary" onClick={removeSelectedPaintTile} disabled={!selectedPaintTile}>
                 Remove Selected Paint Tile
               </button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={!selectedPaintTile}
+                onClick={() => {
+                  setBrushRotationQuarter((current) => normalizeQuarter(current - 1));
+                  setStatus('Brush rotated left.');
+                }}
+              >
+                Rotate Left
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={!selectedPaintTile}
+                onClick={() => {
+                  setBrushRotationQuarter((current) => normalizeQuarter(current + 1));
+                  setStatus('Brush rotated right.');
+                }}
+              >
+                Rotate Right
+              </button>
+              <button
+                type="button"
+                className={`secondary ${brushMirrorHorizontal ? 'is-selected' : ''}`}
+                disabled={!selectedPaintTile}
+                onClick={() => {
+                  setBrushMirrorHorizontal((current) => !current);
+                  setStatus(brushMirrorHorizontal ? 'Horizontal mirror off.' : 'Horizontal mirror on.');
+                }}
+              >
+                Mirror Horizontal
+              </button>
+              <button
+                type="button"
+                className={`secondary ${brushMirrorVertical ? 'is-selected' : ''}`}
+                disabled={!selectedPaintTile}
+                onClick={() => {
+                  setBrushMirrorVertical((current) => !current);
+                  setStatus(brushMirrorVertical ? 'Vertical mirror off.' : 'Vertical mirror on.');
+                }}
+              >
+                Mirror Vertical
+              </button>
               <label className="admin-inline-label">
                 Zoom
                 <input
@@ -3254,7 +3978,32 @@ export function MapEditorTool() {
                   onChange={(event) => setCellSize(clampInt(Number(event.target.value), MIN_CELL_SIZE, MAX_CELL_SIZE))}
                 />
               </label>
+              {isMapSection && (
+                <>
+                  <button type="button" className="secondary" onClick={loadSavedPaintTilesFromDatabase}>
+                    Reload Saved Tiles
+                  </button>
+                  <button type="button" className="secondary" onClick={loadNpcTemplatesFromDatabase}>
+                    Reload NPC Catalog
+                  </button>
+                </>
+              )}
             </div>
+            {isMapSection && (
+              <div className="admin-row">
+                <label>
+                  NPC Character
+                  <select value={selectedNpcCharacterId} onChange={(event) => setSelectedNpcCharacterId(event.target.value)}>
+                    <option value="">Select character</option>
+                    {npcCharacterLibrary.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {entry.label} ({entry.npcName})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
             {tool === 'collision-edge' && (
               <>
                 <div className="admin-row">
@@ -3347,11 +4096,13 @@ export function MapEditorTool() {
               Hover: {hoveredCell ? `${hoveredCell.x}, ${hoveredCell.y}` : '-'} | Current Tool: {tool} | Selected Tile:
               {' '}
               {selectedTileCode} | Active Layer: {activeLayer?.id ?? '-'} | Collision Mask: 0x
-              {selectedCollisionEdgeMask.toString(16)} | NPC Character: {selectedNpcCharacter?.label ?? '-'}
+              {selectedCollisionEdgeMask.toString(16)} | Brush Rot: {brushRotationQuarter * 90}deg | Mirror H/V:{' '}
+              {brushMirrorHorizontal ? 'Y' : 'N'}/{brushMirrorVertical ? 'Y' : 'N'} | NPC Character:{' '}
+              {selectedNpcCharacter?.label ?? '-'}
             </p>
           </section>
 
-          <section className="admin-panel admin-panel--grow">
+          <section className="admin-panel admin-panel--grow admin-panel--map-canvas">
             <h3>Map Canvas</h3>
             {hasMapLoaded ? (
               <div className="map-grid-wrap">
@@ -3534,6 +4285,7 @@ export function MapEditorTool() {
             </button>
           </section>
         </main>
+        )}
       </div>
     </section>
   );
@@ -3568,9 +4320,26 @@ function placeNpcFromTemplate(
           pattern: template.movement.pattern ? [...template.movement.pattern] : undefined,
         }
       : undefined,
+    idleAnimation: template.idleAnimation,
+    moveAnimation: template.moveAnimation,
     sprite: resolvedSprite
       ? {
           ...resolvedSprite,
+          animationSets: resolvedSprite.animationSets
+            ? Object.fromEntries(
+                Object.entries(resolvedSprite.animationSets).map(([name, directions]) => [
+                  name,
+                  {
+                    up: directions?.up ? [...directions.up] : undefined,
+                    down: directions?.down ? [...directions.down] : undefined,
+                    left: directions?.left ? [...directions.left] : undefined,
+                    right: directions?.right ? [...directions.right] : undefined,
+                  },
+                ]),
+              )
+            : undefined,
+          defaultIdleAnimation: resolvedSprite.defaultIdleAnimation,
+          defaultMoveAnimation: resolvedSprite.defaultMoveAnimation,
           facingFrames: { ...resolvedSprite.facingFrames },
           walkFrames: resolvedSprite.walkFrames
             ? {
@@ -3722,40 +4491,49 @@ function pseudoRandomQuarter(x: number, y: number): number {
   return Math.abs(hash) % 4;
 }
 
-function rotateStampCells(
+function normalizeQuarter(value: number): number {
+  return ((value % 4) + 4) % 4;
+}
+
+function transformStampCells(
   tile: SavedPaintTile,
   rotationQuarter: number,
+  mirrorHorizontal: boolean,
+  mirrorVertical: boolean,
 ): Array<{ code: EditorTileCode; dx: number; dy: number; rotationQuarter: number }> {
-  const quarter = ((rotationQuarter % 4) + 4) % 4;
+  const quarter = normalizeQuarter(rotationQuarter);
 
   return tile.cells.map((cell) => {
+    const mirroredX = mirrorHorizontal ? tile.width - 1 - cell.dx : cell.dx;
+    const mirroredY = mirrorVertical ? tile.height - 1 - cell.dy : cell.dy;
+
     switch (quarter) {
       case 1:
         return {
           code: cell.code,
-          dx: tile.height - 1 - cell.dy,
-          dy: cell.dx,
+          dx: tile.height - 1 - mirroredY,
+          dy: mirroredX,
           rotationQuarter: 1,
         };
       case 2:
         return {
           code: cell.code,
-          dx: tile.width - 1 - cell.dx,
-          dy: tile.height - 1 - cell.dy,
+          dx: tile.width - 1 - mirroredX,
+          dy: tile.height - 1 - mirroredY,
           rotationQuarter: 2,
         };
       case 3:
         return {
           code: cell.code,
-          dx: cell.dy,
-          dy: tile.width - 1 - cell.dx,
+          dx: mirroredY,
+          dy: tile.width - 1 - mirroredX,
           rotationQuarter: 3,
         };
       default:
         return {
           code: cell.code,
-          dx: cell.dx,
-          dy: cell.dy,
+          dx: mirroredX,
+          dy: mirroredY,
           rotationQuarter: 0,
         };
     }
@@ -3846,7 +4624,7 @@ function coordinateForEdge(side: EdgeSide, offset: number, width: number, height
   }
 }
 
-function buildWarnings(map: EditableMap, savedCustomTileCodes: Set<string>): string[] {
+function buildWarnings(map: EditableMap, savedCustomTileCodes: Set<string>, knownSourceMapIds: string[]): string[] {
   const warnings: string[] = [];
   const { width, height } = getMapSize(map);
   const unknownTileCodes = new Set<string>();
@@ -3951,7 +4729,7 @@ function buildWarnings(map: EditableMap, savedCustomTileCodes: Set<string>): str
     }
   }
 
-  const knownMapIds = new Set(WORLD_MAPS.map((entry) => entry.id));
+  const knownMapIds = new Set(knownSourceMapIds);
   for (const warp of map.warps) {
     if (!knownMapIds.has(warp.toMapId) && warp.toMapId !== map.id) {
       warnings.push(`Warp ${warp.id} targets unknown map id "${warp.toMapId}".`);
@@ -3977,6 +4755,22 @@ function parseInteger(value: string): number | null {
   }
 
   return parsed;
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result === 'string' && result.startsWith('data:')) {
+        resolve(result);
+        return;
+      }
+      reject(new Error('Invalid file data URL.'));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('Unable to read file.'));
+    reader.readAsDataURL(file);
+  });
 }
 
 function buildAtlasSelectionRect(
@@ -4232,6 +5026,8 @@ function sanitizeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateEntry[] 
       battleTeamIds?: unknown;
       movement?: unknown;
       spriteId?: unknown;
+      idleAnimation?: unknown;
+      moveAnimation?: unknown;
     };
 
     const label = typeof record.label === 'string' && record.label.trim() ? record.label.trim() : '';
@@ -4271,6 +5067,14 @@ function sanitizeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateEntry[] 
       movement: sanitizeNpcMovement(record.movement),
       spriteId:
         typeof record.spriteId === 'string' && record.spriteId.trim() ? record.spriteId.trim() : undefined,
+      idleAnimation:
+        typeof record.idleAnimation === 'string' && record.idleAnimation.trim()
+          ? record.idleAnimation.trim()
+          : undefined,
+      moveAnimation:
+        typeof record.moveAnimation === 'string' && record.moveAnimation.trim()
+          ? record.moveAnimation.trim()
+          : undefined,
     });
   }
 
@@ -4283,6 +5087,171 @@ function parseStringList(value: string): string[] | undefined {
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
   return entries.length > 0 ? entries : undefined;
+}
+
+type DirectionalAnimationSets = Partial<Record<string, Partial<Record<Direction, number[]>>>>;
+
+function buildDirectionalAnimationSetsFromLegacyFrames(
+  facingFrames: Record<Direction, number>,
+  walkFrames: Record<Direction, number[]>,
+): DirectionalAnimationSets {
+  return {
+    idle: {
+      up: [facingFrames.up],
+      down: [facingFrames.down],
+      left: [facingFrames.left],
+      right: [facingFrames.right],
+    },
+    walk: {
+      up: [...walkFrames.up],
+      down: [...walkFrames.down],
+      left: [...walkFrames.left],
+      right: [...walkFrames.right],
+    },
+  };
+}
+
+function sanitizeDirectionalAnimationSets(animationSets: DirectionalAnimationSets): DirectionalAnimationSets {
+  const sanitized: DirectionalAnimationSets = {};
+  for (const [name, directions] of Object.entries(animationSets)) {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      continue;
+    }
+    const directionRecord =
+      directions && typeof directions === 'object' && !Array.isArray(directions)
+        ? directions
+        : {};
+    const sanitizedDirections: Partial<Record<Direction, number[]>> = {
+      up: [],
+      down: [],
+      left: [],
+      right: [],
+    };
+    for (const direction of ['up', 'down', 'left', 'right'] as Direction[]) {
+      const rawFrames = directionRecord[direction];
+      const frames = Array.isArray(rawFrames)
+        ? rawFrames
+            .filter((entry): entry is number => typeof entry === 'number' && Number.isFinite(entry))
+            .map((entry) => Math.max(0, Math.floor(entry)))
+        : [];
+      sanitizedDirections[direction] = frames;
+    }
+    sanitized[trimmedName] = sanitizedDirections;
+  }
+
+  return sanitized;
+}
+
+function stringifyDirectionalAnimationSetsForEditor(animationSets: DirectionalAnimationSets): string {
+  return JSON.stringify(animationSets, null, 2);
+}
+
+function parseDirectionalAnimationSetsInput(
+  rawInput: string,
+  facingFrames: Record<Direction, number>,
+  walkFrames: Record<Direction, number[]>,
+): { ok: true; animationSets: DirectionalAnimationSets } | { ok: false; error: string } {
+  const fallback = sanitizeDirectionalAnimationSets(buildDirectionalAnimationSetsFromLegacyFrames(facingFrames, walkFrames));
+  const trimmed = rawInput.trim();
+  if (!trimmed) {
+    return {
+      ok: true,
+      animationSets: fallback,
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {
+        ok: false,
+        error: 'Animation sets must be an object keyed by animation name.',
+      };
+    }
+    const sanitized = sanitizeDirectionalAnimationSets(parsed as DirectionalAnimationSets);
+    if (Object.keys(sanitized).length === 0) {
+      return {
+        ok: false,
+        error: 'Animation sets must include at least one animation name.',
+      };
+    }
+    return {
+      ok: true,
+      animationSets: sanitized,
+    };
+  } catch {
+    return {
+      ok: false,
+      error: 'Animation sets are invalid. Use valid object JSON syntax.',
+    };
+  }
+}
+
+function deriveLegacyFramesFromAnimationSets(
+  animationSets: DirectionalAnimationSets,
+  defaultIdleAnimation: string,
+  defaultMoveAnimation: string,
+): { facingFrames: Record<Direction, number>; walkFrames: Record<Direction, number[]> } {
+  const idleSet = animationSets[defaultIdleAnimation] ?? {};
+  const moveSet = animationSets[defaultMoveAnimation] ?? {};
+
+  const pickFirstFrame = (frames: number[] | undefined): number => {
+    if (!Array.isArray(frames) || frames.length === 0) {
+      return 0;
+    }
+    const value = frames[0];
+    return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+  };
+
+  const normalizeFrames = (frames: number[] | undefined): number[] => {
+    if (!Array.isArray(frames)) {
+      return [];
+    }
+    return frames
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+      .map((value) => Math.max(0, Math.floor(value)));
+  };
+
+  const facingFrames: Record<Direction, number> = {
+    up: pickFirstFrame(idleSet.up),
+    down: pickFirstFrame(idleSet.down),
+    left: pickFirstFrame(idleSet.left),
+    right: pickFirstFrame(idleSet.right),
+  };
+  const walkFrames: Record<Direction, number[]> = {
+    up: normalizeFrames(moveSet.up),
+    down: normalizeFrames(moveSet.down),
+    left: normalizeFrames(moveSet.left),
+    right: normalizeFrames(moveSet.right),
+  };
+
+  for (const direction of ['up', 'down', 'left', 'right'] as Direction[]) {
+    if (walkFrames[direction].length === 0) {
+      walkFrames[direction] = [facingFrames[direction]];
+    }
+  }
+
+  return {
+    facingFrames,
+    walkFrames,
+  };
+}
+
+function upsertIdleWalkAnimationSetsInDraft(
+  rawInput: string,
+  facingFrames: Record<Direction, number>,
+  walkFrames: Record<Direction, number[]>,
+): DirectionalAnimationSets {
+  const legacyBase = buildDirectionalAnimationSetsFromLegacyFrames(facingFrames, walkFrames);
+  const parsed = parseDirectionalAnimationSetsInput(rawInput, facingFrames, walkFrames);
+  if (!parsed.ok) {
+    return legacyBase;
+  }
+  return {
+    ...parsed.animationSets,
+    ...legacyBase,
+  };
 }
 
 function sanitizeNpcMovement(raw: unknown): NpcMovementDefinition | undefined {
@@ -4327,14 +5296,17 @@ function sanitizeNpcSprite(raw: unknown): NpcSpriteConfig | undefined {
     frameCellsTall?: unknown;
     renderWidthTiles?: unknown;
     renderHeightTiles?: unknown;
+    animationSets?: unknown;
+    defaultIdleAnimation?: unknown;
+    defaultMoveAnimation?: unknown;
     facingFrames?: unknown;
     walkFrames?: unknown;
   };
   if (typeof record.url !== 'string' || !record.url.trim()) {
     return undefined;
   }
-  const frameWidth = typeof record.frameWidth === 'number' ? Math.max(1, Math.floor(record.frameWidth)) : 32;
-  const frameHeight = typeof record.frameHeight === 'number' ? Math.max(1, Math.floor(record.frameHeight)) : 32;
+  const frameWidth = typeof record.frameWidth === 'number' ? Math.max(1, Math.floor(record.frameWidth)) : 64;
+  const frameHeight = typeof record.frameHeight === 'number' ? Math.max(1, Math.floor(record.frameHeight)) : 64;
   const atlasCellWidth =
     typeof record.atlasCellWidth === 'number' ? Math.max(1, Math.floor(record.atlasCellWidth)) : frameWidth;
   const atlasCellHeight =
@@ -4372,6 +5344,16 @@ function sanitizeNpcSprite(raw: unknown): NpcSpriteConfig | undefined {
       .map((value) => Math.max(0, Math.floor(value)));
   }
 
+  const animationSets = sanitizeNpcSpriteAnimationSets(record.animationSets);
+  const defaultIdleAnimation =
+    typeof record.defaultIdleAnimation === 'string' && record.defaultIdleAnimation.trim()
+      ? record.defaultIdleAnimation.trim()
+      : undefined;
+  const defaultMoveAnimation =
+    typeof record.defaultMoveAnimation === 'string' && record.defaultMoveAnimation.trim()
+      ? record.defaultMoveAnimation.trim()
+      : undefined;
+
   return {
     url: record.url.trim(),
     frameWidth,
@@ -4382,7 +5364,21 @@ function sanitizeNpcSprite(raw: unknown): NpcSpriteConfig | undefined {
     frameCellsTall,
     renderWidthTiles,
     renderHeightTiles,
+    animationSets,
+    defaultIdleAnimation,
+    defaultMoveAnimation,
     facingFrames,
     walkFrames,
   };
+}
+
+function sanitizeNpcSpriteAnimationSets(
+  raw: unknown,
+): Partial<Record<string, Partial<Record<Direction, number[]>>>> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return undefined;
+  }
+
+  const sanitized = sanitizeDirectionalAnimationSets(raw as DirectionalAnimationSets);
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }

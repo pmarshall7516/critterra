@@ -1,6 +1,7 @@
-import { ChangeEvent, CSSProperties, useEffect, useRef, useState } from 'react';
+import { ChangeEvent, CSSProperties, useEffect, useMemo, useState } from 'react';
 import { PLAYER_SPRITE_CONFIG } from '@/game/world/playerSprite';
 import type { Direction } from '@/shared/types';
+import { apiFetchJson } from '@/shared/apiClient';
 
 interface AtlasMeta {
   loaded: boolean;
@@ -26,7 +27,47 @@ interface SavePlayerSpriteResponse {
   filePath?: string;
 }
 
+interface LoadPlayerSpriteResponse {
+  ok: boolean;
+  playerSprite?: NpcSpriteConfigPayload;
+  error?: string;
+}
+
+interface SupabaseSpriteSheetListItem {
+  name: string;
+  path: string;
+  publicUrl: string;
+  updatedAt: string | null;
+}
+
+interface LoadSupabaseSpriteSheetsResponse {
+  ok: boolean;
+  bucket?: string;
+  prefix?: string;
+  spritesheets?: SupabaseSpriteSheetListItem[];
+  error?: string;
+}
+
+interface NpcSpriteConfigPayload {
+  url: string;
+  frameWidth: number;
+  frameHeight: number;
+  atlasCellWidth?: number;
+  atlasCellHeight?: number;
+  frameCellsWide?: number;
+  frameCellsTall?: number;
+  renderWidthTiles?: number;
+  renderHeightTiles?: number;
+  animationSets?: Partial<Record<string, Partial<Record<Direction, number[]>>>>;
+  defaultIdleAnimation?: string;
+  defaultMoveAnimation?: string;
+  facingFrames: Record<Direction, number>;
+  walkFrames?: Partial<Record<Direction, number[]>>;
+}
+
 const ATLAS_PREVIEW_SIZE = 28;
+const MAX_ATLAS_PREVIEW_CELLS = 4096;
+const DEFAULT_SUPABASE_BUCKET = 'character-spritesheets';
 
 export function PlayerSpriteTool() {
   const defaultAtlasCellWidth = Math.max(1, PLAYER_SPRITE_CONFIG.atlasCellWidth ?? PLAYER_SPRITE_CONFIG.frameWidth);
@@ -40,8 +81,7 @@ export function PlayerSpriteTool() {
     PLAYER_SPRITE_CONFIG.frameCellsTall ?? Math.round(PLAYER_SPRITE_CONFIG.frameHeight / defaultAtlasCellHeight),
   );
   const [spriteLabel] = useState('Player Sprite');
-  const [spriteUrlInput, setSpriteUrlInput] = useState(PLAYER_SPRITE_CONFIG.url);
-  const [spriteUrl, setSpriteUrl] = useState(PLAYER_SPRITE_CONFIG.url);
+  const [spriteUrl, setSpriteUrl] = useState('');
   const [frameWidthInput, setFrameWidthInput] = useState(
     String(defaultAtlasCellWidth),
   );
@@ -68,7 +108,9 @@ export function PlayerSpriteTool() {
   const [selectedAtlasEndIndex, setSelectedAtlasEndIndex] = useState<number | null>(null);
   const [isSelectingAtlas, setIsSelectingAtlas] = useState(false);
   const [assignDirection, setAssignDirection] = useState<Direction>('down');
-  const [assignMode, setAssignMode] = useState<'idle' | 'walk'>('idle');
+  const [selectedAnimationName, setSelectedAnimationName] = useState('walk');
+  const [newAnimationNameInput, setNewAnimationNameInput] = useState('');
+  const [renameAnimationNameInput, setRenameAnimationNameInput] = useState('');
   const [facingFrames, setFacingFrames] = useState<Record<Direction, number>>({
     up: PLAYER_SPRITE_CONFIG.facingFrames.up,
     down: PLAYER_SPRITE_CONFIG.facingFrames.down,
@@ -81,18 +123,68 @@ export function PlayerSpriteTool() {
     left: [...(PLAYER_SPRITE_CONFIG.walkFrames?.left ?? [])],
     right: [...(PLAYER_SPRITE_CONFIG.walkFrames?.right ?? [])],
   });
+  const [defaultIdleAnimationInput, setDefaultIdleAnimationInput] = useState(
+    PLAYER_SPRITE_CONFIG.defaultIdleAnimation ?? 'idle',
+  );
+  const [defaultMoveAnimationInput, setDefaultMoveAnimationInput] = useState(
+    PLAYER_SPRITE_CONFIG.defaultMoveAnimation ?? 'walk',
+  );
+  const [animationSetsInput, setAnimationSetsInput] = useState(
+    stringifyDirectionalAnimationSets(
+      sanitizeDirectionalAnimationSets(
+        PLAYER_SPRITE_CONFIG.animationSets && Object.keys(PLAYER_SPRITE_CONFIG.animationSets).length > 0
+          ? PLAYER_SPRITE_CONFIG.animationSets
+          : buildDirectionalAnimationSetsFromLegacyFrames(
+              PLAYER_SPRITE_CONFIG.facingFrames,
+              {
+                up: [...(PLAYER_SPRITE_CONFIG.walkFrames?.up ?? [])],
+                down: [...(PLAYER_SPRITE_CONFIG.walkFrames?.down ?? [])],
+                left: [...(PLAYER_SPRITE_CONFIG.walkFrames?.left ?? [])],
+                right: [...(PLAYER_SPRITE_CONFIG.walkFrames?.right ?? [])],
+              },
+            ),
+      ),
+    ),
+  );
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const uploadedObjectUrlRef = useRef<string | null>(null);
+  const [spritesheetBucketInput, setSpritesheetBucketInput] = useState(DEFAULT_SUPABASE_BUCKET);
+  const [spritesheetPrefixInput, setSpritesheetPrefixInput] = useState('');
+  const [spritesheetSearchInput, setSpritesheetSearchInput] = useState('');
+  const [spritesheetEntries, setSpritesheetEntries] = useState<SupabaseSpriteSheetListItem[]>([]);
+  const [isLoadingSpritesheetEntries, setIsLoadingSpritesheetEntries] = useState(false);
+  const [selectedSpritesheetPath, setSelectedSpritesheetPath] = useState('');
 
   const atlasCellCount = Math.max(0, atlasMeta.columns * atlasMeta.rows);
+  const previewCellCount = Math.min(atlasCellCount, MAX_ATLAS_PREVIEW_CELLS);
+  const isPreviewTruncated = atlasCellCount > previewCellCount;
   const selectedAtlasRect = buildAtlasSelectionRect(
     selectedAtlasStartIndex,
     selectedAtlasEndIndex,
     atlasMeta.columns,
     atlasMeta.rows,
   );
+  const parsedAnimationSetsResult = parseDirectionalAnimationSetsInput(animationSetsInput, facingFrames, walkFrames);
+  const parsedAnimationSets = parsedAnimationSetsResult.ok
+    ? parsedAnimationSetsResult.animationSets
+    : sanitizeDirectionalAnimationSets(buildDirectionalAnimationSetsFromLegacyFrames(facingFrames, walkFrames));
+  const animationNames = Object.keys(parsedAnimationSets);
+  const selectedAnimationFramesForDirection = selectedAnimationName
+    ? parsedAnimationSets[selectedAnimationName]?.[assignDirection] ?? []
+    : [];
+  const filteredSpritesheetEntries = useMemo(() => {
+    const query = spritesheetSearchInput.trim().toLowerCase();
+    const sorted = [...spritesheetEntries].sort((left, right) =>
+      left.path.localeCompare(right.path, undefined, { sensitivity: 'base' }),
+    );
+    if (!query) {
+      return sorted;
+    }
+    return sorted.filter(
+      (entry) => entry.name.toLowerCase().includes(query) || entry.path.toLowerCase().includes(query),
+    );
+  }, [spritesheetEntries, spritesheetSearchInput]);
 
   useEffect(() => {
     let cancelled = false;
@@ -203,12 +295,19 @@ export function PlayerSpriteTool() {
   }, []);
 
   useEffect(() => {
-    return () => {
-      if (uploadedObjectUrlRef.current) {
-        URL.revokeObjectURL(uploadedObjectUrlRef.current);
-      }
-    };
-  }, []);
+    if (!selectedAnimationName || !animationNames.includes(selectedAnimationName)) {
+      const fallbackName = animationNames.includes('walk') ? 'walk' : animationNames[0] ?? '';
+      setSelectedAnimationName(fallbackName);
+    }
+  }, [animationNames, selectedAnimationName]);
+
+  useEffect(() => {
+    if (!selectedAnimationName) {
+      setRenameAnimationNameInput('');
+      return;
+    }
+    setRenameAnimationNameInput(selectedAnimationName);
+  }, [selectedAnimationName]);
 
   const setStatus = (message: string) => {
     setStatusMessage(message);
@@ -220,96 +319,306 @@ export function PlayerSpriteTool() {
     setStatusMessage(null);
   };
 
-  const applySpriteUrl = () => {
-    if (!spriteUrlInput.trim()) {
-      setError('Sprite URL cannot be empty.');
-      return;
-    }
-    if (!parseInteger(frameWidthInput) || !parseInteger(frameHeightInput)) {
-      setError('Set frame width and height before applying sprite URL.');
-      return;
-    }
-    setSpriteUrl(spriteUrlInput.trim());
-    setStatus('Player sprite URL applied.');
+  const applySpriteConfigState = (config: NpcSpriteConfigPayload) => {
+    const atlasCellWidth = Math.max(1, config.atlasCellWidth ?? config.frameWidth);
+    const atlasCellHeight = Math.max(1, config.atlasCellHeight ?? config.frameHeight);
+    const frameCellsWide = Math.max(
+      1,
+      config.frameCellsWide ?? Math.round(config.frameWidth / Math.max(1, atlasCellWidth)),
+    );
+    const frameCellsTall = Math.max(
+      1,
+      config.frameCellsTall ?? Math.round(config.frameHeight / Math.max(1, atlasCellHeight)),
+    );
+
+    setSpriteUrl(config.url);
+    setFrameWidthInput(String(atlasCellWidth));
+    setFrameHeightInput(String(atlasCellHeight));
+    setFrameCellsWideInput(String(frameCellsWide));
+    setFrameCellsTallInput(String(frameCellsTall));
+    setRenderWidthTilesInput(String(config.renderWidthTiles ?? 1));
+    setRenderHeightTilesInput(String(config.renderHeightTiles ?? 2));
+    setFacingFrames({ ...config.facingFrames });
+    setWalkFrames({
+      up: [...(config.walkFrames?.up ?? [])],
+      down: [...(config.walkFrames?.down ?? [])],
+      left: [...(config.walkFrames?.left ?? [])],
+      right: [...(config.walkFrames?.right ?? [])],
+    });
+    const nextFacingFrames = { ...config.facingFrames };
+    const nextWalkFrames = {
+      up: [...(config.walkFrames?.up ?? [])],
+      down: [...(config.walkFrames?.down ?? [])],
+      left: [...(config.walkFrames?.left ?? [])],
+      right: [...(config.walkFrames?.right ?? [])],
+    };
+    const nextAnimationSets = sanitizeDirectionalAnimationSets(
+      config.animationSets && Object.keys(config.animationSets).length > 0
+        ? config.animationSets
+        : buildDirectionalAnimationSetsFromLegacyFrames(nextFacingFrames, nextWalkFrames),
+    );
+    setAnimationSetsInput(stringifyDirectionalAnimationSets(nextAnimationSets));
+    const nextIdleAnimation = config.defaultIdleAnimation ?? 'idle';
+    const nextMoveAnimation = config.defaultMoveAnimation ?? 'walk';
+    const nextAnimationNames = Object.keys(nextAnimationSets);
+    const nextSelectedAnimation = nextAnimationNames.includes(nextMoveAnimation)
+      ? nextMoveAnimation
+      : nextAnimationNames.includes('walk')
+        ? 'walk'
+        : nextAnimationNames[0] ?? '';
+    setSelectedAnimationName(nextSelectedAnimation);
+    setDefaultIdleAnimationInput(nextIdleAnimation);
+    setDefaultMoveAnimationInput(nextMoveAnimation);
   };
 
-  const loadExampleSprite = () => {
-    setSpriteUrlInput('/example_assets/character_npc_spritesheets/user_char.png');
-    setStatus('Loaded example player sprite path.');
+  useEffect(() => {
+    const loadFromDatabase = async () => {
+      const result = await apiFetchJson<LoadPlayerSpriteResponse>('/api/admin/player-sprite/get');
+      if (!result.ok || !result.data?.playerSprite) {
+        return;
+      }
+      applySpriteConfigState(result.data.playerSprite);
+      setStatus('Loaded player sprite config from database.');
+    };
+
+    void loadFromDatabase();
+  }, []);
+
+  const loadSupabaseSpriteSheets = async () => {
+    const bucket = spritesheetBucketInput.trim() || DEFAULT_SUPABASE_BUCKET;
+    const prefix = spritesheetPrefixInput.trim();
+    const params = new URLSearchParams();
+    params.set('bucket', bucket);
+    if (prefix) {
+      params.set('prefix', prefix);
+    }
+    setIsLoadingSpritesheetEntries(true);
+    try {
+      const result = await apiFetchJson<LoadSupabaseSpriteSheetsResponse>(
+        `/api/admin/spritesheets/list?${params.toString()}`,
+      );
+      if (!result.ok || !result.data?.ok) {
+        throw new Error(result.error ?? result.data?.error ?? 'Unable to load spritesheets from Supabase.');
+      }
+      const loadedSheets = Array.isArray(result.data.spritesheets) ? result.data.spritesheets : [];
+      setSpritesheetEntries(loadedSheets);
+      setStatus(`Loaded ${loadedSheets.length} spritesheet(s) from bucket "${bucket}".`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to load spritesheets from Supabase.';
+      setError(message);
+    } finally {
+      setIsLoadingSpritesheetEntries(false);
+    }
   };
 
-  const onSpriteFileSelected = (event: ChangeEvent<HTMLInputElement>) => {
+  useEffect(() => {
+    void loadSupabaseSpriteSheets();
+    // Run once on mount with the default bucket.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const setAnimationSetsDraft = (nextSets: DirectionalAnimationSets) => {
+    const sanitized = sanitizeDirectionalAnimationSets(nextSets);
+    const safeSets =
+      Object.keys(sanitized).length > 0
+        ? sanitized
+        : sanitizeDirectionalAnimationSets(buildDirectionalAnimationSetsFromLegacyFrames(facingFrames, walkFrames));
+    setAnimationSetsInput(stringifyDirectionalAnimationSets(safeSets));
+  };
+
+  const onSpriteFileSelected = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) {
       return;
     }
-
-    if (uploadedObjectUrlRef.current) {
-      URL.revokeObjectURL(uploadedObjectUrlRef.current);
-      uploadedObjectUrlRef.current = null;
+    event.target.value = '';
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      setSpriteUrl(dataUrl);
+      setStatus(`Loaded and applied sprite file ${file.name}`);
+    } catch {
+      setError(`Unable to read sprite file ${file.name}.`);
     }
-    const objectUrl = URL.createObjectURL(file);
-    uploadedObjectUrlRef.current = objectUrl;
-    setSpriteUrlInput(objectUrl);
-    setStatus(`Loaded sprite file ${file.name}`);
   };
 
   const autoFillFrom4x4 = () => {
-    setFrameCellsWideInput('1');
-    setFrameCellsTallInput('1');
-    setFacingFrames({
+    const nextFacingFrames: Record<Direction, number> = {
       down: 0,
       left: 4,
       right: 8,
       up: 12,
-    });
-    setWalkFrames({
+    };
+    const nextWalkFrames: Record<Direction, number[]> = {
       down: [1, 2, 3],
       left: [5, 6, 7],
       right: [9, 10, 11],
       up: [13, 14, 15],
-    });
+    };
+    setFrameCellsWideInput('1');
+    setFrameCellsTallInput('1');
+    setFacingFrames(nextFacingFrames);
+    setWalkFrames(nextWalkFrames);
+    setAnimationSetsDraft(buildDirectionalAnimationSetsFromLegacyFrames(nextFacingFrames, nextWalkFrames));
+    setDefaultIdleAnimationInput('idle');
+    setDefaultMoveAnimationInput('walk');
+    setSelectedAnimationName('walk');
     setStatus('Applied 4x4 row preset (Down, Left, Right, Up).');
   };
 
-  const assignFrame = () => {
+  const addAnimation = () => {
+    const animationName = newAnimationNameInput.trim();
+    if (!animationName) {
+      setError('Animation name is required.');
+      return;
+    }
+    if (parsedAnimationSets[animationName]) {
+      setError(`Animation "${animationName}" already exists.`);
+      return;
+    }
+    setAnimationSetsDraft({
+      ...parsedAnimationSets,
+      [animationName]: {
+        up: [],
+        down: [],
+        left: [],
+        right: [],
+      },
+    });
+    setSelectedAnimationName(animationName);
+    setNewAnimationNameInput('');
+    setStatus(`Added animation "${animationName}".`);
+  };
+
+  const renameSelectedAnimation = () => {
+    if (!selectedAnimationName) {
+      setError('Select an animation to rename.');
+      return;
+    }
+    const nextName = renameAnimationNameInput.trim();
+    if (!nextName) {
+      setError('New animation name is required.');
+      return;
+    }
+    if (nextName !== selectedAnimationName && parsedAnimationSets[nextName]) {
+      setError(`Animation "${nextName}" already exists.`);
+      return;
+    }
+
+    const currentSet = parsedAnimationSets[selectedAnimationName];
+    if (!currentSet) {
+      setError('Selected animation no longer exists.');
+      return;
+    }
+    const nextSets: DirectionalAnimationSets = {};
+    for (const [name, set] of Object.entries(parsedAnimationSets)) {
+      if (name === selectedAnimationName) {
+        nextSets[nextName] = set;
+      } else {
+        nextSets[name] = set;
+      }
+    }
+    setAnimationSetsDraft(nextSets);
+    setSelectedAnimationName(nextName);
+    if (defaultIdleAnimationInput.trim() === selectedAnimationName) {
+      setDefaultIdleAnimationInput(nextName);
+    }
+    if (defaultMoveAnimationInput.trim() === selectedAnimationName) {
+      setDefaultMoveAnimationInput(nextName);
+    }
+    setStatus(`Renamed animation "${selectedAnimationName}" to "${nextName}".`);
+  };
+
+  const deleteSelectedAnimation = () => {
+    if (!selectedAnimationName) {
+      setError('Select an animation to delete.');
+      return;
+    }
+    const names = Object.keys(parsedAnimationSets);
+    if (names.length <= 1) {
+      setError('At least one animation must remain.');
+      return;
+    }
+
+    const nextSets: DirectionalAnimationSets = {};
+    for (const [name, set] of Object.entries(parsedAnimationSets)) {
+      if (name === selectedAnimationName) {
+        continue;
+      }
+      nextSets[name] = set;
+    }
+    const nextNames = Object.keys(nextSets);
+    const fallbackName = nextNames.includes('walk') ? 'walk' : nextNames[0];
+    setAnimationSetsDraft(nextSets);
+    setSelectedAnimationName(fallbackName ?? '');
+    if (defaultIdleAnimationInput.trim() === selectedAnimationName) {
+      setDefaultIdleAnimationInput(fallbackName ?? 'idle');
+    }
+    if (defaultMoveAnimationInput.trim() === selectedAnimationName) {
+      setDefaultMoveAnimationInput(fallbackName ?? 'walk');
+    }
+    setStatus(`Deleted animation "${selectedAnimationName}".`);
+  };
+
+  const addSelectedFrameToAnimation = () => {
     if (!selectedAtlasRect || atlasMeta.columns <= 0) {
       setError('Select a rectangle on the sheet first.');
+      return;
+    }
+    if (!selectedAnimationName) {
+      setError('Select an animation before adding frames.');
       return;
     }
 
     const frameIndex = selectedAtlasRect.minRow * atlasMeta.columns + selectedAtlasRect.minCol;
     setFrameCellsWideInput(String(selectedAtlasRect.width));
     setFrameCellsTallInput(String(selectedAtlasRect.height));
+    const currentSet = parsedAnimationSets[selectedAnimationName] ?? {};
+    const currentFrames = currentSet[assignDirection] ? [...currentSet[assignDirection]!] : [];
+    if (!currentFrames.includes(frameIndex)) {
+      currentFrames.push(frameIndex);
+    }
+    setAnimationSetsDraft({
+      ...parsedAnimationSets,
+      [selectedAnimationName]: {
+        ...currentSet,
+        [assignDirection]: currentFrames,
+      },
+    });
+    setStatus(
+      `Added frame ${frameIndex} to "${selectedAnimationName}" ${assignDirection} (${selectedAtlasRect.width}x${selectedAtlasRect.height} cells).`,
+    );
+  };
 
-    if (assignMode === 'idle') {
-      setFacingFrames((current) => ({
-        ...current,
-        [assignDirection]: frameIndex,
-      }));
-      setStatus(
-        `Assigned ${assignDirection} idle frame ${frameIndex} (${selectedAtlasRect.width}x${selectedAtlasRect.height} cells).`,
-      );
+  const removeFrameFromAnimation = (frameIndex: number) => {
+    if (!selectedAnimationName) {
       return;
     }
-
-    setWalkFrames((current) => {
-      const next = [...current[assignDirection]];
-      const existingIndex = next.indexOf(frameIndex);
-      if (existingIndex >= 0) {
-        next.splice(existingIndex, 1);
-      } else {
-        next.push(frameIndex);
-        next.sort((a, b) => a - b);
-      }
-      setStatus(
-        `Updated ${assignDirection} walk frames: ${next.length > 0 ? next.join(', ') : 'none'} (${selectedAtlasRect.width}x${selectedAtlasRect.height} cells).`,
-      );
-      return {
-        ...current,
-        [assignDirection]: next,
-      };
+    const currentSet = parsedAnimationSets[selectedAnimationName] ?? {};
+    const currentFrames = currentSet[assignDirection] ? [...currentSet[assignDirection]!] : [];
+    const nextFrames = currentFrames.filter((entry) => entry !== frameIndex);
+    setAnimationSetsDraft({
+      ...parsedAnimationSets,
+      [selectedAnimationName]: {
+        ...currentSet,
+        [assignDirection]: nextFrames,
+      },
     });
+    setStatus(`Removed frame ${frameIndex} from "${selectedAnimationName}" ${assignDirection}.`);
+  };
+
+  const clearDirectionFrames = () => {
+    if (!selectedAnimationName) {
+      return;
+    }
+    const currentSet = parsedAnimationSets[selectedAnimationName] ?? {};
+    setAnimationSetsDraft({
+      ...parsedAnimationSets,
+      [selectedAnimationName]: {
+        ...currentSet,
+        [assignDirection]: [],
+      },
+    });
+    setStatus(`Cleared frames for "${selectedAnimationName}" ${assignDirection}.`);
   };
 
   const saveToProject = async () => {
@@ -333,10 +642,30 @@ export function PlayerSpriteTool() {
     }
     const frameWidth = atlasCellWidth * frameCellsWide;
     const frameHeight = atlasCellHeight * frameCellsTall;
+    const parsedSets = parseDirectionalAnimationSetsInput(animationSetsInput, facingFrames, walkFrames);
+    if (!parsedSets.ok) {
+      setError(parsedSets.error);
+      return;
+    }
+    const defaultIdleAnimation = defaultIdleAnimationInput.trim() || 'idle';
+    const defaultMoveAnimation = defaultMoveAnimationInput.trim() || 'walk';
+    if (!parsedSets.animationSets[defaultIdleAnimation]) {
+      setError(`Default idle animation "${defaultIdleAnimation}" is not defined in animation sets.`);
+      return;
+    }
+    if (!parsedSets.animationSets[defaultMoveAnimation]) {
+      setError(`Default move animation "${defaultMoveAnimation}" is not defined in animation sets.`);
+      return;
+    }
+    const legacyFrames = deriveLegacyFramesFromAnimationSets(
+      parsedSets.animationSets,
+      defaultIdleAnimation,
+      defaultMoveAnimation,
+    );
 
     setIsSaving(true);
     try {
-      const response = await fetch('/api/admin/player-sprite/save', {
+      const result = await apiFetchJson<SavePlayerSpriteResponse>('/api/admin/player-sprite/save', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -352,15 +681,18 @@ export function PlayerSpriteTool() {
             frameCellsTall,
             renderWidthTiles,
             renderHeightTiles,
-            facingFrames,
-            walkFrames,
+            animationSets: parsedSets.animationSets,
+            defaultIdleAnimation,
+            defaultMoveAnimation,
+            facingFrames: legacyFrames.facingFrames,
+            walkFrames: legacyFrames.walkFrames,
           },
         }),
       });
-      const payload = (await response.json()) as SavePlayerSpriteResponse;
-      if (!response.ok || !payload.ok) {
-        throw new Error(payload.error ?? 'Unable to save player sprite config.');
+      if (!result.ok || !result.data) {
+        throw new Error(result.error ?? result.data?.error ?? 'Unable to save player sprite config.');
       }
+      const payload = result.data;
       setStatus(`Saved player sprite config (${payload.filePath ?? 'src/game/world/playerSprite.ts'}).`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to save player sprite config.';
@@ -375,7 +707,7 @@ export function PlayerSpriteTool() {
       <header className="admin-tool__header">
         <div>
           <h2>Player Sprite</h2>
-          <p>Configure the user character sprite sheet and directional idle/walk animation frames.</p>
+          <p>Configure the user character sprite sheet and animation sets.</p>
         </div>
         <div className="admin-tool__status">
           {statusMessage && <span className="status-chip">{statusMessage}</span>}
@@ -386,10 +718,6 @@ export function PlayerSpriteTool() {
       <div className="admin-panel">
         <h3>{spriteLabel}</h3>
         <div className="admin-grid-2">
-          <label>
-            Sprite URL
-            <input value={spriteUrlInput} onChange={(event) => setSpriteUrlInput(event.target.value)} />
-          </label>
           <label>
             Atlas Cell Width
             <input value={frameWidthInput} onChange={(event) => setFrameWidthInput(event.target.value)} />
@@ -419,13 +747,62 @@ export function PlayerSpriteTool() {
             <input value={renderHeightTilesInput} onChange={(event) => setRenderHeightTilesInput(event.target.value)} />
           </label>
         </div>
+        <h4>Supabase Spritesheets</h4>
+        <div className="admin-grid-2">
+          <label>
+            Bucket
+            <input value={spritesheetBucketInput} onChange={(event) => setSpritesheetBucketInput(event.target.value)} />
+          </label>
+          <label>
+            Prefix (Optional)
+            <input value={spritesheetPrefixInput} onChange={(event) => setSpritesheetPrefixInput(event.target.value)} />
+          </label>
+        </div>
         <div className="admin-row">
-          <button type="button" className="secondary" onClick={applySpriteUrl}>
-            Apply Sprite URL
+          <label>
+            Search
+            <input
+              value={spritesheetSearchInput}
+              onChange={(event) => setSpritesheetSearchInput(event.target.value)}
+              placeholder="Search by file name or path"
+            />
+          </label>
+          <button type="button" className="secondary" onClick={loadSupabaseSpriteSheets} disabled={isLoadingSpritesheetEntries}>
+            {isLoadingSpritesheetEntries ? 'Loading...' : 'Reload Bucket'}
           </button>
-          <button type="button" className="secondary" onClick={loadExampleSprite}>
-            Use Example User Sprite
-          </button>
+        </div>
+        <div className="spritesheet-browser">
+          {filteredSpritesheetEntries.length === 0 && (
+            <p className="admin-note">
+              {isLoadingSpritesheetEntries ? 'Loading spritesheets...' : 'No PNG spritesheets found.'}
+            </p>
+          )}
+          {filteredSpritesheetEntries.map((entry) => (
+            <div
+              key={`player-supabase-sheet-${entry.path}`}
+              className={`spritesheet-browser__row ${selectedSpritesheetPath === entry.path ? 'is-selected' : ''}`}
+            >
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setSpriteUrl(entry.publicUrl);
+                  setSelectedSpritesheetPath(entry.path);
+                  setStatus(`Loaded spritesheet "${entry.path}" from Supabase.`);
+                }}
+              >
+                Load
+              </button>
+              <span className="spritesheet-browser__meta" title={entry.path}>
+                {entry.path}
+              </span>
+              <span className="spritesheet-browser__meta">
+                {entry.updatedAt ? new Date(entry.updatedAt).toLocaleDateString() : '-'}
+              </span>
+            </div>
+          ))}
+        </div>
+        <div className="admin-row">
           <button type="button" className="secondary" onClick={autoFillFrom4x4}>
             Auto Fill 4x4 D/L/R/U
           </button>
@@ -436,12 +813,53 @@ export function PlayerSpriteTool() {
         <p className="admin-note">
           Default NPC-friendly size: frame span 1x2 cells and render 1x2 tiles (16x32 world pixels).
         </p>
+        <p className="admin-note">Active player sheet: {spriteUrl ? 'Loaded from file.' : 'No file loaded yet.'}</p>
         <p className="admin-note">
           {atlasMeta.loaded
             ? `Loaded ${atlasMeta.width}x${atlasMeta.height} (${atlasMeta.columns} columns x ${atlasMeta.rows} rows)`
             : atlasMeta.error ?? 'No sprite sheet loaded.'}
         </p>
+        {isPreviewTruncated && (
+          <p className="admin-note">
+            Preview limited to first {previewCellCount} cells (of {atlasCellCount}). Increase atlas cell size for a smaller grid.
+          </p>
+        )}
 
+        <div className="admin-row">
+          <label>
+            Animation
+            <select value={selectedAnimationName} onChange={(event) => setSelectedAnimationName(event.target.value)}>
+              {animationNames.map((name) => (
+                <option key={`player-animation-${name}`} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            New Animation
+            <input
+              value={newAnimationNameInput}
+              onChange={(event) => setNewAnimationNameInput(event.target.value)}
+              placeholder="attack"
+            />
+          </label>
+          <button type="button" className="secondary" onClick={addAnimation}>
+            Add Animation
+          </button>
+        </div>
+        <div className="admin-row">
+          <label>
+            Rename Selected Animation
+            <input value={renameAnimationNameInput} onChange={(event) => setRenameAnimationNameInput(event.target.value)} />
+          </label>
+          <button type="button" className="secondary" onClick={renameSelectedAnimation}>
+            Rename Animation
+          </button>
+          <button type="button" className="secondary" onClick={deleteSelectedAnimation}>
+            Delete Animation
+          </button>
+        </div>
         <div className="admin-row">
           <label>
             Assign Direction
@@ -452,15 +870,11 @@ export function PlayerSpriteTool() {
               <option value="right">Right</option>
             </select>
           </label>
-          <label>
-            Assign Mode
-            <select value={assignMode} onChange={(event) => setAssignMode(event.target.value as 'idle' | 'walk')}>
-              <option value="idle">Idle Frame</option>
-              <option value="walk">Walk Frame Toggle</option>
-            </select>
-          </label>
-          <button type="button" className="secondary" onClick={assignFrame}>
-            Assign Selected Rectangle
+          <button type="button" className="secondary" onClick={addSelectedFrameToAnimation}>
+            Add Selected Frame
+          </button>
+          <button type="button" className="secondary" onClick={clearDirectionFrames}>
+            Clear Direction Frames
           </button>
         </div>
 
@@ -472,15 +886,14 @@ export function PlayerSpriteTool() {
                 gridTemplateColumns: `repeat(${atlasMeta.columns}, ${ATLAS_PREVIEW_SIZE}px)`,
               }}
             >
-              {Array.from({ length: atlasCellCount }, (_, frameIndex) => {
-                const isIdleSelected = facingFrames[assignDirection] === frameIndex;
-                const isWalkSelected = walkFrames[assignDirection].includes(frameIndex);
+              {Array.from({ length: previewCellCount }, (_, frameIndex) => {
+                const isAnimationFrameSelected = selectedAnimationFramesForDirection.includes(frameIndex);
                 return (
                   <button
                     key={`player-frame-${frameIndex}`}
                     type="button"
                     className={`tileset-grid__cell ${
-                      isIdleSelected || isWalkSelected || isAtlasCellInRect(selectedAtlasRect, frameIndex, atlasMeta.columns)
+                      isAnimationFrameSelected || isAtlasCellInRect(selectedAtlasRect, frameIndex, atlasMeta.columns)
                         ? 'is-selected'
                         : ''
                     } ${selectedAtlasStartIndex === frameIndex ? 'is-anchor' : ''}`}
@@ -521,18 +934,40 @@ export function PlayerSpriteTool() {
           )}
         </div>
 
-        <div className="admin-grid-2">
-          {(Object.keys(facingFrames) as Direction[]).map((direction) => (
-            <label key={`player-facing-${direction}`}>
-              {direction} Idle
-              <input value={String(facingFrames[direction])} readOnly />
-            </label>
+        <p className="admin-note">
+          Frames for {selectedAnimationName || '-'} {assignDirection}: [{selectedAnimationFramesForDirection.join(', ')}]
+        </p>
+        <div className="admin-row">
+          {selectedAnimationFramesForDirection.length === 0 && (
+            <span className="admin-note">No frames in this direction yet.</span>
+          )}
+          {selectedAnimationFramesForDirection.map((frame) => (
+            <button
+              key={`player-frame-remove-${selectedAnimationName}-${assignDirection}-${frame}`}
+              type="button"
+              className="secondary"
+              onClick={() => removeFrameFromAnimation(frame)}
+            >
+              Remove {frame}
+            </button>
           ))}
         </div>
-        <p className="admin-note">
-          Walk Frames: up[{walkFrames.up.join(', ')}] down[{walkFrames.down.join(', ')}] left[
-          {walkFrames.left.join(', ')}] right[{walkFrames.right.join(', ')}]
-        </p>
+        <div className="admin-grid-2">
+          <label>
+            Default Idle Animation
+            <input
+              value={defaultIdleAnimationInput}
+              onChange={(event) => setDefaultIdleAnimationInput(event.target.value)}
+            />
+          </label>
+          <label>
+            Default Move Animation
+            <input
+              value={defaultMoveAnimationInput}
+              onChange={(event) => setDefaultMoveAnimationInput(event.target.value)}
+            />
+          </label>
+        </div>
         <p className="admin-note">
           Selected Rectangle: {selectedAtlasRect ? `${selectedAtlasRect.width}x${selectedAtlasRect.height}` : 'none'}
         </p>
@@ -576,6 +1011,21 @@ function clampInt(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.floor(value)));
 }
 
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string' && reader.result.length > 0) {
+        resolve(reader.result);
+        return;
+      }
+      reject(new Error('File read failed.'));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('File read failed.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 function parseInteger(value: string): number | null {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -583,6 +1033,155 @@ function parseInteger(value: string): number | null {
   }
   const parsed = Number.parseInt(trimmed, 10);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+type DirectionalAnimationSets = Partial<Record<string, Partial<Record<Direction, number[]>>>>;
+
+function buildDirectionalAnimationSetsFromLegacyFrames(
+  facingFrames: Record<Direction, number>,
+  walkFrames: Record<Direction, number[]>,
+): DirectionalAnimationSets {
+  return {
+    idle: {
+      up: [facingFrames.up],
+      down: [facingFrames.down],
+      left: [facingFrames.left],
+      right: [facingFrames.right],
+    },
+    walk: {
+      up: [...walkFrames.up],
+      down: [...walkFrames.down],
+      left: [...walkFrames.left],
+      right: [...walkFrames.right],
+    },
+  };
+}
+
+function sanitizeDirectionalAnimationSets(animationSets: DirectionalAnimationSets): DirectionalAnimationSets {
+  const sanitized: DirectionalAnimationSets = {};
+  for (const [name, directions] of Object.entries(animationSets)) {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      continue;
+    }
+    const directionRecord =
+      directions && typeof directions === 'object' && !Array.isArray(directions)
+        ? directions
+        : {};
+    const sanitizedDirections: Partial<Record<Direction, number[]>> = {
+      up: [],
+      down: [],
+      left: [],
+      right: [],
+    };
+    for (const direction of ['up', 'down', 'left', 'right'] as Direction[]) {
+      const rawFrames = directionRecord[direction];
+      const frames = Array.isArray(rawFrames)
+        ? rawFrames
+            .filter((entry): entry is number => typeof entry === 'number' && Number.isFinite(entry))
+            .map((entry) => Math.max(0, Math.floor(entry)))
+        : [];
+      sanitizedDirections[direction] = frames;
+    }
+    sanitized[trimmedName] = sanitizedDirections;
+  }
+
+  return sanitized;
+}
+
+function stringifyDirectionalAnimationSets(animationSets: DirectionalAnimationSets): string {
+  return JSON.stringify(animationSets, null, 2);
+}
+
+function parseDirectionalAnimationSetsInput(
+  rawInput: string,
+  facingFrames: Record<Direction, number>,
+  walkFrames: Record<Direction, number[]>,
+): { ok: true; animationSets: DirectionalAnimationSets } | { ok: false; error: string } {
+  const fallback = sanitizeDirectionalAnimationSets(buildDirectionalAnimationSetsFromLegacyFrames(facingFrames, walkFrames));
+  const trimmed = rawInput.trim();
+  if (!trimmed) {
+    return {
+      ok: true,
+      animationSets: fallback,
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {
+        ok: false,
+        error: 'Animation sets must be an object keyed by animation name.',
+      };
+    }
+    const sanitized = sanitizeDirectionalAnimationSets(parsed as DirectionalAnimationSets);
+    if (Object.keys(sanitized).length === 0) {
+      return {
+        ok: false,
+        error: 'Animation sets must include at least one animation name.',
+      };
+    }
+    return {
+      ok: true,
+      animationSets: sanitized,
+    };
+  } catch {
+    return {
+      ok: false,
+      error: 'Animation sets are invalid. Use valid object JSON syntax.',
+    };
+  }
+}
+
+function deriveLegacyFramesFromAnimationSets(
+  animationSets: DirectionalAnimationSets,
+  defaultIdleAnimation: string,
+  defaultMoveAnimation: string,
+): { facingFrames: Record<Direction, number>; walkFrames: Record<Direction, number[]> } {
+  const idleSet = animationSets[defaultIdleAnimation] ?? {};
+  const moveSet = animationSets[defaultMoveAnimation] ?? {};
+
+  const pickFirstFrame = (frames: number[] | undefined): number => {
+    if (!Array.isArray(frames) || frames.length === 0) {
+      return 0;
+    }
+    const value = frames[0];
+    return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+  };
+
+  const normalizeFrames = (frames: number[] | undefined): number[] => {
+    if (!Array.isArray(frames)) {
+      return [];
+    }
+    return frames
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+      .map((value) => Math.max(0, Math.floor(value)));
+  };
+
+  const facingFrames: Record<Direction, number> = {
+    up: pickFirstFrame(idleSet.up),
+    down: pickFirstFrame(idleSet.down),
+    left: pickFirstFrame(idleSet.left),
+    right: pickFirstFrame(idleSet.right),
+  };
+  const walkFrames: Record<Direction, number[]> = {
+    up: normalizeFrames(moveSet.up),
+    down: normalizeFrames(moveSet.down),
+    left: normalizeFrames(moveSet.left),
+    right: normalizeFrames(moveSet.right),
+  };
+
+  for (const direction of ['up', 'down', 'left', 'right'] as Direction[]) {
+    if (walkFrames[direction].length === 0) {
+      walkFrames[direction] = [facingFrames[direction]];
+    }
+  }
+
+  return {
+    facingFrames,
+    walkFrames,
+  };
 }
 
 function buildAtlasSelectionRect(

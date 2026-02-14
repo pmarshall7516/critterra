@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { GameRuntime, RuntimeSnapshot } from '@/game/engine/runtime';
+import { TILE_SIZE } from '@/shared/constants';
 
 interface GameViewProps {
   mode: 'new' | 'continue';
@@ -18,11 +19,15 @@ interface RuntimeAutomationWindow extends Window {
 }
 
 const DEFAULT_VIEWPORT: ViewportSize = {
-  width: 1280,
-  height: 720,
+  width: TILE_SIZE * 19,
+  height: TILE_SIZE * 15,
 };
 
 const FIXED_STEP_MS = 1000 / 60;
+const TOTAL_SQUAD_SLOTS = 8;
+const STARTING_UNLOCKED_SQUAD_SLOTS = 2;
+
+type SideMenuView = 'root' | 'squad';
 
 export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -34,9 +39,16 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
 
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuView, setMenuView] = useState<SideMenuView>('root');
 
   useEffect(() => {
     menuOpenRef.current = menuOpen;
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen) {
+      setMenuView('root');
+    }
   }, [menuOpen]);
 
   useEffect(() => {
@@ -68,12 +80,17 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
 
     const resizeCanvas = () => {
       const rect = viewport.getBoundingClientRect();
-      const width = Math.max(320, Math.floor(rect.width));
-      const height = Math.max(320, Math.floor(rect.height));
+      const cameraWidth = DEFAULT_VIEWPORT.width;
+      const cameraHeight = DEFAULT_VIEWPORT.height;
+      const viewportScale = Math.min(rect.width / cameraWidth, rect.height / cameraHeight);
+      const displayScale =
+        viewportScale >= 1 ? Math.max(1, Math.floor(viewportScale)) : Math.max(0.5, viewportScale);
 
-      canvas.width = width;
-      canvas.height = height;
-      renderSizeRef.current = { width, height };
+      canvas.width = cameraWidth;
+      canvas.height = cameraHeight;
+      canvas.style.width = `${Math.floor(cameraWidth * displayScale)}px`;
+      canvas.style.height = `${Math.floor(cameraHeight * displayScale)}px`;
+      renderSizeRef.current = { width: cameraWidth, height: cameraHeight };
     };
 
     const renderCurrentFrame = () => {
@@ -215,25 +232,21 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     setSnapshot(runtime.getSnapshot());
   };
 
+  const closeMenu = () => {
+    setMenuOpen(false);
+  };
+
+  const squadSlots = Array.from({ length: TOTAL_SQUAD_SLOTS }, (_, index) => ({
+    id: index,
+    unlocked: index < STARTING_UNLOCKED_SQUAD_SLOTS,
+  }));
+
   return (
     <section className="game-screen">
-      <header className="game-screen__hud">
-        <div>
-          <strong>{snapshot?.playerName ?? 'Player'}</strong>
-          <span className="hud-pill">{snapshot?.mapName ?? 'Loading...'}</span>
-        </div>
-        <div>
-          <span className="hud-pill">{snapshot?.saveStatus ?? 'Saved'}</span>
-          {snapshot?.lastSavedAt && (
-            <span className="hud-pill">{new Date(snapshot.lastSavedAt).toLocaleTimeString()}</span>
-          )}
-        </div>
-      </header>
-
-      {snapshot?.objective && <div className="objective-banner">Objective: {snapshot.objective}</div>}
-
       <div className="game-screen__viewport" ref={viewportRef}>
         <canvas ref={canvasRef} />
+
+        {snapshot?.warpHint && <div className="warp-popup">{snapshot.warpHint}</div>}
 
         {snapshot?.dialogue && (
           <div className="dialogue-box">
@@ -245,26 +258,60 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
           </div>
         )}
 
-        {menuOpen && <div className="side-menu__backdrop" onClick={() => setMenuOpen(false)} />}
+        {menuOpen && <div className="side-menu__backdrop" onClick={closeMenu} />}
 
         <aside className={`side-menu ${menuOpen ? 'is-open' : ''}`}>
-          <h2>Menu</h2>
-          <button type="button" className="primary" onClick={handleManualSave}>
-            Save
-          </button>
-          <button type="button" className="secondary" onClick={() => setMenuOpen(false)}>
-            Resume
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => {
-              setMenuOpen(false);
-              onReturnToTitle();
-            }}
-          >
-            Back To Title
-          </button>
+          {menuView === 'root' ? (
+            <>
+              <h2>Menu</h2>
+              <div className="side-menu__section">
+                <button type="button" className="secondary" disabled>
+                  Collection (Soon)
+                </button>
+                <button type="button" className="secondary" onClick={() => setMenuView('squad')}>
+                  Squad
+                </button>
+                <button type="button" className="secondary" disabled>
+                  Backpack (Soon)
+                </button>
+              </div>
+              <div className="side-menu__actions">
+                <button type="button" className="primary" onClick={handleManualSave}>
+                  Save
+                </button>
+                <button type="button" className="secondary" onClick={closeMenu}>
+                  Resume
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => {
+                    closeMenu();
+                    onReturnToTitle();
+                  }}
+                >
+                  Back To Title
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <h2>Squad</h2>
+              <p className="side-menu__meta">2/8 slots unlocked. More slots unlock later.</p>
+              <div className="squad-grid">
+                {squadSlots.map((slot) => (
+                  <div key={`squad-slot-${slot.id}`} className={`squad-slot ${slot.unlocked ? 'is-unlocked' : 'is-locked'}`}>
+                    {slot.unlocked ? 'Empty' : 'Locked'}
+                  </div>
+                ))}
+              </div>
+              <div className="side-menu__actions">
+                <button type="button" className="secondary" onClick={() => setMenuView('root')}>
+                  Back
+                </button>
+              </div>
+            </>
+          )}
         </aside>
       </div>
     </section>

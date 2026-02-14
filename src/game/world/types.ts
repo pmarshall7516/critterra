@@ -23,6 +23,9 @@ export interface NpcSpriteConfig {
   frameCellsTall?: number;
   renderWidthTiles?: number;
   renderHeightTiles?: number;
+  animationSets?: Partial<Record<string, Partial<Record<Direction, number[]>>>>;
+  defaultIdleAnimation?: string;
+  defaultMoveAnimation?: string;
   facingFrames: Record<Direction, number>;
   walkFrames?: Partial<Record<Direction, number[]>>;
 }
@@ -44,6 +47,8 @@ export interface NpcDefinition {
   dialogueSetFlag?: string;
   battleTeamIds?: string[];
   movement?: NpcMovementDefinition;
+  idleAnimation?: string;
+  moveAnimation?: string;
   sprite?: NpcSpriteConfig;
 }
 
