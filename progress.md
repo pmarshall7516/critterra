@@ -651,3 +651,894 @@ Follow-up suggestions
     - `src/admin/MapEditorTool.tsx`
     - `vite.config.ts` (`sanitizeStorageBucketName` default)
   - Validation: `npm run build` passed.
+- 2026-02-14 NPC sprite library DB update (jacob mapping clone):
+  - Read `npc_libraries.sprite_library` and used `jacob-sprite` as template mapping source.
+  - Added sprite-library entries in DB for:
+    - `boy-1-sprite` -> `boy_1_spritesheet.png`
+    - `boy-2-sprite` -> `boy_2_spritesheet.png`
+    - `girl-1-sprite` -> `girl_1_spritesheet.png`
+    - `girl-2-sprite` -> `girl_2_spritesheet.png`
+    - `hank-sprite` -> `uncle_hank.png`
+  - Kept atlas/animation mapping identical to `jacob-sprite` (verified each new entry matches Jacob config aside from URL).
+- 2026-02-14 critter system foundation implementation (data + player progress + admin tooling):
+  - Added formal critter domain models in:
+    - `src/game/critters/types.ts`
+    - `src/game/critters/baseDatabase.ts`
+    - `src/game/critters/schema.ts`
+  - New model covers:
+    - critter definitions (element, rarity, base stats),
+    - adoption-lottery metadata scaffold (`lotteryPoolId`, `lotteryWeight`, optional story gate),
+    - mission-based level goal scaffold for future progression,
+    - player critter progress (`collection`, unlocked squad slots, squad assignment array).
+  - Save/profile integration:
+    - extended `SaveProfile` with `playerCritterProgress` in `src/game/saves/types.ts`.
+    - updated `src/game/saves/saveManager.ts`:
+      - new saves initialize critter progress defaults,
+      - save version bumped to `3`,
+      - legacy saves are sanitized/migrated by loading default critter progress when missing.
+  - World content integration:
+    - `src/game/content/worldContentStore.ts` now stores typed critter definitions and sanitizes/falls back to base critter DB when server data is missing/invalid.
+  - Runtime integration (`src/game/engine/runtime.ts`):
+    - runtime now hydrates critter database from world content,
+    - runtime tracks sanitized player critter progress from save data,
+    - `RuntimeSnapshot` now includes critter summary data:
+      - unlocked count,
+      - total count,
+      - unlocked squad slots,
+      - squad slot view model,
+      - collection view model.
+    - `render_game_to_text` now includes critter summary block for automation/state validation.
+    - save persistence now writes critter progress back into profile.
+  - In-game UI integration (`src/game/engine/GameView.tsx`):
+    - enabled real `Collection` view in side menu,
+    - squad view now uses real runtime critter/squad data instead of hardcoded 2/8 placeholder,
+    - collection list now displays lock state and level.
+  - Admin tooling:
+    - added new `src/admin/CritterTool.tsx` and wired route in `src/admin/AdminView.tsx`.
+    - Critter tab is now active (not placeholder).
+    - features:
+      - load critter DB from `/api/admin/critters/list`,
+      - draft/create/edit/remove critter definitions,
+      - apply draft locally,
+      - save full critter DB to `/api/admin/critters/save`.
+    - editor fields include stat, rarity/element, lottery metadata, mission tags, and level-goal scaffolding.
+  - Backend hardening (`vite.config.ts`):
+    - added critter parsing/sanitization helpers (`parseCritterLibrary`, etc.),
+    - `/api/content/bootstrap`, `/api/admin/critters/list`, and `/api/admin/critters/save` now use sanitized critter payloads.
+
+Validation
+- `npm run build` passed.
+- Playwright smoke run executed via `scripts/web_game_playwright_client.js` against local dev server.
+  - Screenshot captured: `output/critter-system-smoke/shot-0.png`.
+  - Run reached auth gate (`Sign In`), so gameplay/admin in-session interaction verification remains pending authenticated scripted run.
+
+Follow-up suggestions
+- Add a lightweight player-facing critter assignment action (assign/unassign critter to squad slots) in the side menu.
+- Build combat-domain primitives next:
+  - move definitions,
+  - turn order resolver,
+  - damage resolver using current `baseStats`.
+- Add `player_critter_progress` table only if critter progression should be decoupled from `user_saves` JSON in future.
+- 2026-02-14 critter system v2 migration (numeric IDs + dynamic level table + account-name start flow):
+  - Critter data model refactor (`src/game/critters/types.ts`, `src/game/critters/schema.ts`, `src/game/critters/baseDatabase.ts`):
+    - critter IDs are now numeric dex-style IDs (`id: number`).
+    - removed old critter progression fields (`missionTagHints`, `levelGoals`, `storyGateFlag` path).
+    - added dynamic level requirement table model:
+      - `levels[]` rows keyed by target level,
+      - each row stores `missions[]`, `requiredMissionCount`, per-stat deltas (`hp/attack/defense/speed`), and `abilityUnlockIds`.
+      - mission types now start with `opposing_knockouts` and mission `targetValue`.
+    - added ability section model (`abilities[]`, passive/active kind).
+    - added mission progress key system (`missionProgressKey(level, missionId)`) for per-mission progression tracking.
+  - Base critter seed updated:
+    - `BASE_CRITTER_DATABASE` now starts with one outline critter (`#1 Spriglet`) and empty:
+      - lottery pools,
+      - abilities,
+      - level requirement rows/challenges.
+  - Player progress tracking overhaul:
+    - `PlayerCritterProgress` now stores numeric squad IDs and full collection entries for all known critters.
+    - collection entries store per-mission `missionProgress` records (no legacy mission-tag counters).
+    - sanitizer now:
+      - ensures every critter in DB has a collection entry for each user,
+      - merges mission progress templates when level rows/missions change,
+      - clamps squad usage to unlocked slots and unlocked critters only.
+  - Runtime/save integration (`src/game/engine/runtime.ts`, `src/game/saves/saveManager.ts`):
+    - save version bumped to `4`.
+    - runtime now hydrates and persists new critter progress shape.
+    - runtime summary mission completion count is derived dynamically from mission progress vs mission targets.
+  - Backend critter validation (`vite.config.ts`):
+    - critter payload parser now validates new schema (`lotteryPools`, `abilities`, `levels`, nested missions).
+    - strict duplicate-ID rejection on `/api/admin/critters/save`.
+    - list/bootstrap still sanitize existing data safely.
+  - Admin Critter tool rewrite (`src/admin/CritterTool.tsx`):
+    - numeric critter ID editor with duplicate ID blocking.
+    - level table editor with:
+      - add/remove levels,
+      - add/remove missions per level,
+      - `requiredMissionCount` guard,
+      - per-level stat delta columns,
+      - per-level ability unlock ID mapping.
+    - ability section editor (for passive now, active-ready structure).
+    - lottery pools moved to simple comma-list input; empty by default.
+  - Player name/new game flow update:
+    - removed manual naming step from app flow (`src/App.tsx` no longer routes through `NewGameSetup`).
+    - new game now starts with signed-in account `displayName` as player name.
+    - title actions now align with requested UX:
+      - `Start` (no save)
+      - `Continue` (has save)
+      - `Restart` (password-confirmed reset)
+    - title copy/button text updated in `src/ui/TitleScreen.tsx`.
+
+Validation
+- `npm run build` passed.
+- Playwright smoke checks:
+  - game route screenshot: `output/critter-system-v2-game-smoke/shot-0.png`
+  - admin critter route screenshot: `output/critter-system-v2-admin-smoke/shot-0.png`
+  - admin errors log: `output/critter-system-v2-admin-smoke/errors-0.json` (`401 Unauthorized` expected due unauthenticated run).
+- 2026-02-14 live critter DB normalization (post-schema migration):
+  - Inspected `critter_libraries` and confirmed one row for active user still used legacy critter shape (`id` string + `adoption/progression`).
+  - Updated row to new schema baseline with one critter:
+    - `id: 1`
+    - empty `lotteryPools`
+    - empty `levels`
+    - empty `abilities`
+  - Resulting DB payload now matches v2 critter model used by admin/runtime.
+- 2026-02-14 player-name binding follow-up:
+  - Updated continue flow to pass authenticated `displayName` into runtime startup (`src/App.tsx`).
+  - Runtime now enforces provided account display name onto loaded save profile and persists immediately when it differs (`src/game/engine/runtime.ts`).
+  - Validation: `npm run build` passed.
+- 2026-02-14 critter schema cleanup (removed lottery pools from critter data/forms):
+  - Removed `lotteryPools` from critter model and sanitization:
+    - `src/game/critters/types.ts`
+    - `src/game/critters/schema.ts`
+    - `src/game/critters/baseDatabase.ts`
+  - Removed all lottery-pool UI/editing from Critter Admin tool:
+    - deleted `lotteryPoolsInput` draft field and related form controls in `src/admin/CritterTool.tsx`.
+  - Removed lottery-pool parsing from backend critter sanitizer in `vite.config.ts` so saved critter payloads only include intrinsic critter attributes and progression/ability structures.
+  - Live DB normalization:
+    - removed legacy `lotteryPools` key from `critter_libraries.critters` row(s) in database.
+  - Validation: `npm run build` passed.
+- 2026-02-14 critter tracking hardening (effective stats + non-lossy save handling):
+  - Added explicit derived tracking on each player collection critter entry:
+    - `statBonus`
+    - `effectiveStats` (base + unlocked level deltas, clamped >= 1)
+    - `unlockedAbilityIds`
+  - Added `computeCritterDerivedProgress(...)` in `src/game/critters/schema.ts` and used it during critter progress sanitization/migration.
+  - Runtime critter snapshot now includes per-critter:
+    - base stats,
+    - stat bonus,
+    - effective stats,
+    - unlocked ability IDs,
+    - per-level mission completion progress summary.
+  - `render_game_to_text` now includes full critter collection tracking payload (not only squad summary).
+  - Save schema version bumped to `5` in runtime/save creation for migration persistence.
+  - Fixed a data-loss edge case in `loadSave()`:
+    - save manager now preserves raw `playerCritterProgress` payload,
+    - runtime performs final sanitization against hydrated DB critter catalog (prevents dropping critters not in local fallback base DB).
+  - Validation: `npm run build` passed.
+- 2026-02-14 critter editor level UX update:
+  - Critter admin `New Critter` now starts with one blank `Level 1` block by default.
+  - Removed editable `Target Level` field from level rows in `src/admin/CritterTool.tsx`.
+  - Level row headers now display as `Level X` based on row position/order.
+  - Kept level row internals unchanged per request:
+    - missions,
+    - missions required count,
+    - stat delta fields,
+    - ability unlock IDs.
+  - Updated level semantics in core schema/runtime:
+    - row `Level N` now means requirements for advancing from `N` to `N+1`.
+    - stat deltas/ability unlocks are applied once the critter reaches the next level (rows with `N < currentLevel`).
+    - max configured level is now derived as `max(row.level + 1)`.
+  - Backend critter parser now accepts level rows starting at `1` (was previously minimum `2`).
+  - Validation: `npm run build` passed.
+
+## 2026-02-14 (Tileset + Critter Sprite Buckets, Collection UI Overhaul)
+- Implemented bucket-backed asset browsing for tilesets in `MapEditorTool`:
+  - Added default tileset bucket support (`tilesets`) with bucket/prefix/search controls.
+  - Added Supabase tileset browser list and direct `Load` into active tileset URL state.
+  - Reused existing `/api/admin/spritesheets/list` endpoint (PNG listing) for tileset assets.
+- Implemented bucket-backed critter sprite selection in `CritterTool`:
+  - Added critter `spriteUrl` support in editor draft and persisted critter payload.
+  - Added default `critter-sprites` bucket browser (bucket/prefix/search/reload/select).
+  - Critter rows now indicate whether a sprite is linked.
+- Extended critter schema/runtime/backend parsing to store sprite URL safely:
+  - `src/game/critters/types.ts`: `CritterDefinition.spriteUrl`.
+  - `src/game/critters/schema.ts`: sanitize + backward compatibility for legacy `sprite.url` payloads.
+  - `vite.config.ts`: server-side critter parsing now includes sanitized `spriteUrl`.
+  - `src/game/critters/baseDatabase.ts`: base entry includes blank `spriteUrl`.
+- Overhauled in-game collection view UI (neon-tokyo style pass for collection page only):
+  - Added search by name/ID and sort toggle (ID/Name).
+  - Added 4-column scrollable card grid (responsive to 2/1 columns on smaller screens).
+  - Card layout now shows ID+name, sprite preview, locked/unlocked state, stats, and mission progress.
+  - Locked cards render greyed-out; unlocked cards use element accent color.
+  - Added active mission requirement rendering from runtime data (unlock/next-level mission block).
+- Runtime snapshot improvements for collection cards:
+  - Collection entries now include `spriteUrl` and per-mission progress (`currentValue`, `targetValue`, completion).
+  - Added `activeRequirement` object for the currently relevant progression step.
+
+Validation
+- `npm run build` passes after all changes.
+- Playwright smoke run completed (`output/critter-collection-overhaul-2/shot-0.png`) but app is still auth-gated at Sign In in automation, so collection page could not be visually exercised in this run.
+
+Follow-up suggestion
+- Add a deterministic automation test account/login step (or bypass flag for local dev) so Playwright can reach in-game menu/collection and capture post-login gameplay screenshots.
+- 2026-02-14 UI pass: replaced yellow/large button system with tighter neon-retro styling.
+  - Updated global button sizing (smaller padding/font) and added neon cyan/magenta glow states.
+  - Updated `.admin-screen__back` to match neon secondary styling (removed yellow gradient).
+  - Build validation passed after button style refactor.
+- 2026-02-14 neon-retro full-system pass:
+  - Tightened buttons further (slimmer, uppercase micro labels, harder cyan/magenta glow states).
+  - Applied unified neon visual system across title/auth modals, game HUD/menus/dialogue overlays, and admin shell/panels/forms/lists/map-grid surfaces.
+  - Converted remaining warm/yellow accents (including dialogue/map-anchor highlights) to cyan/magenta neon palette.
+  - Added global input/select/textarea focus glow treatment for consistency.
+  - Build validation passed; screenshot captured at `output/neon-full-system-pass/shot-0.png`.
+- 2026-02-14 collection layout adjustment:
+  - Collection panel now spans full viewport width (`100vw`).
+  - Collection cards shortened (reduced min-height and sprite area).
+  - Added placeholder blank cards so collection always renders at least 4 rows x 4 columns (16 tiles), and always row-aligned in groups of 4.
+  - Build validation passed.
+- 2026-02-14 collection element logo overlay:
+  - Added automatic element logo rendering on collection cards (top-left).
+  - Logo URL is derived from Supabase public bucket root from critter sprite URLs and resolves to `<element>-element.png`.
+  - Locked cards render element logos greyed out.
+  - Build validation passed.
+- 2026-02-14 collection sizing/header update:
+  - Collection grid now uses 3 columns.
+  - Minimum always-filled collection area reduced to 3 rows (9 tiles), still row-aligned with blanks.
+  - Card header redesigned and enlarged to show element logo + critter ID + name prominently.
+  - Placeholder cards now use the same header structure.
+  - Build validation passed.
+
+## 2026-02-14 (Encounter Tables + Map Encounter Groups + Map Tool UX)
+- Added encounter data model and sanitization primitives:
+  - `src/game/encounters/types.ts`
+  - `src/game/encounters/schema.ts`
+- Extended world map schema to persist encounter groups on maps:
+  - `WorldMapInput.encounterGroups?`
+  - `WorldMap.encounterGroups`
+  - `createMap(...)` now sanitizes `encounterGroups` per map dimensions.
+- Extended map editor model/serialization for encounter groups:
+  - `EditableMap.encounterGroups`
+  - JSON import/export + TS export include `encounterGroups`.
+- Added backend encounter library persistence in `vite.config.ts`:
+  - new table `encounter_libraries` (`owner_user_id`, `encounter_tables`, `updated_at`)
+  - new endpoints:
+    - `GET /api/admin/encounters/list`
+    - `POST /api/admin/encounters/save`
+  - bootstrap now returns `encounterTables` in `/api/content/bootstrap`.
+  - save-time validation enforces encounter table uniqueness and total weight `=== 1.0`.
+  - auto-seeding on first load: `starter-critter` table with Buddo (if present) else first critter at `weight: 1.0`.
+- Added new Encounters admin tool:
+  - `src/admin/EncounterTool.tsx`
+  - full CRUD for encounter pools/tables.
+  - critter search by name or id.
+  - duplicate critter prevention per pool.
+  - default add weight `0.00`.
+  - save guard requiring each table weights sum to exactly `1.0`.
+- Admin navigation updates:
+  - `Encounters` moved from placeholder to active route in `src/admin/AdminView.tsx`.
+- Map editor encounter-group authoring added (`src/admin/MapEditorTool.tsx`):
+  - Encounter Tools panel with:
+    - group select/new/remove,
+    - `Set Encounter` apply button,
+    - walk/fish encounter pool selectors (default None),
+    - walk/fish frequency sliders (%),
+    - non-empty tile selection workflow,
+    - manual `Add Tile Index` (X/Y),
+    - selected tile list and map-badge overlays.
+  - map cell overlays/badges for encounter assignments.
+- Runtime encounter logic added (`src/game/engine/runtime.ts`):
+  - loads/sanitizes encounter tables from hydrated world content.
+  - on completed walk step, checks map encounter group at player tile.
+  - applies walk frequency chance and weighted critter sampling.
+  - emits encounter message (`Encounter! <CritterName>`) and stores `lastEncounter` snapshot/text-state metadata.
+- Map tool UX changes in `src/admin/MapEditorTool.tsx`:
+  - grouped tool layout by functionality (selection/paint, tile edits, stamp orientation, NPC tools).
+  - added persistent `Select` tool for non-destructive cell selection.
+  - rotate/mirror tools are now active paint tools that transform an occupied clicked tile.
+  - tool toggles now persist until explicitly toggled off (clicking selected tool returns to `Select`).
+  - removed auto tool switching on unrelated actions (tile selection, tile generation, NPC template save, etc.).
+
+Validation
+- `npm run build` passed.
+- Playwright smoke run executed:
+  - command: `node scripts/web_game_playwright_client.js --url http://127.0.0.1:4176/admin.html --iterations 1 --pause-ms 250 --click 120,120 --screenshot-dir output/encounter-admin-map-smoke`
+  - screenshot: `output/encounter-admin-map-smoke/shot-0.png`
+  - errors log: `output/encounter-admin-map-smoke/errors-0.json` (`401 Unauthorized` expected because session was unauthenticated).
+
+Follow-up suggestions
+- Run an authenticated admin Playwright pass to visually verify Encounter Tool + map encounter-group panel interactions end-to-end.
+- Add a quick in-game debug panel or scripted route for forced tile stepping to validate encounter frequency/weight behavior interactively.
+
+## 2026-02-16 (Critter Ascension + Critter Tool UI cleanup)
+- Added Ascension mission support through critter authoring and runtime display/evaluation.
+- Critter mission model updates:
+  - `src/game/critters/types.ts`: mission types now include `ascension`, with optional `ascendsFromCritterId`.
+  - `src/game/critters/schema.ts`: mission sanitizer now preserves `ascendsFromCritterId` for ascension missions.
+  - `vite.config.ts` parser now accepts/saves `ascension` mission type and `ascendsFromCritterId`.
+- Runtime collection + mission logic updates:
+  - `src/game/engine/runtime.ts`: mission snapshots now include `ascendsFromCritterId` + source name.
+  - Added mission current-value resolver so ascension missions evaluate from the source critter's current level.
+  - Completed mission counting now uses the resolved mission current value.
+  - `src/game/engine/GameView.tsx`: collection mission labels now format ascension requirements as `Ascension: <source> Lv.<required>`.
+- Refactored `src/admin/CritterTool.tsx`:
+  - Added ascension mission authoring fields (`Type=Ascension`, `Ascends From Critter`, required level).
+  - Added draft validation for ascension links (required source critter, no self-reference, known source ID).
+  - Removed top-level `Remove` button from database toolbar.
+  - Added compact critter database cards with tighter text and 2x2 stat display (HP/ATK/DEF/SPD).
+  - Added per-critter `Remove` -> `Undo` toggle with pending-delete behavior.
+  - Save now persists only non-pending critters; pending removals are committed only on save.
+  - Reorganized editor UI into grouped sections (Basic Info, Base Stats, Collection Sprite, Abilities, Level Requirements).
+- Styling updates in `src/styles.css`:
+  - New critter admin layout sizing (`admin-layout--critter-tool`) and compact list/card styles.
+  - Added grouped editor styling and mission-row layout.
+  - Extended shared admin input styles to include `textarea`.
+
+Validation
+- `npm run build` passed.
+- Playwright smoke run against `/admin.html`:
+  - Command: `node scripts/web_game_playwright_client.js --url http://127.0.0.1:4176/admin.html --click 80,80 --iterations 2 --pause-ms 250 --screenshot-dir output/critter-ascension-admin`
+  - Screenshot captured: `output/critter-ascension-admin/shot-0.png`
+  - Console errors file: `output/critter-ascension-admin/errors-0.json`
+  - Observed expected unauthenticated admin 401 resource error while signed out.
+
+Follow-up suggestions
+- Add an authenticated Playwright admin flow (sign in first) to verify the new critter list/editor interactions visually.
+- Add explicit unit tests for ascension mission resolution to prevent regressions in completion logic.
+
+## 2026-02-16 (Mission filters + unlock/level-up collection flow)
+- Expanded critter mission model and parsing to support knockout filters and unlock-at-level-1 progression:
+  - `src/game/critters/types.ts`:
+    - `CritterLevelMissionRequirement` now supports `knockoutElements` and `knockoutCritterIds`.
+    - Bumped `PLAYER_CRITTER_PROGRESS_VERSION` to 4.
+  - `src/game/critters/schema.ts`:
+    - Added sanitize support for knockout mission filters.
+    - Enforced mutually-exclusive filter behavior at sanitize-time (`knockoutCritterIds` takes priority if both are present).
+    - Updated progression semantics to support locked level `0`:
+      - default collection entries now start at level `0` while locked,
+      - player progress sanitize now clamps locked critters to level `0`,
+      - derived stat calculation now supports level `0`.
+    - Updated max configured level helper to align with level-row-as-target-level semantics.
+  - `vite.config.ts` critter mission parser now accepts and normalizes:
+    - `knockoutElements: string[]`
+    - `knockoutCritterIds: number[]`
+
+- Refined Critter Admin mission editor UX in `src/admin/CritterTool.tsx`:
+  - Renamed mission type label from `Opposing Critter Knockouts` to `Knock-out Critters`.
+  - Dynamic mission value labels:
+    - knockout mission uses `Amount`,
+    - ascension mission uses `Level` + required `Critter`.
+  - Added knockout mission filter controls:
+    - `Filter`: Any Critter / Element(s) / Critter(s),
+    - multi-select inputs for elements or critters,
+    - mutual exclusivity enforced in draft validation.
+  - Added mission draft serialization/deserialization for new filter fields.
+
+- Added in-game mission progression + unlock/level-up actions in `src/game/engine/runtime.ts`:
+  - Added `tryAdvanceCritter(critterId)` runtime action:
+    - unlocks locked critter (level 0 -> 1) when active requirement is complete,
+    - levels unlocked critter (N -> N+1) when active requirement is complete,
+    - recomputes stat bonuses/effective stats/unlocked abilities,
+    - marks save dirty and emits user-facing message.
+  - Added knockout progress tracking pipeline:
+    - `recordOpposingKnockoutProgress(opposingCritterId)` increments mission progress keys for active knockout missions only,
+    - supports `Any`, `Element(s)`, and `Critter(s)` mission filters,
+    - keeps mission progress independent per mission key (`L<level>:M<id>`).
+  - Hooked knockout progress tracking into encounter trigger flow (temporary combat-less progression path).
+  - Added 5-second readiness notices:
+    - `<Critter> can be Unlocked!` for level 0 -> 1 readiness,
+    - `<Critter> can Level Up!` for standard progression readiness.
+
+- Updated collection snapshot payload in runtime:
+  - each critter now includes:
+    - `level` (0 if locked),
+    - `maxLevel`,
+    - `canAdvance`,
+    - `advanceActionLabel` (`Unlock`/`Level Up`),
+    - full ability metadata with unlock state,
+    - mission filter metadata (`knockoutElements`, `knockoutCritterIds`, `knockoutCritterNames`).
+
+- Updated Collection UI in `src/game/engine/GameView.tsx`:
+  - mission labels:
+    - `Opposing Knockouts (Bloom, Ember)` / `Opposing Knockouts (Buddo)`
+    - `Ascends from <Critter> at Level <Level>`
+  - added per-critter green action button (`Unlock` / `Level Up`) when requirements are complete.
+  - stats box now displays total stats by default; on hover for unlocked critters shows `<base> +/-<delta>`.
+  - added `Abilities` box between `Stats` and `Missions` when abilities exist.
+  - added top-right level path indicator `X/Y` where `X` is current level (0 locked) and `Y` is total max configured level.
+
+- Collection/Critter styling updates in `src/styles.css`:
+  - element logo sizing aligned with placeholder circle size,
+  - removed oversized element-logo scaling,
+  - removed boxed sprite frame container styling,
+  - tightened stats/missions box density,
+  - added styles for ability box and green advance button,
+  - improved mission editor row alignment for new multi-select controls.
+
+Validation
+- `npm run build` passed.
+- Playwright smoke runs:
+  - Game route: `output/critter-missions-game-smoke/shot-0.png`, `shot-1.png`
+  - Admin route: `output/critter-missions-admin-smoke/shot-0.png`
+- Admin screenshot still shows expected signed-out 401 gate (`output/critter-missions-admin-smoke/errors-0.json`).
+- Game route screenshot currently lands on sign-in screen in this environment, so signed-in collection interaction validation remains pending.
+
+## 2026-02-16 (Global catalog refactor + admin role)
+- Refactored backend data ownership so game content is global (shared across all players) while save/progress remains per-user.
+
+### Auth / Roles
+- Added `is_admin` support in auth/user model:
+  - DB schema: `app_users.is_admin BOOLEAN NOT NULL DEFAULT FALSE`.
+  - Added `ALTER TABLE ... ADD COLUMN IF NOT EXISTS is_admin` migration-safe step.
+  - Signup now always creates users with `is_admin = FALSE` by default.
+  - Login/session responses now include `user.isAdmin`.
+- Frontend auth type updated:
+  - `src/shared/authStorage.ts` `AuthUser` now includes `isAdmin: boolean`.
+- Admin UI access gate updated:
+  - `src/admin/AdminView.tsx` now requires signed-in session with `isAdmin === true`.
+  - Blocked state text updated to explicit admin-access requirement.
+
+### Global Catalog Tables
+- Added global catalog tables in API schema setup (`vite.config.ts`):
+  - `game_catalog_state`
+  - `game_maps`
+  - `game_tile_libraries`
+  - `game_npc_libraries`
+  - `game_player_sprite_configs`
+  - `game_critter_catalog` (row-per-critter, keyed by `name`, unique `critter_id`)
+  - `game_encounter_catalog` (row-per-encounter table, keyed by `table_id`)
+- Legacy per-user content tables were preserved for compatibility/backfill (not dropped yet).
+
+### Backfill / Migration Behavior
+- Added `ensureGlobalCatalogBaseline()`:
+  - Ensures schema exists.
+  - Backfills empty global catalogs from existing per-user tables (latest data) once.
+  - Seeds spawn map only when global map catalog is empty.
+  - Writes global baseline version state.
+- Critter backfill dedupes by both `name` and `id`.
+- Encounter backfill dedupes by table id.
+
+### API Read/Write Cutover
+- `/api/content/bootstrap` now reads from global catalog tables (shared content).
+- Admin endpoints now require admin auth (`requireAdminAuth`) and read/write global tables:
+  - maps, tiles, npc libraries, player sprite config, critters, encounters.
+- Added helper methods in API plugin for global catalog IO:
+  - `readGlobalCritterCatalog` / `writeGlobalCritterCatalog`
+  - `readGlobalEncounterCatalog` / `writeGlobalEncounterCatalog`
+- Critter admin save now enforces unique IDs and unique names (`strictUniqueNames`).
+
+Validation
+- `npm run build` passed.
+- Playwright smoke:
+  - game: `output/global-catalog-game-smoke/shot-0.png`, `shot-1.png`
+  - admin: `output/global-catalog-admin-smoke/shot-0.png`
+  - admin expected 401 while signed out: `output/global-catalog-admin-smoke/errors-0.json`
+- Verified admin route now displays explicit admin access requirement in signed-out/unauthorized state.
+
+Follow-up suggestions
+- Add a small owner-only SQL admin bootstrap script (or API tool) to set one account `is_admin = true` quickly after signup.
+- After production verification, remove legacy per-user catalog tables and migration fallback logic.
+
+## 2026-02-16 (Legacy table cleanup + route verification)
+- Completed global-catalog migration hardening in `vite.config.ts`:
+  - Added one-time `migrateLegacyCatalogData(...)` that backfills global tables from legacy tables only when needed.
+  - Added `dropLegacyCatalogTables(...)` and now drops:
+    - `world_maps`
+    - `user_world_state`
+    - `tile_libraries`
+    - `npc_libraries`
+    - `player_sprite_configs`
+    - `critter_libraries`
+    - `encounter_libraries`
+  - `ensureSchema()` now runs migration + legacy table drop in a transaction before setting schema ready.
+- Removed legacy reads from `ensureGlobalCatalogBaseline()`.
+  - Baseline now only ensures global defaults (`game_maps`, `game_catalog_state`, singleton rows for tile/npc/player sprite catalogs).
+- Fixed remaining old admin response label:
+  - tiles save fallback now reports `database:game_tile_libraries` (removed `database:tile_libraries`).
+
+Verification
+- `npm run build` passed.
+- Code-level SQL target audit confirms:
+  - game/admin runtime reads and writes target `game_*` catalog tables.
+  - legacy table names appear only inside one-time migration reads.
+- User confirmed old tables are already gone in DB.
+
+## 2026-02-16 (Autosave progression + squad picker + card info button)
+- Implemented immediate autosave for player progression changes in runtime:
+  - Added `markProgressDirty()` in `src/game/engine/runtime.ts` to mark dirty + persist immediately.
+  - Progress events now call immediate save:
+    - critter unlock/level up (`tryAdvanceCritter`),
+    - story/dialogue flag completion (`advanceDialogue` setFlag),
+    - mission progress increments (`recordOpposingKnockoutProgress`).
+- Added squad assignment runtime API:
+  - `assignCritterToSquadSlot(slotIndex, critterId)` in `src/game/engine/runtime.ts`.
+  - Enforces slot bounds/unlocked/empty and critter unlocked checks.
+  - Prevents duplicate squad entries by removing an existing placement before assigning.
+  - Triggers immediate persistence and toast message on success.
+
+- Added Squad customization UI in `src/game/engine/GameView.tsx`:
+  - Squad view now supports selecting an empty unlocked slot to open a left-side picker popup.
+  - Popup includes:
+    - top-row search input (`name`/`ID` filtering),
+    - `X` close button,
+    - unlocked critter cards rendered with the same card component as collection.
+  - Clicking a critter card assigns it to the selected slot and updates snapshot (persist handled in runtime).
+  - Filled squad slots now render full critter cards (not just text labels).
+
+- Refactored collection/squad cards to shared card renderer in `GameView`:
+  - Added `CritterCard` component used by Collection, Squad slots, and Squad popup.
+  - Removed hover-based stat breakdown behavior.
+  - Added top-right `i` circle toggle button to switch stats between:
+    - total stat view,
+    - `<base>+<delta>` breakdown view.
+  - Moved level path display to under sprite and above Stats (`X/Y`).
+
+- Updated styling in `src/styles.css` for:
+  - squad panel layout + left popup,
+  - squad slot selected/empty states,
+  - info toggle button,
+  - inline level-path position,
+  - selectable card state,
+  - responsive squad/popup grid behavior.
+
+Validation
+- `npm run build` passed.
+- Playwright smoke run executed:
+  - `output/squad-autosave-smoke/shot-0.png`
+  - `output/squad-autosave-smoke/shot-1.png`
+- Smoke environment remained on sign-in screen, so authenticated in-game squad/collection interaction testing is still pending.
+- Updated critter level display in game cards (collection + squad + squad picker):
+  - Replaced plain `X/Y` text with a pill-shaped progress bar labeled `Level X/Y`.
+  - Fill amount now reflects current level progress toward max level.
+  - Fill color behavior:
+    - blue while below max,
+    - dark blood red at max level.
+- Files:
+  - `src/game/engine/GameView.tsx`
+  - `src/styles.css`
+- Validation: `npm run build` passed.
+- Fixed critter level pill rendering issue:
+  - removed duplicate bar render and kept only the bar under the sprite.
+  - moved level fill CSS variables directly onto the progress bar element (instead of inheriting from card).
+  - switched level fill colors to opaque values so max-level and in-progress states read as fully filled, not outline-only.
+- Validation: `npm run build` passed.
+- Squad UX update:
+  - Left-click any unlocked squad slot (empty or occupied) now opens the critter picker popup.
+  - Right-click an occupied unlocked slot now removes that critter from squad.
+  - Unlocked squad slot hover now shows a stronger green glow.
+  - In picker popup, critters already in squad are greyed out and unclickable.
+- Runtime:
+  - Added `clearSquadSlot(slotIndex)` in `src/game/engine/runtime.ts` with immediate persistence.
+  - `assignCritterToSquadSlot(...)` now rejects selecting critters that are already in squad.
+- Validation: `npm run build` passed.
+
+## 2026-02-16
+- Save profile schema refactor in progress completed for runtime compatibility:
+  - Added structured `progressTracking` on save data with separate `mainStory` and `sideStory` sections.
+  - Added migration support in `saveManager` to map legacy top-level `flags` into `progressTracking.mainStory.flags`.
+  - Bumped save version to `6` and updated runtime persistence/migration checks accordingly.
+- Updated top-left transient location/message popup rendering in `GameRuntime.render(...)` so the background box width now auto-sizes to the displayed text length (instead of fixed width).
+- Validation: `npm run build` passed.
+
+## 2026-02-16 (Encounter selection scope + new-group draft fix + responsive scaling pass)
+- Map editor encounter-selection flow updated in `src/admin/MapEditorTool.tsx`:
+  - Added a dedicated tool mode: `encounter-select`.
+  - Encounter cell selection/removal is now handled only when `encounter-select` is active.
+  - The regular paint `Select` tool no longer edits encounter tile selection.
+  - Encounter panel `Select Cells` now toggles `encounter-select`.
+- Fixed "New Encounter Group gets stuck" behavior:
+  - Adjusted encounter-group auto-selection effect to preserve explicit draft mode (`selectedEncounterGroupId === ''`).
+  - `New Encounter Group` now enters draft mode cleanly and keeps it active.
+  - Encounter group dropdown selecting `Draft New Group` now calls draft reset behavior.
+- Encounter UX refinement:
+  - Entering draft mode now auto-switches tool to `encounter-select`.
+  - Encounter selection helper copy updated to reference `Encounter Tools > Select Cells`.
+
+- Responsive layout cleanup in `src/styles.css` for game/admin scaling:
+  - Collection grid now uses adaptive `auto-fit` columns instead of fixed 4-column layout.
+  - Collection cards now enforce overflow containment and `min-width: 0` behavior to prevent content spill.
+  - Mission/ability row text now truncates safely to avoid stat/label overflow outside cards.
+  - Admin layouts switched to more flexible minmax sizing and collapse to single-column at <=1280px.
+  - Admin map workspace + 2-column form grids now use adaptive sizing for smaller windows.
+  - Collection side menu padding now scales via `clamp(...)`.
+
+Validation
+- `npm run build` passed.
+- Playwright smoke against `/admin.html` executed (`output/encounter-ui-responsive-admin/shot-0.png`) but remained blocked at session validation due unauthorized state (`errors-0.json` shows 401), so authenticated admin/game interaction validation is still pending in this environment.
+
+Follow-up suggestion
+- Re-run Playwright checks while signed in (game + admin) to visually verify:
+  - encounter draft flow end-to-end,
+  - collection card spacing on small-window breakpoints,
+  - admin panel behavior around 1280px and below.
+
+## 2026-02-16 (Collection grid adaptive columns + row-height behavior)
+- Updated collection grid behavior in `src/game/engine/GameView.tsx` and `src/styles.css`.
+- Collection cards are now rendered as a direct filtered list (removed padding/placeholder card alignment logic).
+- Grid columns now adapt by window width while defaulting to 4 columns:
+  - default: 4 columns
+  - <= 1400px: 3 columns
+  - <= 1040px: 2 columns
+  - <= 680px: 1 column
+- Row height behavior now follows CSS grid auto-row sizing with card stretch:
+  - each row expands to match the tallest card in that row.
+- Validation: `npm run build` passed.
+
+## 2026-02-16 (Collection card proportions + details panel widths)
+- Updated collection-page card sizing in `src/styles.css` to be narrower and taller by default:
+  - Added scoped rule for `.collection-grid .collection-card` with `width: min(100%, 220px)` and `min-height: 23rem`.
+- Adjusted collection-page detail panel sizing to sit just wider than the progress bar:
+  - `.collection-grid .collection-card__level-progress` set to `width: min(78%, 170px)`.
+  - `.collection-grid .collection-card__stats`, `.collection-card__missions`, `.collection-card__abilities` set to `width: min(84%, 186px)` and centered.
+- Validation: `npm run build` passed.
+
+## 2026-02-16 (Collection card internal scaling + tighter content organization)
+- Reworked collection-card internals in `src/styles.css` with collection-scoped container sizing (`container-type: inline-size`) so content scales with card size.
+- Top section improvements:
+  - Header spacing/min-height scales with card width.
+  - ID/name typography scales up; name supports two-line clamp for longer names.
+  - Element icon and info button scale with card size.
+- Middle section improvements:
+  - Sprite and fallback box now scale with card/container size (`clamp(..., cqw, ...)`).
+  - Progress bar width/height and label font now scale with card/container size.
+- Bottom section improvements:
+  - Stats/Missions/Abilities boxes remain slightly wider than the progress bar and centered.
+  - Tightened inner spacing (heading margins, list gaps, mission row padding, summary spacing) so panels hug content more closely.
+- Validation: `npm run build` passed.
+
+## 2026-02-16
+- Implemented numeric layer-ID ordering across runtime, map parser, admin editor, and map save pipeline:
+  - Layer IDs now normalize to positive integers (Base defaults to `1`).
+  - Layer rendering/composition order now follows ID order (higher ID renders above lower ID).
+  - Admin map layer controls now use numeric IDs and keep layers sorted by ID.
+- Added per-tile actor Y-sort control for custom tiles:
+  - New tile definition field: `ySortWithActors?: boolean`.
+  - Admin saved paint tiles now include a `Y-Sort With Actors` toggle and persist this metadata.
+  - Server-side custom tile generation and runtime saved-tile hydration now preserve this metadata.
+- Updated runtime overhead sorting behavior:
+  - Default behavior still supports overhead rendering on higher layers.
+  - Added flat-ground keyword fallback (e.g. grass/path/floor/sand/water) so tall-grass style tiles do not automatically occlude the player when no explicit override is set.
+- Build/test validation:
+  - `npm run build` passes.
+  - Ran Playwright client capture to `output/layer-order-check`.
+  - Gameplay traversal validation was blocked by auth-gated start screen (automation landed on Sign In screen, so in-world grass overlap could not be directly replayed in that run).
+
+### Follow-up
+- If needed, log into a local test account during Playwright runs (or provide a non-auth dev bypass) to fully automate in-map render-order validation scenarios.
+
+## 2026-02-16 (Encounter-to-battle screen implementation)
+- Replaced walk-encounter popup flow with a battle pipeline in `src/game/engine/runtime.ts`:
+  - Wild grass encounters now start a real battle instead of calling transient corner popup text.
+  - Added battle state machine with phases: `transition`, `choose-starter`, `player-turn`, `choose-swap`, `result`.
+  - Added 3 random transition effects (`scanline`, `radial-burst`, `shutter-slice`) selected per encounter.
+  - Added turn simulation actions: `Attack`, `Guard`, `Swap`, `Retreat` (retreat currently wild-only).
+  - Added active HP/damage/faint handling and post-faint forced swap logic.
+  - Moved opposing knockout mission progression to actual battle knockouts (instead of triggering immediately on encounter start).
+  - Added reusable battle snapshot model intended to support future NPC battle sources.
+- Updated `src/game/engine/GameView.tsx`:
+  - Added full battle overlay UI and transition view.
+  - Added starter selection from squad before first action.
+  - Added action buttons and swap picker flow with back/cancel for optional swaps.
+  - Added active critter cards with sprite, level, HP bar, and core stats.
+  - Battle-active input gating now prevents opening side menu during battle.
+- Updated `src/styles.css` with battle-specific styling:
+  - Battle screen layout, active critter panels, HP bars, action panel, squad picker, and transition animations.
+  - Responsive behavior for smaller viewports.
+
+Validation
+- `npm run build` passed.
+- Playwright smoke run executed with `node scripts/web_game_playwright_client.js` against local Vite dev server.
+- Smoke capture output: `output/encounter-battle-smoke/shot-0.png`.
+- In-world battle traversal remained blocked in this environment by auth-gated sign-in screen, so runtime battle interactions could not be end-to-end replayed via automation here.
+
+Follow-up suggestion
+- Run the same Playwright burst while authenticated (or with a local dev auth bypass) and script movement into `portlock-trail` grass to capture:
+  - transition effect variety,
+  - starter selection interaction,
+  - attack/swap turn flow,
+  - win/loss result states.
+
+## 2026-02-16 (Battle UX pass: side positioning, sequential turn text, attack animation)
+- Updated battle layout and interaction flow for readability and turn clarity.
+
+Runtime updates (`src/game/engine/runtime.ts`)
+- Added narration queue + explicit progression controls for battle turns:
+  - New battle runtime fields for queued narration events, active narration, and active attack animation state.
+  - Added `battleAdvanceNarration()` public API to step one narration event at a time.
+- Battle actions now gate on narration state:
+  - Attack/Guard/Swap/Retreat are disabled while narration is active.
+  - Swap selection/cancel also blocked during active narration.
+- Turn resolution now emits one narration event per move in order:
+  - If faster critter acts first, first narration describes that attack; the second move appears only after `Next`.
+  - Guard now emits its own narration event before the opposing attack narration.
+- Attack text now uses trainer-context phrasing:
+  - Wild example: `Your <critter> attacked the wild <critter> and dealt X damage.`
+  - NPC-ready phrasing uses `<source label>'s <critter>` for opposing trainer teams.
+- Added lightweight attack animation signaling in battle snapshot (`activeAnimation`) and `canAdvanceNarration` state.
+
+UI updates (`src/game/engine/GameView.tsx`)
+- Reordered battle field panels:
+  - Player critter now renders on the left.
+  - Opponent critter now renders on the right.
+- Added `Next` button flow:
+  - Appears when narration is active (`canAdvanceNarration`).
+  - Advances to the next move message/event.
+- Action buttons and swap picker now hide while narration is active so move order is explicit.
+- Continue-after-result button now appears only when narration queue is fully advanced.
+- Hooked animation snapshot state into critter panel rendering.
+
+Style updates (`src/styles.css`)
+- Increased player/opponent card border thickness and saturation:
+  - stronger green and red outline treatment for active battle boxes.
+- Added player sprite horizontal flip (`scaleX(-1)`) for left-side orientation.
+- Added attack lunge animations:
+  - player sprite nudges right then returns,
+  - opponent sprite nudges left then returns,
+  - triggered from runtime attack animation state.
+
+Validation
+- `npm run build` passed.
+- Playwright smoke run executed to `output/encounter-battle-sequencing/shot-0.png`.
+- Automated in-world encounter traversal remains blocked in this environment by auth-gated sign-in, so message sequencing was validated through code path/build rather than a full live grass encounter replay.
+- Follow-up polish: knockout narration now explicitly includes battle outcome text (`You won the battle.` / `You blacked out.`) in queued turn narration.
+- Revalidated with `npm run build` (pass).
+
+## 2026-02-16 (Tiles rendering fallback fix)
+- Investigated regression where map tiles rendered only color fallback.
+- Root cause handled in runtime: if a saved tileset URL is invalid/unloadable (common with stale `blob:` URLs), atlas loading failed and never retried a valid fallback.
+- Runtime fix in `src/game/engine/runtime.ts`:
+  - Added resilient tileset candidate loading (`custom config` first, then bundled `CUSTOM_TILESET_CONFIG`).
+  - Added `activeTilesetConfig` so draw uses the config that actually loaded.
+  - Added sequential load attempts with fallback on image load error/invalid dimensions.
+- Storage sanitization fix in `src/game/content/worldContentStore.ts`:
+  - `sanitizeCustomTilesetConfig` now rejects `blob:` URLs for persisted runtime config.
+- Validation:
+  - `npm run build` passed.
+  - Playwright smoke capture saved to `output/tileset-fallback-fix/shot-0.png`; environment remained auth-gated at sign-in screen, so in-map visual confirmation still requires an authenticated run.
+
+## 2026-02-16 (Encounter level-range support)
+- Added per-entry encounter level range fields across the encounter model:
+  - `src/game/encounters/types.ts`: `EncounterTableEntry` now supports optional `minLevel` / `maxLevel`.
+  - `src/game/encounters/schema.ts`: encounter table sanitization now parses and normalizes level ranges (swap if min > max, clamp 1-99, allow null/auto).
+- Updated runtime wild encounter generation (`src/game/engine/runtime.ts`):
+  - Encounter roll now samples a full table entry (not just critter ID) so range metadata is available.
+  - Wild level selection now prefers the selected entry's range and samples only from that critter's implemented levels within Min/Max.
+  - If no valid implemented level exists in the configured range, runtime falls back to the prior auto-level logic.
+  - `lastEncounter` snapshot now records encountered level.
+- Updated encounter admin editor (`src/admin/EncounterTool.tsx`):
+  - Added `Min Lv` / `Max Lv` inputs per table entry.
+  - Draft parser now validates and persists optional level-range fields.
+  - Added note clarifying that blank values keep automatic scaling.
+- Updated backend encounter catalog parsing (`vite.config.ts`):
+  - `/api/admin/encounters/save` / list/bootstrap parsing now accepts, normalizes, and round-trips entry level ranges.
+
+Validation
+- `npm run build` passed.
+- Playwright smoke run executed via `node scripts/web_game_playwright_client.js` with output `output/web-game-encounter-level-range/shot-0.png`.
+- No Playwright `errors-0.json` was produced.
+- This environment remained auth-gated at sign-in, so gameplay-state JSON (`state-0.json`) and live grass encounter traversal were not available in this run.
+
+Follow-up suggestion
+- In admin Encounter Tables, set table entries (for example Moolnir in `first`) to `Min Lv = 1`, `Max Lv = 3`, save, then run an authenticated in-map encounter pass to verify observed wild levels match the configured range.
+- Follow-up fix: corrected encounter-range sampling to use an integer index when selecting from implemented levels.
+- Revalidated after fix:
+  - `npm run build` passed.
+  - Re-ran Playwright smoke capture to `output/web-game-encounter-level-range/shot-0.png` with no `errors-0.json` output.
+
+## 2026-02-16 (Encounter admin layout refresh: compact entries + critter card grid)
+- Updated `/src/admin/EncounterTool.tsx` UI behavior and layout for encounter pool editing:
+  - Current encounter entries now render as compact cards in a responsive grid (instead of full-width rows).
+  - Current entry cards now show only: critter name/ID, weight field, min level field, max level field, and remove button.
+  - Added selected-critter filtering so critters already in the current draft table are hidden from the addable critter list.
+  - Replaced addable critter button list with a searchable, scrollable grid of collection-style critter cards.
+  - Addable critter cards include sprite/stat summary and `Add To Table` action.
+- Added scoped styling in `/src/styles.css`:
+  - New classes for compact encounter entry grid/cards and tighter form controls.
+  - New scrollable addable critter card grid tuned for admin layout while preserving collection-card visual language.
+  - Responsive adjustments for mobile breakpoints.
+
+Validation
+- `npm run build` passed.
+- Playwright smoke run executed for admin page:
+  - command: `node scripts/web_game_playwright_client.js --url http://127.0.0.1:5173/admin.html ...`
+  - output: `output/encounter-admin-grid-ui/shot-0.png`
+  - no `errors-0.json` generated.
+- Environment remained auth/session-gated (`Checking Session`) during screenshot capture, so the encounter module UI requires authenticated run for end-to-end visual confirmation in this environment.
+- Encounter admin candidate-card cleanup pass:
+  - Replaced dense reused collection-card styling with dedicated encounter candidate card layout in `src/admin/EncounterTool.tsx` + `src/styles.css`.
+  - Cards now prioritize key info only (element badge, id/name/rarity, sprite, level range, base stats, add action) with larger spacing and footprint.
+  - Added explicit element badge labels (`BL/EM/TI/GU/ST/SP/SH`) for visibility.
+  - Add-to-table defaults updated: `Min Lv` now `1` and `Max Lv` now the critter's highest implemented level.
+- Validation:
+  - `npm run build` passed.
+  - Playwright admin smoke output: `output/encounter-admin-card-cleanup/shot-0.png`.
+  - Console artifact showed `401 Unauthorized` while unauthenticated on admin route (`output/encounter-admin-card-cleanup/errors-0.json`); environment is admin-auth-gated so module-level visual confirmation still requires signed-in admin session.
+
+## 2026-02-16 (Knockout mission progression fix)
+- Updated knockout mission progression handling in `src/game/engine/runtime.ts`:
+  - `recordOpposingKnockoutProgress` now increments only on confirmed opponent knockout events (existing call-site retained in battle knockout path) and clamps mission increments to mission target values.
+  - Added challenge tracking sync for knockout level-up missions via new helper `syncKnockoutChallengeProgress(...)`:
+    - writes side-story mission tracking entries keyed as `critter-<id>-level-<level>-mission-<missionId>`.
+    - stores normalized `progress`, `target`, `completed`, and `updatedAt` values.
+  - Uses one shared timestamp per knockout event for coherent mission/challenge updates.
+- Outcome: mission progress is now knockout-driven and challenge tracking is persisted consistently instead of drifting beyond target.
+
+Validation
+- `npm run build` passed.
+- Playwright smoke run executed: `output/knockout-mission-progress-fix/shot-0.png`.
+- No `errors-0.json` emitted.
+- Environment remained auth-gated at sign-in screen during smoke run; live combat knockout replay still requires authenticated session.
+
+## 2026-02-16 (Critter knockout mission criteria picker crash + UX fix)
+- Updated critter mission editor UI in `src/admin/CritterTool.tsx` for `opposing_knockouts` filters:
+  - Replaced multi-select element picker with explicit toggle chips for each element.
+  - Replaced multi-select critter picker with a searchable, scrollable toggle-pill list of critters.
+  - This removes dependency on multi-select selectedOptions handling in this flow.
+- Added robust token toggling helper (`toggleTokenInList`) to keep selected criteria arrays unique and stable.
+- Added mission criteria picker styling in `src/styles.css` (`critter-mission-filter-*` and `critter-mission-critter-*` classes) for clearer interaction and readability.
+
+Validation
+- `npm run build` passed.
+- Playwright admin smoke run executed: `output/critter-mission-filter-ui-fix/shot-0.png`.
+- Run emitted expected auth-gated console error (`401 Unauthorized`) at admin route in this environment (`output/critter-mission-filter-ui-fix/errors-0.json`), so in-editor runtime interaction still requires authenticated admin session for direct reproduction.
+
+## 2026-02-16 (First unlock auto-squad + minimum squad membership)
+- Updated squad invariants in `src/game/engine/runtime.ts`:
+  - On runtime load, `ensureMinimumSquadCritterAssignment()` now auto-repairs save data so players with unlocked critters always have at least one assigned squad critter.
+  - On first critter unlock via `tryAdvanceCritter(...)`, `tryAutoAssignFirstUnlockedCritter(...)` now auto-places that first unlocked critter into squad slot 1 (index 0) when squad is otherwise empty.
+  - `clearSquadSlot(...)` now blocks removing the last assigned squad critter when the player has unlocked critters, and shows `Your squad must keep at least one critter.`.
+  - Unlock toast text now reflects auto-assignment (`<Critter> unlocked and joined your squad!`) when applicable.
+
+Validation
+- `npm run build` passed.
+- Playwright smoke run executed: `output/squad-minimum-enforcement/shot-0.png`.
+- Smoke screenshot remained auth-gated on sign-in screen in this environment, so live in-game squad interaction still requires authenticated playthrough verification.
+
+## 2026-02-16 (Last-squad removal feedback UX)
+- Updated squad removal feedback in `src/game/engine/GameView.tsx`:
+  - When a remove attempt is blocked because it would leave the player with zero squad critters, the affected slot now enters a short shake state.
+  - Added a slot-local popup message for 2 seconds: `You need at least 1 Critter!`.
+  - Repeated blocked attempts re-trigger shake animation using alternating keyframes.
+- Added matching visual styles in `src/styles.css`:
+  - `squad-slot` removal-blocked animation class and keyframes.
+  - centered inline popup styling (`.squad-slot__blocked-popup`) layered over the slot content.
+
+Validation
+- `npm run build` passed.
+- Playwright smoke run executed: `output/squad-last-critter-popup/shot-0.png`.
+- Environment remained auth-gated at sign-in screen during smoke run, so in-game right-click squad interaction still requires authenticated session verification.
+
+## 2026-02-16 (Squad HP bar + persistent battle damage + healthy-only squad swaps)
+- Updated critter progress model to track persistent HP in `src/game/critters/types.ts` and `src/game/critters/schema.ts`:
+  - Added `currentHp` to each `PlayerCritterCollectionEntry`.
+  - Sanitization now migrates legacy saves by defaulting unlocked critters to full HP when `currentHp` is missing.
+- Updated battle persistence and squad constraints in `src/game/engine/runtime.ts`:
+  - Player battle team now initializes from saved `currentHp` instead of always full HP.
+  - Battles now sync player team HP back to saved critter progress on battle result (win/loss/escape), so damage carries into later battles.
+  - `retreat` now uses shared battle-result path so escape also persists damage.
+  - Squad remove/replace now blocks when the slotted critter is not at full HP, with message `Only fully healthy critters can leave the squad.`.
+  - Squad slot snapshot now includes `currentHp` and `maxHp`.
+  - Unlock/level-up flow now maintains HP coherently:
+    - first unlock starts at full HP,
+    - later level-ups clamp existing HP to new max.
+- Updated squad card UI in `src/game/engine/GameView.tsx` + `src/styles.css`:
+  - Squad critter cards now show an HP progress bar (styled similarly to level progress) with `HP current/max`.
+  - HP bar color shifts by health tier (healthy / warning / critical).
+  - Last-slot shake popup now triggers only for the minimum-squad rule, not when removal is blocked due to missing HP.
+
+Validation
+- `npm run build` passed.
+- Playwright smoke run executed: `output/squad-health-persistence/shot-0.png`.
+- Environment remained auth-gated at sign-in screen during smoke run, so live in-game battle/squad interaction verification still requires authenticated playthrough.
+
+## 2026-02-16 (Maintenance script: heal all user squads)
+- Added one-off DB maintenance script: `scripts/heal_all_user_squads.js`.
+  - Reads all rows from `user_saves`.
+  - Finds critters currently assigned in each user's squad.
+  - Sets those critters' `currentHp` to full (`effectiveStats.hp`) in `save_data.playerCritterProgress.collection`.
+  - Updates `lastProgressAt` for healed entries.
+  - Supports dry-run by default and `--apply` for persistence.
+  - Supports optional `--user-id <id>` targeting.
+
+Validation
+- `node scripts/heal_all_user_squads.js --help` passed.
+- Script now resolves `DB_CONNECTION_STRING` from `.env` when not present in process env.

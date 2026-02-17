@@ -2,6 +2,10 @@ import type { WorldMapInput } from '@/game/world/types';
 import type { TileDefinition, NpcSpriteConfig } from '@/game/world/types';
 import type { CustomTilesetConfig } from '@/game/world/customTiles';
 import { apiFetchJson } from '@/shared/apiClient';
+import type { CritterDefinition } from '@/game/critters/types';
+import { sanitizeCritterDatabase } from '@/game/critters/schema';
+import { sanitizeEncounterTableLibrary } from '@/game/encounters/schema';
+import type { EncounterTableDefinition } from '@/game/encounters/types';
 
 const WORLD_CONTENT_STORAGE_KEY = 'critterra.world.content.v1';
 
@@ -23,7 +27,8 @@ export interface StoredWorldContent {
   customTileDefinitions: Record<string, TileDefinition>;
   customTilesetConfig: CustomTilesetConfig | null;
   playerSpriteConfig: NpcSpriteConfig | null;
-  critters: unknown[];
+  critters: CritterDefinition[];
+  encounterTables: EncounterTableDefinition[];
 }
 
 interface BootstrapResponse {
@@ -35,6 +40,7 @@ interface BootstrapResponse {
     customTilesetConfig?: unknown;
     playerSpriteConfig?: unknown;
     critters?: unknown;
+    encounterTables?: unknown;
   };
 }
 
@@ -99,7 +105,8 @@ export function readStoredWorldContent(): StoredWorldContent | null {
           : {},
       customTilesetConfig: sanitizeCustomTilesetConfig(parsed.customTilesetConfig),
       playerSpriteConfig: sanitizePlayerSpriteConfig(parsed.playerSpriteConfig),
-      critters: Array.isArray(parsed.critters) ? parsed.critters : [],
+      critters: sanitizeCritterDatabase(parsed.critters),
+      encounterTables: sanitizeEncounterTableLibrary(parsed.encounterTables),
     };
   } catch {
     return null;
@@ -144,7 +151,8 @@ export async function hydrateWorldContentFromServer(): Promise<void> {
         : {},
     customTilesetConfig: sanitizeCustomTilesetConfig(content.customTilesetConfig),
     playerSpriteConfig: sanitizePlayerSpriteConfig(content.playerSpriteConfig),
-    critters: Array.isArray(content.critters) ? content.critters : [],
+    critters: sanitizeCritterDatabase(content.critters),
+    encounterTables: sanitizeEncounterTableLibrary(content.encounterTables),
   };
 
   persistWorldContent(next);

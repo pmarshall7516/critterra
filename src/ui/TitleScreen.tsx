@@ -57,12 +57,12 @@ export function TitleScreen({ userEmail, hasSave, onLogout, onContinue, onNewGam
           )}
           {!hasSave && (
             <button type="button" className="secondary" onClick={onNewGame}>
-              Start Game
+              Start
             </button>
           )}
           {hasSave && (
             <button type="button" className="secondary" onClick={() => setShowResetModal(true)}>
-              Start Over
+              Restart
             </button>
           )}
           <button type="button" className="secondary" onClick={() => window.location.assign('/admin/maps')}>
@@ -100,8 +100,8 @@ export function TitleScreen({ userEmail, hasSave, onLogout, onContinue, onNewGam
       {showResetModal && (
         <div className="controls-modal__backdrop" onClick={() => setShowResetModal(false)}>
           <div className="controls-modal" onClick={(event) => event.stopPropagation()}>
-            <h2>Start Over</h2>
-            <p>Enter your password to clear your existing save and start fresh.</p>
+            <h2>Restart</h2>
+            <p>Enter your password to clear your game progress and start fresh.</p>
             <label htmlFor="reset-password-input">Password</label>
             <input
               id="reset-password-input"
@@ -113,7 +113,7 @@ export function TitleScreen({ userEmail, hasSave, onLogout, onContinue, onNewGam
             {resetError && <p className="admin-note" style={{ color: '#f7b9b9' }}>{resetError}</p>}
             <div className="title-screen__actions">
               <button type="button" className="primary" onClick={handleResetSubmit} disabled={isResetting}>
-                {isResetting ? 'Resetting...' : 'Confirm Start Over'}
+                {isResetting ? 'Resetting...' : 'Confirm Restart'}
               </button>
               <button type="button" className="secondary" onClick={() => setShowResetModal(false)} disabled={isResetting}>
                 Cancel

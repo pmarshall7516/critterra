@@ -1,4 +1,5 @@
 import type { Direction, Vector2 } from '@/shared/types';
+import type { MapEncounterGroupDefinition } from '@/game/encounters/types';
 
 export type TileCode =
   string;
@@ -11,6 +12,7 @@ export interface TileDefinition {
   accentColor?: string;
   height: number;
   atlasIndex?: number;
+  ySortWithActors?: boolean;
 }
 
 export interface NpcSpriteConfig {
@@ -76,7 +78,7 @@ export interface InteractionDefinition {
 }
 
 export interface WorldMapLayerInput {
-  id: string;
+  id: string | number;
   name?: string;
   tiles: string[];
   rotations?: string[];
@@ -93,10 +95,12 @@ export interface WorldMapInput {
   npcs?: NpcDefinition[];
   warps?: WarpDefinition[];
   interactions?: InteractionDefinition[];
+  encounterGroups?: MapEncounterGroupDefinition[];
 }
 
 export interface WorldMapLayer {
   id: string;
+  orderId: number;
   name: string;
   tiles: TileCode[][];
   rotations: number[][];
@@ -115,4 +119,5 @@ export interface WorldMap {
   npcs: NpcDefinition[];
   warps: WarpDefinition[];
   interactions: InteractionDefinition[];
+  encounterGroups: MapEncounterGroupDefinition[];
 }

@@ -1,4 +1,6 @@
 import { BLANK_TILE_CODE, TILE_DEFINITIONS } from '@/game/world/tiles';
+import { sanitizeMapEncounterGroups } from '@/game/encounters/schema';
+import type { MapEncounterGroupDefinition } from '@/game/encounters/types';
 import type {
   InteractionDefinition,
   NpcDefinition,
@@ -26,6 +28,7 @@ export interface EditableMap {
   npcs: NpcDefinition[];
   warps: WarpDefinition[];
   interactions: InteractionDefinition[];
+  encounterGroups: MapEncounterGroupDefinition[];
 }
 
 const KNOWN_TILE_CODE_SET = new Set(Object.keys(TILE_DEFINITIONS));
@@ -36,7 +39,7 @@ export function worldMapToEditable(map: WorldMap): EditableMap {
     ? map.layers.map(worldLayerToEditable)
     : [
         {
-          id: 'base',
+          id: '1',
           name: 'Base',
           tiles: map.tiles.map((row) => row.join('')),
           rotations: map.tiles.map((row) => '0'.repeat(row.length)),
@@ -45,11 +48,12 @@ export function worldMapToEditable(map: WorldMap): EditableMap {
           collision: true,
         },
       ];
+  const normalizedLayers = normalizeEditableLayerIds(layers);
 
   return {
     id: map.id,
     name: map.name,
-    layers,
+    layers: normalizedLayers,
     npcs: map.npcs.map(cloneNpc),
     warps: map.warps.map(cloneWarp),
     interactions: map.interactions.map((interaction) => ({
@@ -57,6 +61,7 @@ export function worldMapToEditable(map: WorldMap): EditableMap {
       position: { ...interaction.position },
       lines: [...interaction.lines],
     })),
+    encounterGroups: map.encounterGroups.map(cloneEncounterGroup),
   };
 }
 
@@ -77,6 +82,7 @@ export function cloneEditableMap(map: EditableMap): EditableMap {
       position: { ...interaction.position },
       lines: [...interaction.lines],
     })),
+    encounterGroups: map.encounterGroups.map(cloneEncounterGroup),
   };
 }
 
@@ -95,7 +101,7 @@ export function createBlankEditableMap(
     name,
     layers: [
       createBlankLayer(safeWidth, safeHeight, {
-        id: 'base',
+        id: '1',
         name: 'Base',
         fillCode,
         visible: true,
@@ -105,6 +111,7 @@ export function createBlankEditableMap(
     npcs: [],
     warps: [],
     interactions: [],
+    encounterGroups: [],
   };
 }
 
@@ -122,8 +129,9 @@ export function getLayerById(map: EditableMap, layerId: string): EditableMapLaye
 }
 
 export function getTopTileCodeAt(map: EditableMap, x: number, y: number): EditorTileCode | null {
-  for (let index = map.layers.length - 1; index >= 0; index -= 1) {
-    const layer = map.layers[index];
+  const sortedLayers = sortEditableLayersById(map.layers);
+  for (let index = sortedLayers.length - 1; index >= 0; index -= 1) {
+    const layer = sortedLayers[index];
     if (!layer.visible) {
       continue;
     }
@@ -151,7 +159,7 @@ export function composeEditableTiles(map: EditableMap): string[] {
   }
 
   const rows = Array.from({ length: height }, () => Array.from({ length: width }, () => BLANK_TILE_CODE));
-  for (const layer of map.layers) {
+  for (const layer of sortEditableLayersById(map.layers)) {
     if (!layer.visible) {
       continue;
     }
@@ -424,6 +432,11 @@ export function parseEditableMapJson(raw: string): EditableMap {
     interactions: Array.isArray(parsed.interactions)
       ? (parsed.interactions as InteractionDefinition[])
       : [],
+    encounterGroups: sanitizeMapEncounterGroups(
+      parsed.encounterGroups,
+      layers[0]?.tiles[0]?.length ?? 0,
+      layers[0]?.tiles.length ?? 0,
+    ),
   };
 }
 
@@ -461,6 +474,44 @@ export function toConstName(mapId: string): string {
 
 export function clampInt(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
+export function parseLayerOrderId(value: string | number | null | undefined): number | null {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      return null;
+    }
+    const normalized = Math.floor(value);
+    return normalized >= 1 ? normalized : null;
+  }
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.toLowerCase() === 'base') {
+    return 1;
+  }
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+
+  const normalized = Number.parseInt(trimmed, 10);
+  return Number.isFinite(normalized) && normalized >= 1 ? normalized : null;
+}
+
+export function sortEditableLayersById(layers: EditableMapLayer[]): EditableMapLayer[] {
+  return [...layers].sort((left, right) => {
+    const leftOrder = parseLayerOrderId(left.id) ?? Number.MAX_SAFE_INTEGER;
+    const rightOrder = parseLayerOrderId(right.id) ?? Number.MAX_SAFE_INTEGER;
+    if (leftOrder !== rightOrder) {
+      return leftOrder - rightOrder;
+    }
+    return left.name.localeCompare(right.name, undefined, { sensitivity: 'base' });
+  });
 }
 
 function toTsLiteral(value: unknown, indent: number): string {
@@ -529,9 +580,10 @@ export function createBlankLayer(
 }
 
 function worldLayerToEditable(layer: WorldMapLayer): EditableMapLayer {
+  const layerOrderId = Number.isFinite(layer.orderId) ? Math.max(1, Math.floor(layer.orderId)) : 1;
   return {
-    id: layer.id,
-    name: layer.name,
+    id: String(layerOrderId),
+    name: layer.name?.trim() || (layerOrderId === 1 ? 'Base' : `Layer ${layerOrderId}`),
     tiles: layer.tiles.map((row) => row.join('')),
     rotations: layer.rotations.map((row) => row.map((value) => String(sanitizeRotationQuarter(value))).join('')),
     collisionEdges: layer.collisionEdges.map((row) =>
@@ -590,7 +642,7 @@ function cloneNpc(npc: NpcDefinition): NpcDefinition {
 
 function parseMapLayersFromInput(input: Partial<WorldMapInput>): EditableMapLayer[] {
   if (Array.isArray(input.layers) && input.layers.length > 0) {
-    const parsed = input.layers.map((layer, index) => parseLayerInput(layer, index));
+    const parsed = normalizeEditableLayerIds(input.layers.map((layer, index) => parseLayerInput(layer, index)));
     const width = parsed[0].tiles[0]?.length ?? 0;
     const height = parsed[0].tiles.length;
     if (width <= 0 || height <= 0) {
@@ -632,7 +684,7 @@ function parseMapLayersFromInput(input: Partial<WorldMapInput>): EditableMapLaye
 
     return [
       {
-        id: 'base',
+        id: '1',
         name: 'Base',
         tiles: [...input.tiles],
         rotations: input.tiles.map((row) => '0'.repeat(row.length)),
@@ -650,44 +702,44 @@ function parseLayerInput(rawLayer: WorldMapLayerInput, index: number): EditableM
   if (!rawLayer || typeof rawLayer !== 'object') {
     throw new Error(`Layer ${index} must be an object.`);
   }
-  if (typeof rawLayer.id !== 'string' || !rawLayer.id.trim()) {
-    throw new Error(`Layer ${index} must include a non-empty string id.`);
-  }
+  const parsedOrderId = parseLayerOrderId(rawLayer.id);
+  const layerOrderId = parsedOrderId ?? Math.max(1, index + 1);
+  const layerId = String(layerOrderId);
   if (!Array.isArray(rawLayer.tiles) || rawLayer.tiles.length === 0) {
-    throw new Error(`Layer "${rawLayer.id}" must include non-empty tiles.`);
+    throw new Error(`Layer "${layerId}" must include non-empty tiles.`);
   }
 
   const width = rawLayer.tiles[0].length;
   if (width <= 0) {
-    throw new Error(`Layer "${rawLayer.id}" rows cannot be empty.`);
+    throw new Error(`Layer "${layerId}" rows cannot be empty.`);
   }
 
   const tiles = rawLayer.tiles.map((row, rowIndex) => {
     if (typeof row !== 'string') {
-      throw new Error(`Layer "${rawLayer.id}" row ${rowIndex} must be a string.`);
+      throw new Error(`Layer "${layerId}" row ${rowIndex} must be a string.`);
     }
     if (row.length !== width) {
-      throw new Error(`Layer "${rawLayer.id}" row ${rowIndex} width ${row.length} does not match expected ${width}.`);
+      throw new Error(`Layer "${layerId}" row ${rowIndex} width ${row.length} does not match expected ${width}.`);
     }
     for (const code of row) {
       if (!code || code.length !== 1) {
-        throw new Error(`Layer "${rawLayer.id}" has invalid tile code "${code}" at row ${rowIndex}.`);
+        throw new Error(`Layer "${layerId}" has invalid tile code "${code}" at row ${rowIndex}.`);
       }
     }
     return row;
   });
 
-  const rotations = normalizeRotationRows(rawLayer.rotations, width, tiles.length, rawLayer.id);
+  const rotations = normalizeRotationRows(rawLayer.rotations, width, tiles.length, layerId);
   const collisionEdges = normalizeCollisionEdgeRows(
     rawLayer.collisionEdges,
     width,
     tiles.length,
-    rawLayer.id,
+    layerId,
   );
 
   return {
-    id: rawLayer.id,
-    name: rawLayer.name?.trim() || rawLayer.id,
+    id: layerId,
+    name: rawLayer.name?.trim() || (layerOrderId === 1 ? 'Base' : `Layer ${layerOrderId}`),
     tiles,
     rotations,
     collisionEdges,
@@ -775,15 +827,19 @@ function toWorldMapInput(map: EditableMap): WorldMapInput {
   if (map.interactions.length > 0) {
     payload.interactions = map.interactions;
   }
+  if (map.encounterGroups.length > 0) {
+    payload.encounterGroups = map.encounterGroups.map(cloneEncounterGroup);
+  }
 
   if (shouldSerializeAsLegacyTiles(map)) {
     payload.tiles = map.layers[0].tiles;
     return payload;
   }
 
-  payload.layers = map.layers.map((layer) => {
+  payload.layers = sortEditableLayersById(map.layers).map((layer) => {
+    const layerOrderId = parseLayerOrderId(layer.id) ?? 1;
     const layerPayload: WorldMapLayerInput = {
-      id: layer.id,
+      id: layerOrderId,
       name: layer.name,
       tiles: layer.tiles,
     };
@@ -807,11 +863,12 @@ function toWorldMapInput(map: EditableMap): WorldMapInput {
 }
 
 function shouldSerializeAsLegacyTiles(map: EditableMap): boolean {
-  if (map.layers.length !== 1) {
+  const orderedLayers = sortEditableLayersById(map.layers);
+  if (orderedLayers.length !== 1) {
     return false;
   }
-  const layer = map.layers[0];
-  if (layer.id !== 'base' || layer.name !== 'Base' || !layer.visible || !layer.collision) {
+  const layer = orderedLayers[0];
+  if (parseLayerOrderId(layer.id) !== 1 || layer.name !== 'Base' || !layer.visible || !layer.collision) {
     return false;
   }
 
@@ -828,6 +885,17 @@ function cloneWarp(warp: WarpDefinition): WarpDefinition {
     fromPositions: warp.fromPositions?.map((position) => ({ ...position })),
     to: { ...warp.to },
     toPositions: warp.toPositions?.map((position) => ({ ...position })),
+  };
+}
+
+function cloneEncounterGroup(group: MapEncounterGroupDefinition): MapEncounterGroupDefinition {
+  return {
+    ...group,
+    tilePositions: group.tilePositions.map((position) => ({ ...position })),
+    walkEncounterTableId: group.walkEncounterTableId ?? null,
+    fishEncounterTableId: group.fishEncounterTableId ?? null,
+    walkFrequency: Number.isFinite(group.walkFrequency) ? Math.max(0, Math.min(1, group.walkFrequency)) : 0,
+    fishFrequency: Number.isFinite(group.fishFrequency) ? Math.max(0, Math.min(1, group.fishFrequency)) : 0,
   };
 }
 
@@ -879,4 +947,30 @@ function sanitizeRotationQuarter(value: number): number {
 function sanitizeCollisionEdgeMask(value: number): number {
   const intValue = Number.isFinite(value) ? Math.floor(value) : 0;
   return intValue & 0b1111;
+}
+
+function normalizeEditableLayerIds(layers: EditableMapLayer[]): EditableMapLayer[] {
+  const usedOrderIds = new Set<number>();
+  const normalized = layers.map((layer, index) => {
+    const parsedOrderId = parseLayerOrderId(layer.id);
+    const start = parsedOrderId ?? Math.max(1, index + 1);
+    const orderId = nextAvailableLayerOrderId(start, usedOrderIds);
+    usedOrderIds.add(orderId);
+
+    return {
+      ...layer,
+      id: String(orderId),
+      name: layer.name?.trim() || (orderId === 1 ? 'Base' : `Layer ${orderId}`),
+    };
+  });
+
+  return sortEditableLayersById(normalized);
+}
+
+function nextAvailableLayerOrderId(start: number, usedOrderIds: Set<number>): number {
+  let candidate = Math.max(1, Math.floor(start));
+  while (usedOrderIds.has(candidate)) {
+    candidate += 1;
+  }
+  return candidate;
 }

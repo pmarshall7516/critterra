@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { MapEditorTool } from '@/admin/MapEditorTool';
 import { MapWorkspaceTool } from '@/admin/MapWorkspaceTool';
 import { PlayerSpriteTool } from '@/admin/PlayerSpriteTool';
+import { CritterTool } from '@/admin/CritterTool';
+import { EncounterTool } from '@/admin/EncounterTool';
 import { apiFetchJson } from '@/shared/apiClient';
 
 type AdminRoute = 'maps' | 'tiles' | 'npcs' | 'player-sprite' | 'critters' | 'encounters';
@@ -21,12 +23,11 @@ const ACTIVE_NAV_LINKS: AdminNavLink[] = [
   { id: 'tiles', label: 'Tiles', type: 'active' },
   { id: 'npcs', label: 'NPCs', type: 'active' },
   { id: 'player-sprite', label: 'Player Sprite', type: 'active' },
+  { id: 'critters', label: 'Critters', type: 'active' },
+  { id: 'encounters', label: 'Encounters', type: 'active' },
 ];
 
-const PLACEHOLDER_NAV_LINKS: AdminNavLink[] = [
-  { id: 'critters', label: 'Critters (Soon)', type: 'placeholder' },
-  { id: 'encounters', label: 'Encounters (Soon)', type: 'placeholder' },
-];
+const PLACEHOLDER_NAV_LINKS: AdminNavLink[] = [];
 
 function toAdminPath(route: AdminRoute): string {
   return `/admin/${route}`;
@@ -78,11 +79,19 @@ export function AdminView({ gameHref = '/' }: AdminViewProps) {
     let mounted = true;
     const verifySession = async () => {
       try {
-        const result = await apiFetchJson<{ ok: boolean }>('/api/auth/session');
+        const result = await apiFetchJson<{
+          ok: boolean;
+          session?: {
+            user?: {
+              isAdmin?: boolean;
+            };
+          };
+        }>('/api/auth/session');
         if (!mounted) {
           return;
         }
-        setAuthState(result.ok ? 'ok' : 'blocked');
+        const isAdmin = Boolean(result.data?.session?.user?.isAdmin);
+        setAuthState(result.ok && isAdmin ? 'ok' : 'blocked');
       } catch {
         if (!mounted) {
           return;
@@ -145,8 +154,8 @@ export function AdminView({ gameHref = '/' }: AdminViewProps) {
     return (
       <section className="admin-screen">
         <section className="admin-placeholder">
-          <h2>Sign In Required</h2>
-          <p>Open the game home screen, sign in, then reopen Admin Tools.</p>
+          <h2>Admin Access Required</h2>
+          <p>Sign in with an account where `is_admin` is true, then reopen Admin Tools.</p>
           <a className="admin-screen__back" href={gameHref}>
             Back To Game
           </a>
@@ -198,18 +207,8 @@ export function AdminView({ gameHref = '/' }: AdminViewProps) {
           {activeRoute === 'tiles' && <MapEditorTool section="tiles" />}
           {activeRoute === 'npcs' && <MapEditorTool section="npcs" />}
           {activeRoute === 'player-sprite' && <PlayerSpriteTool />}
-          {activeRoute === 'critters' && (
-            <section className="admin-placeholder">
-              <h2>Critter Editor</h2>
-              <p>This module will hold creature stats, move sets, evolutions, and sprite assignments.</p>
-            </section>
-          )}
-          {activeRoute === 'encounters' && (
-            <section className="admin-placeholder">
-              <h2>Encounter Tables</h2>
-              <p>This module will manage route spawn tables, level bands, and encounter conditions.</p>
-            </section>
-          )}
+          {activeRoute === 'critters' && <CritterTool />}
+          {activeRoute === 'encounters' && <EncounterTool />}
         </main>
       </div>
     </section>

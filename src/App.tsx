@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { GameView } from '@/game/engine/GameView';
 import { clearSave, loadSave, resetRemoteSaveWithPassword, hydrateLocalSaveFromServer } from '@/game/saves/saveManager';
 import { AuthScreen } from '@/ui/AuthScreen';
-import { NewGameSetup } from '@/ui/NewGameSetup';
 import { TitleScreen } from '@/ui/TitleScreen';
 import { apiFetchJson } from '@/shared/apiClient';
 import { clearAuthToken, type AuthSession, type AuthUser, getAuthToken } from '@/shared/authStorage';
@@ -15,10 +14,6 @@ type ScreenState =
     }
   | {
       screen: 'title';
-      sessionId: number;
-    }
-  | {
-      screen: 'new-game';
       sessionId: number;
     }
   | {
@@ -148,37 +143,31 @@ function App() {
         }}
         onContinue={async () => {
           await hydrateWorldContentFromServer().catch(() => undefined);
-          setState({ screen: 'game', mode: 'continue', sessionId: state.sessionId + 1 });
+          setState({
+            screen: 'game',
+            mode: 'continue',
+            playerName: authUser?.displayName ?? 'Player',
+            sessionId: state.sessionId + 1,
+          });
         }}
         onNewGame={async () => {
           await hydrateWorldContentFromServer().catch(() => undefined);
-          setState({ screen: 'new-game', sessionId: state.sessionId + 1 });
+          setState({
+            screen: 'game',
+            mode: 'new',
+            playerName: authUser?.displayName ?? 'Player',
+            sessionId: state.sessionId + 1,
+          });
         }}
         onStartOver={async (password) => {
           await resetRemoteSaveWithPassword(password);
           clearSave();
           await hydrateWorldContentFromServer().catch(() => undefined);
           setState((current) => ({
-            screen: 'new-game',
+            screen: 'title',
             sessionId: current.sessionId + 1,
           }));
         }}
-      />
-    );
-  }
-
-  if (state.screen === 'new-game') {
-    return (
-      <NewGameSetup
-        onStart={(playerName) =>
-          setState({
-            screen: 'game',
-            mode: 'new',
-            playerName,
-            sessionId: state.sessionId + 1,
-          })
-        }
-        onCancel={() => setState({ screen: 'title', sessionId: state.sessionId + 1 })}
       />
     );
   }

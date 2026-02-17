@@ -7,7 +7,7 @@ import react from '@vitejs/plugin-react';
 import { resolve } from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 import bcrypt from 'bcryptjs';
-import { Pool } from 'pg';
+import { Pool, type PoolClient } from 'pg';
 
 interface EditableMapPayload {
   id: string;
@@ -17,10 +17,11 @@ interface EditableMapPayload {
   npcs: unknown[];
   warps: unknown[];
   interactions: unknown[];
+  encounterGroups: unknown[];
 }
 
 interface EditableMapLayerPayload {
-  id: string;
+  id: string | number;
   name: string;
   tiles: string[];
   rotations: string[];
@@ -35,6 +36,7 @@ interface SavedPaintTilePayload {
   primaryCode?: unknown;
   width?: unknown;
   height?: unknown;
+  ySortWithActors?: unknown;
   cells?: Array<{
     code?: unknown;
     atlasIndex?: unknown;
@@ -123,6 +125,10 @@ interface PasswordRequestPayload {
 interface SaveNpcLibraryRequestPayload {
   npcSpriteLibrary?: unknown;
   npcCharacterLibrary?: unknown;
+}
+
+interface SaveEncounterLibraryRequestPayload {
+  encounterTables?: unknown;
 }
 
 interface SupabaseStorageListEntry {
@@ -303,6 +309,80 @@ function sanitizeIdentifier(value: string, fallback: string): string {
   return trimmed.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
 }
 
+function parseLayerOrderId(value: unknown): number | null {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      return null;
+    }
+    const normalized = Math.floor(value);
+    return normalized >= 1 ? normalized : null;
+  }
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.toLowerCase() === 'base') {
+    return 1;
+  }
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+
+  const normalized = Number.parseInt(trimmed, 10);
+  return Number.isFinite(normalized) && normalized >= 1 ? normalized : null;
+}
+
+function nextAvailableLayerOrderId(start: number, usedOrderIds: Set<number>): number {
+  let candidate = Math.max(1, Math.floor(start));
+  while (usedOrderIds.has(candidate)) {
+    candidate += 1;
+  }
+  return candidate;
+}
+
+function inferTileYSortWithActors(name: string, width: number, height: number): boolean {
+  if (width > 1 || height > 1) {
+    return true;
+  }
+
+  const normalizedName = name.trim().toLowerCase();
+  if (!normalizedName) {
+    return true;
+  }
+
+  const flatKeywords = ['grass', 'flower', 'path', 'sand', 'water', 'floor', 'ground'];
+  if (flatKeywords.some((keyword) => normalizedName.includes(keyword))) {
+    return false;
+  }
+
+  const overheadKeywords = [
+    'tree',
+    'bush',
+    'house',
+    'roof',
+    'wall',
+    'building',
+    'cliff',
+    'rock',
+    'fence',
+    'gate',
+    'pillar',
+    'tower',
+    'arch',
+    'sign',
+    'door',
+  ];
+  if (overheadKeywords.some((keyword) => normalizedName.includes(keyword))) {
+    return true;
+  }
+
+  return true;
+}
+
 function toMapConstName(mapId: string): string {
   const normalized = mapId
     .replace(/[^a-zA-Z0-9]+(.)/g, (_, char: string) => char.toUpperCase())
@@ -375,6 +455,7 @@ function parseEditableMapPayload(raw: SaveMapRequestPayload): EditableMapPayload
     npcs: Array.isArray(map.npcs) ? map.npcs : [],
     warps: Array.isArray(map.warps) ? map.warps : [],
     interactions: Array.isArray(map.interactions) ? map.interactions : [],
+    encounterGroups: parseMapEncounterGroups(map.encounterGroups, width, height),
   };
 }
 
@@ -398,7 +479,8 @@ function parseMapLayers(rawLayers: unknown): EditableMapLayerPayload[] | null {
     return null;
   }
 
-  return rawLayers.map((rawLayer, index) => {
+  const usedLayerIds = new Set<number>();
+  const parsedLayers = rawLayers.map((rawLayer, index) => {
     if (!rawLayer || typeof rawLayer !== 'object') {
       throw new Error(`Layer ${index} must be an object.`);
     }
@@ -413,8 +495,12 @@ function parseMapLayers(rawLayers: unknown): EditableMapLayerPayload[] | null {
       collision?: unknown;
     };
 
-    const id = sanitizeIdentifier(typeof layer.id === 'string' ? layer.id : '', `layer-${index + 1}`);
-    const name = typeof layer.name === 'string' && layer.name.trim() ? layer.name : id;
+    const parsedLayerId = parseLayerOrderId(layer.id);
+    const fallbackLayerId = Math.max(1, index + 1);
+    const requestedLayerId = parsedLayerId ?? fallbackLayerId;
+    const id = nextAvailableLayerOrderId(requestedLayerId, usedLayerIds);
+    usedLayerIds.add(id);
+    const name = typeof layer.name === 'string' && layer.name.trim() ? layer.name : id === 1 ? 'Base' : `Layer ${id}`;
     const tiles = parseMapTiles(layer.tiles);
     if (!tiles) {
       throw new Error(`Layer "${id}" must include non-empty tiles.`);
@@ -431,7 +517,9 @@ function parseMapLayers(rawLayers: unknown): EditableMapLayerPayload[] | null {
       if (rotations.length !== tiles.length) {
         throw new Error(`Layer "${id}" rotations height ${rotations.length} does not match tiles height ${tiles.length}.`);
       }
-      rotations = rotations.map((row, rowIndex) => normalizeRotationRow(row, tiles[rowIndex].length, id, rowIndex));
+      rotations = rotations.map((row, rowIndex) =>
+        normalizeRotationRow(row, tiles[rowIndex].length, String(id), rowIndex),
+      );
     } else {
       rotations = tiles.map((row) => '0'.repeat(row.length));
     }
@@ -450,7 +538,7 @@ function parseMapLayers(rawLayers: unknown): EditableMapLayerPayload[] | null {
         );
       }
       collisionEdges = collisionEdges.map((row, rowIndex) =>
-        normalizeCollisionEdgeRow(row, tiles[rowIndex].length, id, rowIndex),
+        normalizeCollisionEdgeRow(row, tiles[rowIndex].length, String(id), rowIndex),
       );
     } else {
       collisionEdges = tiles.map((row) => '0'.repeat(row.length));
@@ -465,6 +553,12 @@ function parseMapLayers(rawLayers: unknown): EditableMapLayerPayload[] | null {
       visible: layer.visible !== false,
       collision: layer.collision !== false,
     };
+  });
+
+  return parsedLayers.sort((left, right) => {
+    const leftId = parseLayerOrderId(left.id) ?? Number.MAX_SAFE_INTEGER;
+    const rightId = parseLayerOrderId(right.id) ?? Number.MAX_SAFE_INTEGER;
+    return leftId - rightId;
   });
 }
 
@@ -619,26 +713,33 @@ function buildMapFileSource(map: EditableMapPayload): { source: string; constNam
   if (shouldSerializeAsLegacyTiles(map)) {
     payload.tiles = map.layers?.[0].tiles ?? map.tiles ?? [];
   } else if (Array.isArray(map.layers) && map.layers.length > 0) {
-    payload.layers = map.layers.map((layer) => {
-      const layerPayload: Record<string, unknown> = {
-        id: layer.id,
-        name: layer.name,
-        tiles: layer.tiles,
-      };
-      if (layer.visible === false) {
-        layerPayload.visible = false;
-      }
-      if (layer.collision === false) {
-        layerPayload.collision = false;
-      }
-      if (layer.rotations.some((row) => /[1-3]/.test(row))) {
-        layerPayload.rotations = layer.rotations;
-      }
-      if (layer.collisionEdges.some((row) => /[1-9a-f]/i.test(row))) {
-        layerPayload.collisionEdges = layer.collisionEdges;
-      }
-      return layerPayload;
-    });
+    payload.layers = [...map.layers]
+      .sort((left, right) => {
+        const leftId = parseLayerOrderId(left.id) ?? Number.MAX_SAFE_INTEGER;
+        const rightId = parseLayerOrderId(right.id) ?? Number.MAX_SAFE_INTEGER;
+        return leftId - rightId;
+      })
+      .map((layer) => {
+        const layerOrderId = parseLayerOrderId(layer.id) ?? 1;
+        const layerPayload: Record<string, unknown> = {
+          id: layerOrderId,
+          name: layer.name,
+          tiles: layer.tiles,
+        };
+        if (layer.visible === false) {
+          layerPayload.visible = false;
+        }
+        if (layer.collision === false) {
+          layerPayload.collision = false;
+        }
+        if (layer.rotations.some((row) => /[1-3]/.test(row))) {
+          layerPayload.rotations = layer.rotations;
+        }
+        if (layer.collisionEdges.some((row) => /[1-9a-f]/i.test(row))) {
+          layerPayload.collisionEdges = layer.collisionEdges;
+        }
+        return layerPayload;
+      });
   } else {
     payload.tiles = map.tiles ?? [];
   }
@@ -651,6 +752,9 @@ function buildMapFileSource(map: EditableMapPayload): { source: string; constNam
   }
   if (map.interactions.length > 0) {
     payload.interactions = map.interactions;
+  }
+  if (map.encounterGroups.length > 0) {
+    payload.encounterGroups = map.encounterGroups;
   }
 
   const source = [
@@ -668,7 +772,7 @@ function shouldSerializeAsLegacyTiles(map: EditableMapPayload): boolean {
     return false;
   }
   const layer = map.layers[0];
-  if (layer.id !== 'base' || layer.name !== 'Base' || layer.visible === false || layer.collision === false) {
+  if (parseLayerOrderId(layer.id) !== 1 || layer.name !== 'Base' || layer.visible === false || layer.collision === false) {
     return false;
   }
   return (
@@ -799,11 +903,480 @@ function parseSavedPaintTiles(raw: unknown): SavedPaintTilePayload[] {
           : cells[0].code,
       width: typeof record.width === 'number' ? Math.max(1, Math.floor(record.width)) : 1,
       height: typeof record.height === 'number' ? Math.max(1, Math.floor(record.height)) : 1,
+      ySortWithActors:
+        typeof record.ySortWithActors === 'boolean'
+          ? record.ySortWithActors
+          : inferTileYSortWithActors(
+              typeof record.name === 'string' ? record.name : 'Saved Tile',
+              typeof record.width === 'number' ? Math.max(1, Math.floor(record.width)) : 1,
+              typeof record.height === 'number' ? Math.max(1, Math.floor(record.height)) : 1,
+            ),
       cells,
     });
   }
 
   return parsed;
+}
+
+const CRITTER_ELEMENT_OPTIONS = new Set(['bloom', 'ember', 'tide', 'gust', 'stone', 'spark', 'shade']);
+const CRITTER_RARITY_OPTIONS = new Set(['common', 'uncommon', 'rare', 'legendary']);
+const CRITTER_ABILITY_KIND_OPTIONS = new Set(['passive', 'active']);
+const CRITTER_MISSION_TYPE_OPTIONS = new Set(['opposing_knockouts', 'ascension']);
+
+function parseCritterLibrary(
+  raw: unknown,
+  options?: { strictUnique?: boolean; strictUniqueNames?: boolean },
+): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const strictUnique = Boolean(options?.strictUnique);
+  const strictUniqueNames = Boolean(options?.strictUniqueNames);
+  const seen = new Set<number>();
+  const seenNames = new Set<string>();
+  const parsed: Array<Record<string, unknown>> = [];
+  for (let index = 0; index < raw.length; index += 1) {
+    const entry = raw[index];
+    const critter = parseCritterDefinition(entry, index);
+    if (!critter) {
+      continue;
+    }
+    const critterId = Number(critter.id);
+    if (seen.has(critterId)) {
+      if (strictUnique) {
+        throw new Error(`Duplicate critter ID ${critterId} is not allowed.`);
+      }
+      continue;
+    }
+    seen.add(critterId);
+    const critterName = String(critter.name ?? '').trim().toLowerCase();
+    if (critterName) {
+      if (seenNames.has(critterName)) {
+        if (strictUniqueNames) {
+          throw new Error(`Duplicate critter name "${String(critter.name)}" is not allowed.`);
+        }
+        continue;
+      }
+      seenNames.add(critterName);
+    }
+    parsed.push(critter);
+  }
+  return parsed;
+}
+
+function parseCritterDefinition(raw: unknown, index: number): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const id = critterClampInt(record.id, 1, 999999, index + 1);
+  const name =
+    typeof record.name === 'string' && record.name.trim() ? record.name.trim().slice(0, 40) : `Critter ${index + 1}`;
+  const elementRaw = typeof record.element === 'string' ? record.element.trim().toLowerCase() : 'bloom';
+  const rarityRaw = typeof record.rarity === 'string' ? record.rarity.trim().toLowerCase() : 'common';
+  const element = CRITTER_ELEMENT_OPTIONS.has(elementRaw) ? elementRaw : 'bloom';
+  const rarity = CRITTER_RARITY_OPTIONS.has(rarityRaw) ? rarityRaw : 'common';
+  const description =
+    typeof record.description === 'string' && record.description.trim()
+      ? record.description.trim()
+      : `${name} is ready for training.`;
+  const spriteRecord =
+    record.sprite && typeof record.sprite === 'object' && !Array.isArray(record.sprite)
+      ? (record.sprite as Record<string, unknown>)
+      : null;
+  const spriteUrl = parseCritterSpriteUrl(record.spriteUrl ?? spriteRecord?.url);
+
+  const statsRecord =
+    record.baseStats && typeof record.baseStats === 'object' && !Array.isArray(record.baseStats)
+      ? (record.baseStats as Record<string, unknown>)
+      : {};
+  const baseStats = {
+    hp: critterClampInt(statsRecord.hp, 1, 999, 12),
+    attack: critterClampInt(statsRecord.attack, 1, 999, 8),
+    defense: critterClampInt(statsRecord.defense, 1, 999, 8),
+    speed: critterClampInt(statsRecord.speed, 1, 999, 8),
+  };
+
+  const abilities = parseCritterAbilities(record.abilities);
+  const abilityIdSet = new Set(abilities.map((ability) => String(ability.id)));
+  const levels = parseCritterLevels(record.levels, abilityIdSet);
+
+  return {
+    id,
+    name,
+    element,
+    rarity,
+    description,
+    spriteUrl,
+    baseStats,
+    abilities,
+    levels,
+  };
+}
+
+function parseCritterSpriteUrl(raw: unknown): string {
+  if (typeof raw !== 'string') {
+    return '';
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return '';
+  }
+  return trimmed.slice(0, 1000);
+}
+
+function parseCritterAbilities(raw: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const parsed: Array<Record<string, unknown>> = [];
+  const seenIds = new Set<string>();
+  for (let index = 0; index < raw.length; index += 1) {
+    const entry = raw[index];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const id = sanitizeIdentifier(typeof record.id === 'string' ? record.id : '', `ability-${index + 1}`);
+    if (seenIds.has(id)) {
+      continue;
+    }
+    seenIds.add(id);
+    const name =
+      typeof record.name === 'string' && record.name.trim() ? record.name.trim().slice(0, 40) : `Ability ${index + 1}`;
+    const kindRaw = typeof record.kind === 'string' ? record.kind.trim().toLowerCase() : 'passive';
+    const kind = CRITTER_ABILITY_KIND_OPTIONS.has(kindRaw) ? kindRaw : 'passive';
+    const description = typeof record.description === 'string' ? record.description.trim().slice(0, 240) : '';
+    parsed.push({
+      id,
+      name,
+      kind,
+      description,
+    });
+  }
+  return parsed;
+}
+
+function parseCritterLevels(raw: unknown, abilityIdSet: Set<string>): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const parsed: Array<Record<string, unknown>> = [];
+  const seenLevels = new Set<number>();
+  for (let index = 0; index < raw.length; index += 1) {
+    const entry = raw[index];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const level = critterClampInt(record.level, 1, 99, index + 1);
+    if (seenLevels.has(level)) {
+      continue;
+    }
+    seenLevels.add(level);
+
+    const missions = parseCritterLevelMissions(record.missions, level);
+    const statDeltaRecord =
+      record.statDelta && typeof record.statDelta === 'object' && !Array.isArray(record.statDelta)
+        ? (record.statDelta as Record<string, unknown>)
+        : {};
+    const requiredMissionCount = critterClampInt(record.requiredMissionCount, 0, missions.length, missions.length);
+    const abilityUnlockIds = Array.isArray(record.abilityUnlockIds)
+      ? record.abilityUnlockIds
+          .filter((entry): entry is string => typeof entry === 'string')
+          .map((entry) => entry.trim())
+          .filter((entry) => abilityIdSet.has(entry))
+          .slice(0, 20)
+      : [];
+
+    parsed.push({
+      level,
+      missions,
+      requiredMissionCount,
+      statDelta: {
+        hp: critterClampInt(statDeltaRecord.hp, -999, 999, 0),
+        attack: critterClampInt(statDeltaRecord.attack, -999, 999, 0),
+        defense: critterClampInt(statDeltaRecord.defense, -999, 999, 0),
+        speed: critterClampInt(statDeltaRecord.speed, -999, 999, 0),
+      },
+      abilityUnlockIds,
+    });
+  }
+
+  parsed.sort((a, b) => Number(a.level) - Number(b.level));
+  return parsed;
+}
+
+function parseCritterLevelMissions(raw: unknown, level: number): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const parsed: Array<Record<string, unknown>> = [];
+  const seenIds = new Set<string>();
+  for (let index = 0; index < raw.length; index += 1) {
+    const entry = raw[index];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const id = sanitizeIdentifier(typeof record.id === 'string' ? record.id : '', `level-${level}-mission-${index + 1}`);
+    if (seenIds.has(id)) {
+      continue;
+    }
+    seenIds.add(id);
+    const missionTypeRaw = typeof record.type === 'string' ? record.type.trim().toLowerCase() : 'opposing_knockouts';
+    const type = CRITTER_MISSION_TYPE_OPTIONS.has(missionTypeRaw) ? missionTypeRaw : 'opposing_knockouts';
+    const mission: Record<string, unknown> = {
+      id,
+      type,
+      targetValue: critterClampInt(record.targetValue, 1, 999999, 1),
+    };
+    if (type === 'ascension') {
+      mission.ascendsFromCritterId = critterClampInt(record.ascendsFromCritterId, 1, 999999, 1);
+    }
+    if (type === 'opposing_knockouts') {
+      const knockoutElements = Array.isArray(record.knockoutElements)
+        ? record.knockoutElements
+            .filter((entry): entry is string => typeof entry === 'string')
+            .map((entry) => entry.trim().toLowerCase())
+            .filter((entry, index, values) => CRITTER_ELEMENT_OPTIONS.has(entry) && values.indexOf(entry) === index)
+            .slice(0, 10)
+        : [];
+      const knockoutCritterIds = Array.isArray(record.knockoutCritterIds)
+        ? record.knockoutCritterIds
+            .map((entry) => critterClampInt(entry, 1, 999999, -1))
+            .filter((entry, index, values) => entry > 0 && values.indexOf(entry) === index)
+            .slice(0, 60)
+        : [];
+      if (knockoutCritterIds.length > 0) {
+        mission.knockoutCritterIds = knockoutCritterIds;
+      } else if (knockoutElements.length > 0) {
+        mission.knockoutElements = knockoutElements;
+      }
+    }
+    parsed.push(mission);
+  }
+  return parsed;
+}
+
+function critterClampInt(value: unknown, min: number, max: number, fallback: number): number {
+  const parsed = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function parseEncounterLibrary(
+  raw: unknown,
+  options?: { strictUnique?: boolean; strictEntries?: boolean; strictWeights?: boolean },
+): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const strictUnique = Boolean(options?.strictUnique);
+  const strictEntries = Boolean(options?.strictEntries);
+  const strictWeights = Boolean(options?.strictWeights);
+  const seenTableIds = new Set<string>();
+  const parsed: Array<Record<string, unknown>> = [];
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const entry = raw[index];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const id = sanitizeIdentifier(typeof record.id === 'string' ? record.id : '', `encounter-table-${index + 1}`);
+    if (seenTableIds.has(id)) {
+      if (strictUnique) {
+        throw new Error(`Duplicate encounter table ID "${id}" is not allowed.`);
+      }
+      continue;
+    }
+    seenTableIds.add(id);
+
+    const entries = parseEncounterEntries(record.entries, { strictUnique: strictUnique || strictEntries });
+    if (strictEntries && entries.length === 0) {
+      throw new Error(`Encounter table "${id}" must include at least one critter entry.`);
+    }
+    if (strictWeights) {
+      const totalWeight = entries.reduce((sum, tableEntry) => sum + Number(tableEntry.weight ?? 0), 0);
+      if (Math.abs(totalWeight - 1) > 0.000001) {
+        throw new Error(`Encounter table "${id}" weights must total exactly 1.0.`);
+      }
+    }
+
+    parsed.push({
+      id,
+      entries,
+    });
+  }
+
+  return parsed;
+}
+
+function parseEncounterEntries(
+  raw: unknown,
+  options?: { strictUnique?: boolean },
+): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const strictUnique = Boolean(options?.strictUnique);
+  const seenCritterIds = new Set<number>();
+  const parsed: Array<Record<string, unknown>> = [];
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const entry = raw[index];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const critterId = critterClampInt(record.critterId, 1, 999999, -1);
+    if (critterId < 0) {
+      continue;
+    }
+    if (seenCritterIds.has(critterId)) {
+      if (strictUnique) {
+        throw new Error(`Critter #${critterId} cannot be added to the same encounter table twice.`);
+      }
+      continue;
+    }
+    seenCritterIds.add(critterId);
+
+    const weight = typeof record.weight === 'number' && Number.isFinite(record.weight) ? record.weight : 0;
+    const [minLevel, maxLevel] = parseEncounterLevelRange(record.minLevel, record.maxLevel);
+    parsed.push({
+      critterId,
+      weight: Math.round(Math.max(0, Math.min(1, weight)) * 1000000) / 1000000,
+      minLevel,
+      maxLevel,
+    });
+  }
+
+  return parsed;
+}
+
+function parseEncounterLevelRange(minRaw: unknown, maxRaw: unknown): [number | null, number | null] {
+  const minLevel = parseEncounterLevelValue(minRaw);
+  const maxLevel = parseEncounterLevelValue(maxRaw);
+  if (minLevel !== null && maxLevel !== null && minLevel > maxLevel) {
+    return [maxLevel, minLevel];
+  }
+  return [minLevel, maxLevel];
+}
+
+function parseEncounterLevelValue(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return null;
+  }
+  return critterClampInt(raw, 1, 99, 1);
+}
+
+function parseMapEncounterGroups(raw: unknown, mapWidth: number, mapHeight: number): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const parsed: Array<Record<string, unknown>> = [];
+  const seenIds = new Set<string>();
+  for (let index = 0; index < raw.length; index += 1) {
+    const entry = raw[index];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const id = sanitizeIdentifier(typeof record.id === 'string' ? record.id : '', `encounter-group-${index + 1}`);
+    if (seenIds.has(id)) {
+      continue;
+    }
+    seenIds.add(id);
+
+    const tilePositions = parseMapEncounterPositions(record.tilePositions, mapWidth, mapHeight);
+    if (tilePositions.length === 0) {
+      continue;
+    }
+
+    const walkEncounterTableId = sanitizeEncounterTableReference(record.walkEncounterTableId);
+    const fishEncounterTableId = sanitizeEncounterTableReference(record.fishEncounterTableId);
+    const walkFrequency = sanitizeEncounterFrequency(record.walkFrequency);
+    const fishFrequency = sanitizeEncounterFrequency(record.fishFrequency);
+
+    parsed.push({
+      id,
+      tilePositions,
+      walkEncounterTableId,
+      fishEncounterTableId,
+      walkFrequency,
+      fishFrequency,
+    });
+  }
+  return parsed;
+}
+
+function parseMapEncounterPositions(raw: unknown, mapWidth: number, mapHeight: number): Array<Record<string, number>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const parsed: Array<Record<string, number>> = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const x = critterClampInt(record.x, 0, Math.max(0, mapWidth - 1), -1);
+    const y = critterClampInt(record.y, 0, Math.max(0, mapHeight - 1), -1);
+    if (x < 0 || y < 0) {
+      continue;
+    }
+    const key = `${x},${y}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    parsed.push({ x, y });
+  }
+  return parsed;
+}
+
+function sanitizeEncounterTableReference(raw: unknown): string | null {
+  if (typeof raw !== 'string') {
+    return null;
+  }
+  const id = sanitizeIdentifier(raw, '');
+  return id || null;
+}
+
+function sanitizeEncounterFrequency(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return 0;
+  }
+  const clamped = Math.max(0, Math.min(1, raw));
+  return Math.round(clamped * 1000) / 1000;
+}
+
+function createStarterEncounterTables(critters: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  if (critters.length === 0) {
+    return [];
+  }
+  const starterCritter =
+    critters.find((critter) => String(critter.name ?? '').trim().toLowerCase() === 'buddo') ?? critters[0];
+  const critterId = critterClampInt(starterCritter.id, 1, 999999, -1);
+  if (critterId < 0) {
+    return [];
+  }
+  return [
+    {
+      id: 'starter-critter',
+      entries: [
+        {
+          critterId,
+          weight: 1,
+        },
+      ],
+    },
+  ];
 }
 
 function getMapTileRows(map: EditableMapPayload): string[] {
@@ -828,23 +1401,38 @@ function writeCustomTiles(
         }))
       : [];
 
+    const width = typeof tile.width === 'number' ? Math.max(1, Math.floor(tile.width)) : 1;
+    const height = typeof tile.height === 'number' ? Math.max(1, Math.floor(tile.height)) : 1;
+    const tileName = typeof tile.name === 'string' ? tile.name : 'Saved Tile';
+    const ySortWithActors =
+      typeof tile.ySortWithActors === 'boolean'
+        ? tile.ySortWithActors
+        : inferTileYSortWithActors(tileName, width, height);
+
     return {
       id: typeof tile.id === 'string' ? tile.id : '',
-      name: typeof tile.name === 'string' ? tile.name : 'Saved Tile',
+      name: tileName,
       primaryCode:
         typeof tile.primaryCode === 'string' && tile.primaryCode
           ? tile.primaryCode.slice(0, 1)
           : (cells[0]?.code ?? ''),
-      width: typeof tile.width === 'number' ? Math.max(1, Math.floor(tile.width)) : 1,
-      height: typeof tile.height === 'number' ? Math.max(1, Math.floor(tile.height)) : 1,
+      width,
+      height,
+      ySortWithActors,
       cells,
     };
   });
 
-  const customEntries = new Map<string, { label: string; atlasIndex: number }>();
+  const customEntries = new Map<string, { label: string; atlasIndex: number; ySortWithActors: boolean }>();
   for (const tile of savedPaintTiles) {
     const tileName =
       typeof tile.name === 'string' && tile.name.trim() ? tile.name.trim() : 'Custom Tile';
+    const tileWidth = typeof tile.width === 'number' ? Math.max(1, Math.floor(tile.width)) : 1;
+    const tileHeight = typeof tile.height === 'number' ? Math.max(1, Math.floor(tile.height)) : 1;
+    const tileYSortWithActors =
+      typeof tile.ySortWithActors === 'boolean'
+        ? tile.ySortWithActors
+        : inferTileYSortWithActors(tileName, tileWidth, tileHeight);
     const cells = Array.isArray(tile.cells) ? tile.cells : [];
     for (const cell of cells) {
       const code = typeof cell.code === 'string' ? cell.code.trim().slice(0, 1) : '';
@@ -855,6 +1443,7 @@ function writeCustomTiles(
       customEntries.set(code, {
         label: `${tileName} ${code}`.slice(0, 60),
         atlasIndex,
+        ySortWithActors: tileYSortWithActors,
       });
     }
   }
@@ -867,6 +1456,7 @@ function writeCustomTiles(
       customEntries.set(code, {
         label: `Map Tile ${code}`,
         atlasIndex: 0,
+        ySortWithActors: true,
       });
     }
   }
@@ -900,6 +1490,7 @@ function writeCustomTiles(
       accentColor: colorForCode(code, 1),
       height: 0,
       atlasIndex: entry.atlasIndex,
+      ySortWithActors: entry.ySortWithActors,
     };
   }
 
@@ -929,6 +1520,7 @@ function writeCustomTiles(
     '  primaryCode: string;',
     '  width: number;',
     '  height: number;',
+    '  ySortWithActors: boolean;',
     '  cells: SavedPaintTileDatabaseCell[];',
     '}',
     '',
@@ -993,6 +1585,7 @@ function saveTileDatabaseToProject(payload: SaveTilesRequestPayload): {
     npcs: [],
     warps: [],
     interactions: [],
+    encounterGroups: [],
   };
 
   const mapPayload = payload.map ? parseEditableMapPayload({ map: payload.map }) : fallbackMap;
@@ -1257,10 +1850,16 @@ function sanitizeTilesetConfig(raw: SaveMapRequestPayload['tileset']): {
 }
 
 function buildCustomTileDefinitions(savedPaintTiles: SavedPaintTilePayload[]): Record<string, unknown> {
-  const customEntries = new Map<string, { label: string; atlasIndex: number }>();
+  const customEntries = new Map<string, { label: string; atlasIndex: number; ySortWithActors: boolean }>();
   for (const tile of savedPaintTiles) {
     const tileName =
       typeof tile.name === 'string' && tile.name.trim() ? tile.name.trim() : 'Custom Tile';
+    const tileWidth = typeof tile.width === 'number' ? Math.max(1, Math.floor(tile.width)) : 1;
+    const tileHeight = typeof tile.height === 'number' ? Math.max(1, Math.floor(tile.height)) : 1;
+    const tileYSortWithActors =
+      typeof tile.ySortWithActors === 'boolean'
+        ? tile.ySortWithActors
+        : inferTileYSortWithActors(tileName, tileWidth, tileHeight);
     const cells = Array.isArray(tile.cells) ? tile.cells : [];
     for (const cell of cells) {
       const code = typeof cell.code === 'string' ? cell.code.trim().slice(0, 1) : '';
@@ -1271,6 +1870,7 @@ function buildCustomTileDefinitions(savedPaintTiles: SavedPaintTilePayload[]): R
       customEntries.set(code, {
         label: `${tileName} ${code}`.slice(0, 60),
         atlasIndex,
+        ySortWithActors: tileYSortWithActors,
       });
     }
   }
@@ -1286,6 +1886,7 @@ function buildCustomTileDefinitions(savedPaintTiles: SavedPaintTilePayload[]): R
       accentColor: colorForCode(code, 1),
       height: 0,
       atlasIndex: entry.atlasIndex,
+      ySortWithActors: entry.ySortWithActors,
     };
   }
   return definitions;
@@ -1293,6 +1894,17 @@ function buildCustomTileDefinitions(savedPaintTiles: SavedPaintTilePayload[]): R
 
 const WORLD_MAP_BASELINE_VERSION = 1;
 const SPAWN_MAP_ID = 'spawn';
+const GLOBAL_CATALOG_KEY = 'main';
+const GLOBAL_WORLD_STATE_KEY = 'world';
+const LEGACY_CATALOG_TABLES = [
+  'world_maps',
+  'user_world_state',
+  'tile_libraries',
+  'npc_libraries',
+  'player_sprite_configs',
+  'critter_libraries',
+  'encounter_libraries',
+] as const;
 
 function createSpawnMapPayload(): EditableMapPayload {
   const width = 11;
@@ -1305,7 +1917,7 @@ function createSpawnMapPayload(): EditableMapPayload {
     name: 'Portlock Beach',
     layers: [
       {
-        id: 'base',
+        id: 1,
         name: 'Base',
         tiles: Array.from({ length: height }, () => blankRow),
         rotations: Array.from({ length: height }, () => emptyCollisionRow),
@@ -1317,6 +1929,7 @@ function createSpawnMapPayload(): EditableMapPayload {
     npcs: [],
     warps: [],
     interactions: [],
+    encounterGroups: [],
   };
 }
 
@@ -1334,6 +1947,166 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       : null;
   let schemaReady = false;
 
+  const legacyTableExists = async (client: PoolClient, tableName: (typeof LEGACY_CATALOG_TABLES)[number]): Promise<boolean> => {
+    const result = await client.query<{ relation_name: string | null }>('SELECT to_regclass($1) AS relation_name', [
+      `public.${tableName}`,
+    ]);
+    return typeof result.rows[0]?.relation_name === 'string' && result.rows[0].relation_name.length > 0;
+  };
+
+  const migrateLegacyCatalogData = async (client: PoolClient): Promise<void> => {
+    const existingLegacyTables = new Set<(typeof LEGACY_CATALOG_TABLES)[number]>();
+    for (const tableName of LEGACY_CATALOG_TABLES) {
+      if (await legacyTableExists(client, tableName)) {
+        existingLegacyTables.add(tableName);
+      }
+    }
+
+    if (existingLegacyTables.size === 0) {
+      return;
+    }
+
+    const gameMapCountResult = await client.query('SELECT COUNT(*)::int AS count FROM game_maps');
+    const gameMapCount = Number(gameMapCountResult.rows[0]?.count ?? 0);
+    if (gameMapCount === 0 && existingLegacyTables.has('world_maps')) {
+      await client.query(`
+        INSERT INTO game_maps (map_id, map_data, updated_at)
+        SELECT map_id, map_data, COALESCE(updated_at, NOW())
+        FROM (
+          SELECT DISTINCT ON (map_id) map_id, map_data, updated_at
+          FROM world_maps
+          ORDER BY map_id, updated_at DESC NULLS LAST
+        ) legacy_maps
+        ON CONFLICT (map_id)
+        DO UPDATE SET map_data = EXCLUDED.map_data, updated_at = EXCLUDED.updated_at
+      `);
+    }
+
+    const globalTileResult = await client.query('SELECT catalog_key FROM game_tile_libraries WHERE catalog_key = $1', [
+      GLOBAL_CATALOG_KEY,
+    ]);
+    if ((globalTileResult.rowCount ?? 0) === 0 && existingLegacyTables.has('tile_libraries')) {
+      const legacyTileResult = await client.query(
+        'SELECT saved_tiles, tileset_config FROM tile_libraries ORDER BY updated_at DESC NULLS LAST LIMIT 1',
+      );
+      const legacySavedTiles = parseSavedPaintTiles(legacyTileResult.rows[0]?.saved_tiles);
+      const legacyTilesetConfig = sanitizeTilesetConfig(legacyTileResult.rows[0]?.tileset_config ?? null);
+      await client.query(
+        `
+          INSERT INTO game_tile_libraries (catalog_key, saved_tiles, tileset_config, updated_at)
+          VALUES ($1, $2::jsonb, $3::jsonb, NOW())
+          ON CONFLICT (catalog_key)
+          DO UPDATE SET saved_tiles = EXCLUDED.saved_tiles, tileset_config = EXCLUDED.tileset_config, updated_at = NOW()
+        `,
+        [GLOBAL_CATALOG_KEY, JSON.stringify(legacySavedTiles), JSON.stringify(legacyTilesetConfig)],
+      );
+    }
+
+    const globalNpcResult = await client.query('SELECT catalog_key FROM game_npc_libraries WHERE catalog_key = $1', [
+      GLOBAL_CATALOG_KEY,
+    ]);
+    if ((globalNpcResult.rowCount ?? 0) === 0 && existingLegacyTables.has('npc_libraries')) {
+      const legacyNpcResult = await client.query(
+        'SELECT sprite_library, character_library FROM npc_libraries ORDER BY updated_at DESC NULLS LAST LIMIT 1',
+      );
+      const legacySpriteLibrary = Array.isArray(legacyNpcResult.rows[0]?.sprite_library) ? legacyNpcResult.rows[0].sprite_library : [];
+      const legacyCharacterLibrary = Array.isArray(legacyNpcResult.rows[0]?.character_library)
+        ? legacyNpcResult.rows[0].character_library
+        : [];
+      await client.query(
+        `
+          INSERT INTO game_npc_libraries (catalog_key, sprite_library, character_library, updated_at)
+          VALUES ($1, $2::jsonb, $3::jsonb, NOW())
+          ON CONFLICT (catalog_key)
+          DO UPDATE SET sprite_library = EXCLUDED.sprite_library, character_library = EXCLUDED.character_library, updated_at = NOW()
+        `,
+        [GLOBAL_CATALOG_KEY, JSON.stringify(legacySpriteLibrary), JSON.stringify(legacyCharacterLibrary)],
+      );
+    }
+
+    const globalPlayerSpriteResult = await client.query(
+      'SELECT catalog_key FROM game_player_sprite_configs WHERE catalog_key = $1',
+      [GLOBAL_CATALOG_KEY],
+    );
+    if ((globalPlayerSpriteResult.rowCount ?? 0) === 0 && existingLegacyTables.has('player_sprite_configs')) {
+      const legacyPlayerSpriteResult = await client.query(
+        'SELECT sprite_config FROM player_sprite_configs ORDER BY updated_at DESC NULLS LAST LIMIT 1',
+      );
+      const legacySpriteConfig = sanitizeLoadedPlayerSpriteConfig(legacyPlayerSpriteResult.rows[0]?.sprite_config) ?? {};
+      await client.query(
+        `
+          INSERT INTO game_player_sprite_configs (catalog_key, sprite_config, updated_at)
+          VALUES ($1, $2::jsonb, NOW())
+          ON CONFLICT (catalog_key)
+          DO UPDATE SET sprite_config = EXCLUDED.sprite_config, updated_at = NOW()
+        `,
+        [GLOBAL_CATALOG_KEY, JSON.stringify(legacySpriteConfig)],
+      );
+    }
+
+    const globalCritterCountResult = await client.query('SELECT COUNT(*)::int AS count FROM game_critter_catalog');
+    const globalCritterCount = Number(globalCritterCountResult.rows[0]?.count ?? 0);
+    if (globalCritterCount === 0 && existingLegacyTables.has('critter_libraries')) {
+      const legacyCritterResult = await client.query(
+        'SELECT critters FROM critter_libraries ORDER BY updated_at DESC NULLS LAST LIMIT 1',
+      );
+      const legacyCritters = parseCritterLibrary(legacyCritterResult.rows[0]?.critters);
+      const seenCritterIds = new Set<number>();
+      const seenCritterNames = new Set<string>();
+      for (const critter of legacyCritters) {
+        const critterName = String(critter.name ?? '').trim();
+        const critterNameKey = critterName.toLowerCase();
+        const critterId = critterClampInt(critter.id, 1, 999999, -1);
+        if (!critterName || critterId < 0 || seenCritterIds.has(critterId) || seenCritterNames.has(critterNameKey)) {
+          continue;
+        }
+        seenCritterIds.add(critterId);
+        seenCritterNames.add(critterNameKey);
+        await client.query(
+          `
+            INSERT INTO game_critter_catalog (name, critter_id, critter_data, updated_at)
+            VALUES ($1, $2, $3::jsonb, NOW())
+            ON CONFLICT (name)
+            DO UPDATE SET critter_id = EXCLUDED.critter_id, critter_data = EXCLUDED.critter_data, updated_at = NOW()
+          `,
+          [critterName, critterId, JSON.stringify(critter)],
+        );
+      }
+    }
+
+    const globalEncounterCountResult = await client.query('SELECT COUNT(*)::int AS count FROM game_encounter_catalog');
+    const globalEncounterCount = Number(globalEncounterCountResult.rows[0]?.count ?? 0);
+    if (globalEncounterCount === 0 && existingLegacyTables.has('encounter_libraries')) {
+      const legacyEncounterResult = await client.query(
+        'SELECT encounter_tables FROM encounter_libraries ORDER BY updated_at DESC NULLS LAST LIMIT 1',
+      );
+      const legacyEncounterTables = parseEncounterLibrary(legacyEncounterResult.rows[0]?.encounter_tables);
+      const seenTableIds = new Set<string>();
+      for (const table of legacyEncounterTables) {
+        const tableId = sanitizeIdentifier(typeof table.id === 'string' ? table.id : '', '');
+        if (!tableId || seenTableIds.has(tableId)) {
+          continue;
+        }
+        seenTableIds.add(tableId);
+        await client.query(
+          `
+            INSERT INTO game_encounter_catalog (table_id, table_data, updated_at)
+            VALUES ($1, $2::jsonb, NOW())
+            ON CONFLICT (table_id)
+            DO UPDATE SET table_data = EXCLUDED.table_data, updated_at = NOW()
+          `,
+          [tableId, JSON.stringify(table)],
+        );
+      }
+    }
+  };
+
+  const dropLegacyCatalogTables = async (client: PoolClient): Promise<void> => {
+    for (const tableName of LEGACY_CATALOG_TABLES) {
+      await client.query(`DROP TABLE IF EXISTS ${tableName} CASCADE`);
+    }
+  };
+
   const ensureSchema = async () => {
     if (!pool) {
       throw new Error('DB_CONNECTION_STRING is missing. Configure it in .env.');
@@ -1348,9 +2121,14 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         email TEXT NOT NULL UNIQUE,
         password_hash TEXT NOT NULL,
         display_name TEXT NOT NULL,
+        is_admin BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+    `);
+    await pool.query(`
+      ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
     `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS app_sessions (
@@ -1368,55 +2146,75 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       );
     `);
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS world_maps (
-        owner_user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
-        map_id TEXT NOT NULL,
-        map_data JSONB NOT NULL,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        PRIMARY KEY (owner_user_id, map_id)
-      );
-    `);
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS user_world_state (
-        owner_user_id TEXT PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
+      CREATE TABLE IF NOT EXISTS game_catalog_state (
+        catalog_key TEXT PRIMARY KEY,
         map_init_version INTEGER NOT NULL DEFAULT 0,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS tile_libraries (
-        owner_user_id TEXT PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
+      CREATE TABLE IF NOT EXISTS game_maps (
+        map_id TEXT PRIMARY KEY,
+        map_data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_tile_libraries (
+        catalog_key TEXT PRIMARY KEY,
         tileset_config JSONB,
         saved_tiles JSONB NOT NULL DEFAULT '[]'::jsonb,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS npc_libraries (
-        owner_user_id TEXT PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
+      CREATE TABLE IF NOT EXISTS game_npc_libraries (
+        catalog_key TEXT PRIMARY KEY,
         sprite_library JSONB NOT NULL DEFAULT '[]'::jsonb,
         character_library JSONB NOT NULL DEFAULT '[]'::jsonb,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS player_sprite_configs (
-        owner_user_id TEXT PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
+      CREATE TABLE IF NOT EXISTS game_player_sprite_configs (
+        catalog_key TEXT PRIMARY KEY,
         sprite_config JSONB NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS critter_libraries (
-        owner_user_id TEXT PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
-        critters JSONB NOT NULL DEFAULT '[]'::jsonb,
+      CREATE TABLE IF NOT EXISTS game_critter_catalog (
+        name TEXT PRIMARY KEY,
+        critter_id INTEGER NOT NULL UNIQUE,
+        critter_data JSONB NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_encounter_catalog (
+        table_id TEXT PRIMARY KEY,
+        table_data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await migrateLegacyCatalogData(client);
+      await dropLegacyCatalogTables(client);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
     schemaReady = true;
   };
 
-  const ensureWorldBaselineForUser = async (userId: string): Promise<void> => {
+  const ensureGlobalCatalogBaseline = async (): Promise<void> => {
     await ensureSchema();
     if (!pool) {
       throw new Error('Database unavailable.');
@@ -1427,50 +2225,158 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       await client.query('BEGIN');
 
       const stateResult = await client.query(
-        'SELECT map_init_version FROM user_world_state WHERE owner_user_id = $1',
-        [userId],
+        'SELECT map_init_version FROM game_catalog_state WHERE catalog_key = $1',
+        [GLOBAL_WORLD_STATE_KEY],
       );
       const mapInitVersion = Number(stateResult.rows[0]?.map_init_version ?? 0);
-      const mapCountResult = await client.query('SELECT COUNT(*)::int AS count FROM world_maps WHERE owner_user_id = $1', [
-        userId,
-      ]);
+      const mapCountResult = await client.query('SELECT COUNT(*)::int AS count FROM game_maps');
       const mapCount = Number(mapCountResult.rows[0]?.count ?? 0);
 
-      if (mapInitVersion < WORLD_MAP_BASELINE_VERSION) {
-        if (mapCount === 0) {
-          const spawnMap = createSpawnMapPayload();
-          await client.query(
-            `
-              INSERT INTO world_maps (owner_user_id, map_id, map_data, updated_at)
-              VALUES ($1, $2, $3::jsonb, NOW())
-              ON CONFLICT (owner_user_id, map_id)
-              DO UPDATE SET map_data = EXCLUDED.map_data, updated_at = NOW()
-            `,
-            [userId, spawnMap.id, JSON.stringify(spawnMap)],
-          );
-        }
-        await client.query(
-          `
-            INSERT INTO user_world_state (owner_user_id, map_init_version, updated_at)
-            VALUES ($1, $2, NOW())
-            ON CONFLICT (owner_user_id)
-            DO UPDATE SET map_init_version = EXCLUDED.map_init_version, updated_at = NOW()
-          `,
-          [userId, WORLD_MAP_BASELINE_VERSION],
-        );
-      } else if (mapCount === 0) {
+      if (mapCount === 0) {
         const spawnMap = createSpawnMapPayload();
         await client.query(
           `
-            INSERT INTO world_maps (owner_user_id, map_id, map_data, updated_at)
-            VALUES ($1, $2, $3::jsonb, NOW())
-            ON CONFLICT (owner_user_id, map_id)
+            INSERT INTO game_maps (map_id, map_data, updated_at)
+            VALUES ($1, $2::jsonb, NOW())
+            ON CONFLICT (map_id)
             DO UPDATE SET map_data = EXCLUDED.map_data, updated_at = NOW()
           `,
-          [userId, spawnMap.id, JSON.stringify(spawnMap)],
+          [spawnMap.id, JSON.stringify(spawnMap)],
+        );
+      }
+      if (mapInitVersion < WORLD_MAP_BASELINE_VERSION || mapCount === 0) {
+        await client.query(
+          `
+            INSERT INTO game_catalog_state (catalog_key, map_init_version, updated_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (catalog_key)
+            DO UPDATE SET map_init_version = EXCLUDED.map_init_version, updated_at = NOW()
+          `,
+          [GLOBAL_WORLD_STATE_KEY, WORLD_MAP_BASELINE_VERSION],
         );
       }
 
+      const globalTileResult = await client.query('SELECT catalog_key FROM game_tile_libraries WHERE catalog_key = $1', [
+        GLOBAL_CATALOG_KEY,
+      ]);
+      if ((globalTileResult.rowCount ?? 0) === 0) {
+        await client.query(
+          `
+            INSERT INTO game_tile_libraries (catalog_key, saved_tiles, tileset_config, updated_at)
+            VALUES ($1, '[]'::jsonb, NULL, NOW())
+          `,
+          [GLOBAL_CATALOG_KEY],
+        );
+      }
+
+      const globalNpcResult = await client.query('SELECT catalog_key FROM game_npc_libraries WHERE catalog_key = $1', [
+        GLOBAL_CATALOG_KEY,
+      ]);
+      if ((globalNpcResult.rowCount ?? 0) === 0) {
+        await client.query(
+          `
+            INSERT INTO game_npc_libraries (catalog_key, sprite_library, character_library, updated_at)
+            VALUES ($1, '[]'::jsonb, '[]'::jsonb, NOW())
+          `,
+          [GLOBAL_CATALOG_KEY],
+        );
+      }
+
+      const globalPlayerSpriteResult = await client.query(
+        'SELECT catalog_key FROM game_player_sprite_configs WHERE catalog_key = $1',
+        [GLOBAL_CATALOG_KEY],
+      );
+      if ((globalPlayerSpriteResult.rowCount ?? 0) === 0) {
+        await client.query(
+          `
+            INSERT INTO game_player_sprite_configs (catalog_key, sprite_config, updated_at)
+            VALUES ($1, '{}'::jsonb, NOW())
+          `,
+          [GLOBAL_CATALOG_KEY],
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
+  const readGlobalCritterCatalog = async (): Promise<Array<Record<string, unknown>>> => {
+    if (!pool) {
+      return [];
+    }
+    const result = await pool.query(
+      'SELECT critter_data FROM game_critter_catalog ORDER BY critter_id ASC, name ASC',
+    );
+    return parseCritterLibrary(result.rows.map((row) => row.critter_data));
+  };
+
+  const writeGlobalCritterCatalog = async (critters: Array<Record<string, unknown>>): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM game_critter_catalog');
+      for (const critter of critters) {
+        const critterName = String(critter.name ?? '').trim();
+        const critterId = critterClampInt(critter.id, 1, 999999, -1);
+        if (!critterName || critterId < 0) {
+          continue;
+        }
+        await client.query(
+          `
+            INSERT INTO game_critter_catalog (name, critter_id, critter_data, updated_at)
+            VALUES ($1, $2, $3::jsonb, NOW())
+          `,
+          [critterName, critterId, JSON.stringify(critter)],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
+  const readGlobalEncounterCatalog = async (): Promise<Array<Record<string, unknown>>> => {
+    if (!pool) {
+      return [];
+    }
+    const result = await pool.query(
+      'SELECT table_data FROM game_encounter_catalog ORDER BY table_id ASC',
+    );
+    return parseEncounterLibrary(result.rows.map((row) => row.table_data));
+  };
+
+  const writeGlobalEncounterCatalog = async (encounterTables: Array<Record<string, unknown>>): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM game_encounter_catalog');
+      for (const table of encounterTables) {
+        const tableId = sanitizeIdentifier(typeof table.id === 'string' ? table.id : '', '');
+        if (!tableId) {
+          continue;
+        }
+        await client.query(
+          `
+            INSERT INTO game_encounter_catalog (table_id, table_data, updated_at)
+            VALUES ($1, $2::jsonb, NOW())
+          `,
+          [tableId, JSON.stringify(table)],
+        );
+      }
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');
@@ -1496,14 +2402,14 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
     const tokenHash = hashToken(token);
     const sessionResult = await pool.query(
       `
-        SELECT u.id, u.email, u.display_name
+        SELECT u.id, u.email, u.display_name, u.is_admin
         FROM app_sessions s
         JOIN app_users u ON u.id = s.user_id
         WHERE s.token_hash = $1 AND s.expires_at > NOW()
       `,
       [tokenHash],
     );
-    const user = sessionResult.rows[0] as { id: string; email: string; display_name: string } | undefined;
+    const user = sessionResult.rows[0] as { id: string; email: string; display_name: string; is_admin: boolean } | undefined;
     if (!user) {
       sendJson(res, 401, { ok: false, error: 'Session expired. Please sign in again.' });
       return null;
@@ -1516,8 +2422,21 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         id: user.id,
         email: user.email,
         displayName: user.display_name,
+        isAdmin: Boolean(user.is_admin),
       },
     };
+  };
+
+  const requireAdminAuth = async (req: IncomingMessage, res: ServerResponse) => {
+    const auth = await requireAuth(req, res);
+    if (!auth) {
+      return null;
+    }
+    if (!auth.user.isAdmin) {
+      sendJson(res, 403, { ok: false, error: 'Admin access required.' });
+      return null;
+    }
+    return auth;
   };
 
   const rewriteAdminRoute = (req: IncomingMessage, _res: ServerResponse, next: () => void) => {
@@ -1564,6 +2483,8 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       '/api/admin/spritesheets/list',
       '/api/admin/critters/save',
       '/api/admin/critters/list',
+      '/api/admin/encounters/save',
+      '/api/admin/encounters/list',
     ]);
     if (!handledRoutes.has(url)) {
       next();
@@ -1600,8 +2521,8 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         const passwordHash = await bcrypt.hash(password, 10);
         await pool.query(
           `
-            INSERT INTO app_users (id, email, password_hash, display_name, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, NOW(), NOW())
+            INSERT INTO app_users (id, email, password_hash, display_name, is_admin, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, FALSE, NOW(), NOW())
           `,
           [userId, email, passwordHash, displayName],
         );
@@ -1623,6 +2544,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
               id: userId,
               email,
               displayName,
+              isAdmin: false,
             },
           },
         });
@@ -1644,7 +2566,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         }
 
         const userResult = await pool.query(
-          'SELECT id, email, display_name, password_hash FROM app_users WHERE email = $1',
+          'SELECT id, email, display_name, password_hash, is_admin FROM app_users WHERE email = $1',
           [email],
         );
         const user = userResult.rows[0] as
@@ -1653,6 +2575,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
               email: string;
               display_name: string;
               password_hash: string;
+              is_admin: boolean;
             }
           | undefined;
         if (!user) {
@@ -1684,6 +2607,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
               id: user.id,
               email: user.email,
               displayName: user.display_name,
+              isAdmin: Boolean(user.is_admin),
             },
           },
         });
@@ -1785,15 +2709,18 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         if (!auth || !pool) {
           return;
         }
-        await ensureWorldBaselineForUser(auth.user.id);
-        const [mapsResult, tileResult, playerSpriteResult, crittersResult] = await Promise.all([
-          pool.query('SELECT map_data FROM world_maps WHERE owner_user_id = $1 ORDER BY updated_at DESC', [auth.user.id]),
-          pool.query('SELECT saved_tiles, tileset_config FROM tile_libraries WHERE owner_user_id = $1', [auth.user.id]),
-          pool.query('SELECT sprite_config FROM player_sprite_configs WHERE owner_user_id = $1', [auth.user.id]),
-          pool.query('SELECT critters FROM critter_libraries WHERE owner_user_id = $1', [auth.user.id]),
+        await ensureGlobalCatalogBaseline();
+        const [mapsResult, tileResult, playerSpriteResult, crittersResult, encounterResult] = await Promise.all([
+          pool.query('SELECT map_data FROM game_maps ORDER BY updated_at DESC'),
+          pool.query('SELECT saved_tiles, tileset_config FROM game_tile_libraries WHERE catalog_key = $1', [GLOBAL_CATALOG_KEY]),
+          pool.query('SELECT sprite_config FROM game_player_sprite_configs WHERE catalog_key = $1', [GLOBAL_CATALOG_KEY]),
+          pool.query('SELECT critter_data FROM game_critter_catalog ORDER BY critter_id ASC, name ASC'),
+          pool.query('SELECT table_data FROM game_encounter_catalog ORDER BY table_id ASC'),
         ]);
         const savedTiles = parseSavedPaintTiles(tileResult.rows[0]?.saved_tiles);
         const customTileDefinitions = buildCustomTileDefinitions(savedTiles);
+        const critters = parseCritterLibrary(crittersResult.rows.map((row) => row.critter_data));
+        const encounterTables = parseEncounterLibrary(encounterResult.rows.map((row) => row.table_data));
         sendJson(res, 200, {
           ok: true,
           content: {
@@ -1802,32 +2729,30 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
             customTileDefinitions,
             customTilesetConfig: tileResult.rows[0]?.tileset_config ?? null,
             playerSpriteConfig: sanitizeLoadedPlayerSpriteConfig(playerSpriteResult.rows[0]?.sprite_config),
-            critters: crittersResult.rows[0]?.critters ?? [],
+            critters,
+            encounterTables,
           },
         });
         return;
       }
 
       if (url === '/api/admin/maps/list' && req.method === 'GET') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
-        await ensureWorldBaselineForUser(auth.user.id);
-        const mapsResult = await pool.query(
-          'SELECT map_data FROM world_maps WHERE owner_user_id = $1 ORDER BY updated_at DESC',
-          [auth.user.id],
-        );
+        await ensureGlobalCatalogBaseline();
+        const mapsResult = await pool.query('SELECT map_data FROM game_maps ORDER BY updated_at DESC');
         sendJson(res, 200, { ok: true, maps: mapsResult.rows.map((row) => row.map_data) });
         return;
       }
 
       if (url === '/api/admin/maps/save' && req.method === 'POST') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
-        await ensureWorldBaselineForUser(auth.user.id);
+        await ensureGlobalCatalogBaseline();
         const rawBody = (await readJsonBody(req)) as SaveMapRequestPayload;
         const map = parseEditableMapPayload(rawBody);
 
@@ -1840,45 +2765,46 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
 
         await pool.query(
           `
-            INSERT INTO world_maps (owner_user_id, map_id, map_data, updated_at)
-            VALUES ($1, $2, $3::jsonb, NOW())
-            ON CONFLICT (owner_user_id, map_id)
+            INSERT INTO game_maps (map_id, map_data, updated_at)
+            VALUES ($1, $2::jsonb, NOW())
+            ON CONFLICT (map_id)
             DO UPDATE SET map_data = EXCLUDED.map_data, updated_at = NOW()
           `,
-          [auth.user.id, map.id, JSON.stringify(map)],
+          [map.id, JSON.stringify(map)],
         );
 
         const savedTiles = parseSavedPaintTiles(rawBody.savedPaintTiles);
         const tilesetConfig = sanitizeTilesetConfig(rawBody.tileset ?? null);
         await pool.query(
           `
-            INSERT INTO tile_libraries (owner_user_id, saved_tiles, tileset_config, updated_at)
+            INSERT INTO game_tile_libraries (catalog_key, saved_tiles, tileset_config, updated_at)
             VALUES ($1, $2::jsonb, $3::jsonb, NOW())
-            ON CONFLICT (owner_user_id)
+            ON CONFLICT (catalog_key)
             DO UPDATE SET saved_tiles = EXCLUDED.saved_tiles, tileset_config = EXCLUDED.tileset_config, updated_at = NOW()
           `,
-          [auth.user.id, JSON.stringify(savedTiles), JSON.stringify(tilesetConfig)],
+          [GLOBAL_CATALOG_KEY, JSON.stringify(savedTiles), JSON.stringify(tilesetConfig)],
         );
 
         sendJson(res, 200, {
           ok: true,
           mapId: map.id,
-          mapFilePath: fileResult?.mapFilePath ?? 'database:world_maps',
-          indexFilePath: fileResult?.indexFilePath ?? 'database:world_maps',
-          customTilesFilePath: fileResult?.customTilesFilePath ?? 'database:tile_libraries',
+          mapFilePath: fileResult?.mapFilePath ?? 'database:game_maps',
+          indexFilePath: fileResult?.indexFilePath ?? 'database:game_maps',
+          customTilesFilePath: fileResult?.customTilesFilePath ?? 'database:game_tile_libraries',
           customTileCodes: Object.keys(buildCustomTileDefinitions(savedTiles)),
         });
         return;
       }
 
       if (url === '/api/admin/tiles/list' && req.method === 'GET') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
+        await ensureGlobalCatalogBaseline();
         const result = await pool.query(
-          'SELECT saved_tiles, tileset_config FROM tile_libraries WHERE owner_user_id = $1',
-          [auth.user.id],
+          'SELECT saved_tiles, tileset_config FROM game_tile_libraries WHERE catalog_key = $1',
+          [GLOBAL_CATALOG_KEY],
         );
         sendJson(res, 200, {
           ok: true,
@@ -1889,10 +2815,11 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       }
 
       if (url === '/api/admin/tiles/save' && req.method === 'POST') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
+        await ensureGlobalCatalogBaseline();
         const rawBody = (await readJsonBody(req)) as SaveTilesRequestPayload;
         const parsedTiles = parseSavedPaintTiles(rawBody.savedPaintTiles);
         const tilesetConfig = sanitizeTilesetConfig(rawBody.tileset ?? null);
@@ -1906,30 +2833,31 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
 
         await pool.query(
           `
-            INSERT INTO tile_libraries (owner_user_id, saved_tiles, tileset_config, updated_at)
+            INSERT INTO game_tile_libraries (catalog_key, saved_tiles, tileset_config, updated_at)
             VALUES ($1, $2::jsonb, $3::jsonb, NOW())
-            ON CONFLICT (owner_user_id)
+            ON CONFLICT (catalog_key)
             DO UPDATE SET saved_tiles = EXCLUDED.saved_tiles, tileset_config = EXCLUDED.tileset_config, updated_at = NOW()
           `,
-          [auth.user.id, JSON.stringify(parsedTiles), JSON.stringify(tilesetConfig)],
+          [GLOBAL_CATALOG_KEY, JSON.stringify(parsedTiles), JSON.stringify(tilesetConfig)],
         );
 
         sendJson(res, 200, {
           ok: true,
-          customTilesFilePath: fileResult?.customTilesFilePath ?? 'database:tile_libraries',
+          customTilesFilePath: fileResult?.customTilesFilePath ?? 'database:game_tile_libraries',
           customTileCodes: Object.keys(buildCustomTileDefinitions(parsedTiles)),
         });
         return;
       }
 
       if (url === '/api/admin/npc/list' && req.method === 'GET') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
+        await ensureGlobalCatalogBaseline();
         const result = await pool.query(
-          'SELECT sprite_library, character_library FROM npc_libraries WHERE owner_user_id = $1',
-          [auth.user.id],
+          'SELECT sprite_library, character_library FROM game_npc_libraries WHERE catalog_key = $1',
+          [GLOBAL_CATALOG_KEY],
         );
         sendJson(res, 200, {
           ok: true,
@@ -1940,42 +2868,44 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       }
 
       if (url === '/api/admin/npc/save' && req.method === 'POST') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
+        await ensureGlobalCatalogBaseline();
         const body = (await readJsonBody(req)) as SaveNpcLibraryRequestPayload;
         const spriteLibrary = Array.isArray(body.npcSpriteLibrary) ? body.npcSpriteLibrary : [];
         const characterLibrary = Array.isArray(body.npcCharacterLibrary) ? body.npcCharacterLibrary : [];
 
         await pool.query(
           `
-            INSERT INTO npc_libraries (owner_user_id, sprite_library, character_library, updated_at)
+            INSERT INTO game_npc_libraries (catalog_key, sprite_library, character_library, updated_at)
             VALUES ($1, $2::jsonb, $3::jsonb, NOW())
-            ON CONFLICT (owner_user_id)
+            ON CONFLICT (catalog_key)
             DO UPDATE SET sprite_library = EXCLUDED.sprite_library, character_library = EXCLUDED.character_library, updated_at = NOW()
           `,
-          [auth.user.id, JSON.stringify(spriteLibrary), JSON.stringify(characterLibrary)],
+          [GLOBAL_CATALOG_KEY, JSON.stringify(spriteLibrary), JSON.stringify(characterLibrary)],
         );
         sendJson(res, 200, { ok: true });
         return;
       }
 
       if (url === '/api/admin/player-sprite/get' && req.method === 'GET') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
+        await ensureGlobalCatalogBaseline();
         const result = await pool.query(
-          'SELECT sprite_config FROM player_sprite_configs WHERE owner_user_id = $1',
-          [auth.user.id],
+          'SELECT sprite_config FROM game_player_sprite_configs WHERE catalog_key = $1',
+          [GLOBAL_CATALOG_KEY],
         );
         sendJson(res, 200, { ok: true, playerSprite: sanitizeLoadedPlayerSpriteConfig(result.rows[0]?.sprite_config) });
         return;
       }
 
       if (url === '/api/admin/spritesheets/list' && req.method === 'GET') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth) {
           return;
         }
@@ -2004,51 +2934,83 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       }
 
       if (url === '/api/admin/player-sprite/save' && req.method === 'POST') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
+        await ensureGlobalCatalogBaseline();
         const rawBody = (await readJsonBody(req)) as SavePlayerSpriteRequestPayload;
         const result = savePlayerSpriteToProject(rawBody);
         await pool.query(
           `
-            INSERT INTO player_sprite_configs (owner_user_id, sprite_config, updated_at)
+            INSERT INTO game_player_sprite_configs (catalog_key, sprite_config, updated_at)
             VALUES ($1, $2::jsonb, NOW())
-            ON CONFLICT (owner_user_id)
+            ON CONFLICT (catalog_key)
             DO UPDATE SET sprite_config = EXCLUDED.sprite_config, updated_at = NOW()
           `,
-          [auth.user.id, JSON.stringify(result.spriteConfig)],
+          [GLOBAL_CATALOG_KEY, JSON.stringify(result.spriteConfig)],
         );
         sendJson(res, 200, { ok: true, filePath: result.filePath });
         return;
       }
 
       if (url === '/api/admin/critters/list' && req.method === 'GET') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
-        const result = await pool.query('SELECT critters FROM critter_libraries WHERE owner_user_id = $1', [auth.user.id]);
-        sendJson(res, 200, { ok: true, critters: result.rows[0]?.critters ?? [] });
+        await ensureGlobalCatalogBaseline();
+        const critters = await readGlobalCritterCatalog();
+        sendJson(res, 200, { ok: true, critters });
         return;
       }
 
       if (url === '/api/admin/critters/save' && req.method === 'POST') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
+        await ensureGlobalCatalogBaseline();
         const body = (await readJsonBody(req)) as { critters?: unknown };
-        const critters = Array.isArray(body.critters) ? body.critters : [];
-        await pool.query(
-          `
-            INSERT INTO critter_libraries (owner_user_id, critters, updated_at)
-            VALUES ($1, $2::jsonb, NOW())
-            ON CONFLICT (owner_user_id)
-            DO UPDATE SET critters = EXCLUDED.critters, updated_at = NOW()
-          `,
-          [auth.user.id, JSON.stringify(critters)],
-        );
+        const critters = parseCritterLibrary(body.critters, { strictUnique: true, strictUniqueNames: true });
+        await writeGlobalCritterCatalog(critters);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (url === '/api/admin/encounters/list' && req.method === 'GET') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+
+        let encounterTables = await readGlobalEncounterCatalog();
+        const critters = await readGlobalCritterCatalog();
+
+        if (encounterTables.length === 0 && critters.length > 0) {
+          encounterTables = createStarterEncounterTables(critters);
+          await writeGlobalEncounterCatalog(encounterTables);
+        }
+
+        sendJson(res, 200, { ok: true, encounterTables });
+        return;
+      }
+
+      if (url === '/api/admin/encounters/save' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+
+        const body = (await readJsonBody(req)) as SaveEncounterLibraryRequestPayload;
+        const encounterTables = parseEncounterLibrary(body.encounterTables, {
+          strictUnique: true,
+          strictEntries: true,
+          strictWeights: true,
+        });
+        await writeGlobalEncounterCatalog(encounterTables);
         sendJson(res, 200, { ok: true });
         return;
       }
