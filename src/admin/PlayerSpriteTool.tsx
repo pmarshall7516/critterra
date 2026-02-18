@@ -672,7 +672,7 @@ export function PlayerSpriteTool() {
         },
         body: JSON.stringify({
           playerSprite: {
-            url: spriteUrl.trim(),
+            url: withCacheBusterTag(spriteUrl.trim()),
             frameWidth,
             frameHeight,
             atlasCellWidth,
@@ -977,6 +977,24 @@ export function PlayerSpriteTool() {
       </div>
     </section>
   );
+}
+
+function withCacheBusterTag(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  try {
+    const parsed = new URL(trimmed, window.location.origin);
+    parsed.searchParams.set('v', String(Date.now()));
+    if (/^https?:\/\//i.test(trimmed)) {
+      return parsed.toString();
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    const separator = trimmed.includes('?') ? '&' : '?';
+    return `${trimmed}${separator}v=${Date.now()}`;
+  }
 }
 
 function atlasCellStyle(

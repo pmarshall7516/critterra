@@ -308,6 +308,132 @@ Follow-up suggestions
 
 Validation
 - `npm run build` passed.
+## 2026-02-18 (Flags Table + Flags Admin Tool + Searchable Flag Dropdowns)
+- Added a dedicated database table named `flags` to store global story/progress flag definitions.
+
+Backend/API changes
+- `vite.config.ts`
+  - Schema bootstrap now creates:
+    - `flags(flag_id TEXT PRIMARY KEY, label TEXT, notes TEXT, created_at, updated_at)`.
+  - Added automatic flag discovery/sync (`syncDiscoveredFlags`) that scans:
+    - `game_maps.map_data`
+    - `game_npc_libraries.character_library`
+    - `game_critter_catalog.critter_data`
+    - `game_encounter_catalog.table_data`
+    - `user_saves.save_data`
+  - Also seeds core default story flags (`demo-start`, `selected-starter-critter`, `starter-selection-done`, `demo-done`, `jacob-left-house`).
+  - Discovery sync now runs during `ensureGlobalCatalogBaseline`, so the `flags` table stays populated with currently used flags.
+  - Added admin endpoints:
+    - `GET /api/admin/flags/list`
+    - `POST /api/admin/flags/save`
+  - Save endpoint supports full CRUD behavior from admin UI (edit/add/remove), then re-syncs discovered in-use flags.
+
+New admin tool
+- Added `src/admin/FlagsTool.tsx`:
+  - list/search/add/edit/remove flag entries
+  - save to database via new flags API
+  - simple notes field per flag for documentation.
+- Added `src/admin/flagsApi.ts` shared client helpers:
+  - `loadAdminFlags()`
+  - `saveAdminFlags()`
+  - sanitizer for consistent typed flag rows.
+- Integrated new route/tab in `src/admin/AdminView.tsx`:
+  - new nav item: `Flags`
+  - new route: `/admin/flags`.
+
+Searchable flag dropdown integration
+- `src/admin/MapEditorTool.tsx`
+  - loads flag catalog via `loadAdminFlags()`
+  - provides datalist-backed searchable dropdown for existing flag fields:
+    - `Requires Flag` (instance cards + detailed instance editor)
+    - `Set Flag On Complete`
+    - `Set Flag On First Interaction`.
+- `src/admin/CritterTool.tsx`
+  - loads flag catalog via `loadAdminFlags()`
+  - `Story Flag ID` mission field now uses searchable datalist of existing flags.
+
+Validation
+- `npm run build` passed.
+## 2026-02-18 (Reusable NPC Movement Guard System)
+- Replaced Ben-specific hardcoded boundary logic with a reusable NPC movement guard system.
+
+Shared model updates
+- `src/game/world/types.ts`
+  - Added `NpcMovementGuardDefinition` with:
+    - `requiresFlag` / `hideIfFlag`
+    - coordinate targeting (`x`, `y`) and rectangular targeting (`minX`, `maxX`, `minY`, `maxY`)
+    - optional guard dialogue (`dialogueSpeaker`, `dialogueLines`) and `setFlag`.
+  - Added `movementGuards?: NpcMovementGuardDefinition[]` to:
+    - `NpcDefinition`
+    - `NpcStoryStateDefinition`.
+
+Runtime guard system
+- `src/game/engine/runtime.ts`
+  - Removed `isBenPortlockBoundaryStepAllowed` hardcoded handling.
+  - Added generic guard processing in `canStepTo(...)` via `isNpcMovementGuardStepAllowed(...)`.
+  - Guard behavior:
+    - evaluates active NPCs on current map,
+    - filters guards by `requiresFlag` / `hideIfFlag`,
+    - blocks movement if target tile matches guard target area,
+    - turns the guarding NPC to face the player,
+    - shows guard dialogue from the guard config.
+  - Extended runtime character/story resolution and sanitization to preserve `movementGuards` from character defaults and story instances.
+
+Ben migrated to data-driven guard config
+- `src/game/world/npcCatalog.ts`
+  - Updated Ben story instance to include `movementGuards`:
+    - `block-north-boundary`: `maxY: 0`, hidden after `demo-done`.
+    - `block-ben-tile`: exact guard at `(11,1)`, hidden after `demo-done`.
+    - both use Ben warning dialogue.
+
+Admin tool wiring
+- `src/admin/MapEditorTool.tsx`
+  - Added `Movement Guards JSON` editor field for NPCs/instances.
+  - Added parse/sanitize helpers:
+    - `parseNpcMovementGuardsInput(...)`
+    - `sanitizeNpcMovementGuards(...)`.
+  - Wired movement guards through save/load/apply paths for:
+    - character templates,
+    - character instances,
+    - map NPC edits,
+    - story state sanitation and persistence.
+  - Updated deep clone helpers to preserve guard data.
+- `src/admin/mapEditorUtils.ts`
+  - Updated `cloneNpc(...)` to deep-clone `movementGuards` on NPCs and story states.
+
+Validation
+- `npm run build` passed.
+
+## 2026-02-17 (NPC Instance Timeline System + Admin NPC Studio Update)
+- Reworked story NPC flow to use character-instance timelines as source of truth instead of hardcoded map injection:
+  - Removed runtime `ensureDefaultStoryNpcs` map-upsert path.
+  - Runtime now resolves additional NPCs from `npcCharacterLibrary` by selecting the highest-ordered eligible instance (`storyStates`) per character.
+  - Added runtime loading/sanitization of NPC sprite + character libraries from stored world content.
+- Added default story character templates/sprites in `src/game/world/npcCatalog.ts`:
+  - Uncle Hank (`uncle-hank-story`) static in `uncle-s-house`.
+  - Jacob (`jacob-story`) ordered instances:
+    1) `uncle-s-house` gated by `starter-selection-done`
+    2) `portlock` gated by `demo-done`
+  - This keeps story characters running through the shared character-instance system.
+- Extended content bootstrap payload to include NPC libraries:
+  - `vite.config.ts` `/api/content/bootstrap` now returns `npcSpriteLibrary` + `npcCharacterLibrary`.
+  - `src/game/content/worldContentStore.ts` now persists/reads those fields.
+- `/admin/npcs` changes in `src/admin/MapEditorTool.tsx`:
+  - Auto-loads saved tileset/tile library in NPC Studio too.
+  - NPC paint now appends a new ordered placement instance to the selected character timeline (instead of writing only map NPC instances).
+  - Right-click erase in NPC Studio removes character instances (and compacts order immediately) or map NPCs if present.
+  - Added per-character instance timeline panel with:
+    - ordered rows (`#1..N`)
+    - map, x, y, requires-flag editing
+    - up/down reordering
+    - remove (immediate order compaction)
+    - edit load into behavior editor
+  - Map NPC list now includes both map NPCs and character instances on the active map.
+  - Marker rendering now uses circle badges with name/initials and locked-style visuals when an instance requires a flag.
+
+Validation
+- `npm run build` passed.
+- No Playwright regression run was completed in this pass (environment Chromium launch restrictions still apply in this sandbox).
 - Playwright smoke checks (with screenshot capture, no error artifacts emitted):
   - `output/admin-overhaul-maps/shot-0.png`
   - `output/admin-overhaul-tiles/shot-0.png`
@@ -1542,3 +1668,389 @@ Validation
 Validation
 - `node scripts/heal_all_user_squads.js --help` passed.
 - Script now resolves `DB_CONNECTION_STRING` from `.env` when not present in process env.
+- 2026-02-17 story-mode phase 1 (critter mission foundation):
+  - Added new critter mission type `story_flag` in `src/game/critters/types.ts`.
+  - Extended mission payload shape with optional `storyFlagId` and `label` fields.
+  - Updated critter schema sanitizer (`src/game/critters/schema.ts`):
+    - parses/sanitizes `story_flag` mission metadata,
+    - enforces `targetValue=1` for `story_flag` missions,
+    - mission evaluation now supports story flags through runtime integration,
+    - added Buddo default mission transform so Buddo level 1 mission is forced to:
+      - type: `story_flag`
+      - storyFlagId: `selected-bloom-starter`
+      - label: `Select Bloom Partner Critter`
+  - Updated runtime mission evaluation in `src/game/engine/runtime.ts`:
+    - `getMissionCurrentValue` now resolves `story_flag` by `mainStory.flags[storyFlagId]`.
+    - runtime critter mission snapshot payload now includes `storyFlagId` + `label`.
+  - Updated critter card mission text renderer in `src/game/engine/GameView.tsx`:
+    - `story_flag` displays custom label first, then fallback story flag label.
+  - Updated Critter Admin mission authoring (`src/admin/CritterTool.tsx`):
+    - mission type selector now supports `Story Flag`,
+    - added Story Flag ID + Mission Label inputs,
+    - draft/save/load/validation paths now persist and validate these fields.
+  - Updated backend critter parser (`vite.config.ts`) for `story_flag` support and mirrored Buddo mission normalization.
+- Validation:
+  - `npm run build` passed.
+- 2026-02-17 story-mode phase 2 (NPC story-state behavior model):
+  - Added story-state support to NPC core types (`src/game/world/types.ts`):
+    - `NpcStoryStateDefinition` with flag gate + map/position/facing/dialogue/battle/movement/animation overrides.
+    - `NpcDefinition` now supports optional `facing` and ordered `storyStates`.
+  - Extended NPC character template model (`src/game/world/npcCatalog.ts`) with `facing` and `storyStates`.
+  - Extended map editor NPC template workflow (`src/admin/MapEditorTool.tsx`):
+    - character form now includes facing selector,
+    - added `Story States JSON` editor (ordered timeline states),
+    - added JSON parse/sanitize helpers for story states,
+    - template save/load now persists/restores story states,
+    - NPC painting from template now writes `facing` + `storyStates` into map NPC instances.
+  - Extended map editor clone/snapshot behavior (`src/admin/mapEditorUtils.ts`) to deep-clone NPC `facing` + `storyStates` payloads.
+  - Runtime story-state resolution implemented (`src/game/engine/runtime.ts`):
+    - NPCs are now resolved dynamically from all maps each frame using ordered story states,
+    - most-recent matching state wins for map/position and other overrides,
+    - map rendering/interaction/movement now uses resolved NPC set per current map,
+    - NPC runtime state keys are now stable per character (`sourceMapId:npcId`) so map relocation works cleanly.
+- Validation:
+  - `npm run build` passed.
+
+## 2026-02-17 (Story Mode + Critter Story Flag)
+- Continued implementation for story progression tooling and starter demo sequence.
+- Fixed compile issue in runtime by importing `isInsideMap` from mapBuilder.
+- Added and validated `story_flag` mission support end-to-end:
+  - mission type support in runtime mission progress, card labeling, and admin mission editor.
+  - Buddo level 1 mission normalized to story flag:
+    - `storyFlagId: selected-bloom-starter`
+    - `label: Select Bloom Partner Critter`
+- Added NPC story-state behavior infrastructure for map/location/dialogue/movement/battle overrides by flags, with last matching state winning.
+- Added default story NPC bootstrapping and story cutscene flow:
+  - Uncle Hank starter prompt and selection overlay.
+  - starter confirmation dialogue + flag unlocks (`selected-starter-critter`, `selected-<element>-starter`).
+  - first critter unlock auto-assign to squad.
+  - `starter-selection-done` -> Jacob entrance + duel trigger.
+  - Jacob duel completion -> `demo-done`, post-duel dialogue, Jacob exit, and portlock wandering relocation.
+- Added starter selection UI overlay with hover prompt and confirm Yes/No panel.
+- Extended map editor/NPC template tooling for story-state JSON authoring and facing/story persistence.
+
+### Story-mode Playwright automation
+- Added script: `scripts/story_mode_playwright.js`
+  - Logs in with configured test account.
+  - Resets save for deterministic run.
+  - Executes starter story flow through Jacob duel and post-duel relocation.
+  - Captures high-frequency screenshots and `render_game_to_text` snapshots at each phase.
+  - Writes run status + checks into `status.json`.
+- Successful full run output:
+  - `output/story-mode/run-20260217-133032/`
+  - `status.json` shows:
+    - login success
+    - selected starter flags set
+    - `starter-selection-done` set
+    - `demo-done` set
+    - `jacob-left-house` set
+    - Jacob seen in Portlock
+  - 32 screenshots + matching JSON state snapshots captured across sequence.
+
+### Validation
+- `npm run build` passes.
+- Playwright run completed with no console/page errors in successful run (`status.ok: true`).
+
+### Follow-up suggestions
+- If you want three visible starter cards in every fresh environment, ensure the `starter-critter` encounter table contains three entries (current successful run had one starter option due active encounter catalog content).
+- Consider exposing a small in-game debug overlay toggle for current story flags and cutscene phase while authoring future storylines.
+
+## 2026-02-17 (Story Mode Follow-up Fixes)
+- Implemented requested story-sequence behavior refinements in `src/game/engine/runtime.ts`:
+  - Removed auto-triggered Uncle Hank dialogue on entering `uncle-s-house`; intro now starts only when interacting with Hank.
+  - Added `demo-start` flag assignment when first talking to Uncle Hank during starter pickup.
+  - Added movement leash while `demo-start` is set and `demo-done` is not set: player cannot move beyond Manhattan distance 6 from Hank; blocked movement shows Hank dialogue: `Don't leave yet! Unlock your Partner Critter first!`.
+  - Kept player input locked during Jacob cutscene phases and until Jacob exit completes.
+  - Moved `demo-done` unlock to Jacob exit completion (instead of immediately after battle result).
+  - Added story NPC upsert/dedup logic to prevent duplicate Uncle Hank/Jacob entries from mixed map data.
+  - Corrected story NPC sprite sizing config so Uncle Hank renders as one NPC instance at proper 2-tile visual scale (`frameCellsTall: 1`, `renderHeightTiles: 2`).
+  - Reworked Jacob intro/exit cutscene routing to obstacle-aware BFS (`buildNpcPath`) so Jacob can reliably run from the door to the player’s location instead of failing on doorway/wall geometry.
+- Enhanced Playwright coverage in `scripts/story_mode_playwright.js`:
+  - Added explicit leash guard verification snapshot/assertion.
+  - Added unlock-from-offset position flow (not directly in front of Hank) to validate Jacob reaching the player from arbitrary in-house positions.
+  - Added checks for player freeze after closing Collection (`playerFrozenAfterCollectionClose`) and Jacob arrival near player before battle (`jacobReachedPlayerPosition`).
+  - Hardened post-demo exit routine with multiple door alignment attempts so return warp to `portlock` is reliable in automation.
+- Validation performed:
+  - `npm run build` passed after runtime updates.
+  - Story mode Playwright run passed with all checks true:
+    - `output/story-mode/run-20260217-142152/status.json` (`ok: true`)
+    - Includes full screenshot/state sequence under `output/story-mode/run-20260217-142152/`.
+
+### Remaining TODOs / Suggestions
+- Consider replacing the simple `moveTo` helper in Playwright with a tile-aware pathfinder to reduce retries around one-way/collision-edge door tiles.
+- If needed later, expose sprite render metadata in `render_game_to_text` NPC snapshots to make automated render-size assertions explicit (instead of screenshot-only verification).
+
+## 2026-02-17 (NPC Movement + Admin Separation)
+- Updated demo leash behavior in runtime to a **vertical-only boundary** of 6 tiles from Uncle Hank (horizontal boundary line behavior), instead of Manhattan-radius leash.
+- Extended NPC movement model in `src/game/world/types.ts`:
+  - New canonical types: `static`, `static-turning`, `wander`, `path`.
+  - Legacy compatibility retained for `loop`/`random` reads.
+  - Added movement options: `pathMode` (`loop` or `pingpong`) and `leashRadius` (wander-only optional leash).
+- Runtime NPC behavior updates in `src/game/engine/runtime.ts`:
+  - `static` now remains fixed facing (no random turning).
+  - `static-turning` rotates through configured direction pattern over interval.
+  - `wander` moves randomly with optional leash from NPC anchor/start position.
+  - `path` supports loop and back-and-forth (`pingpong`) path traversal.
+  - Added movement-type normalization so old `random`/`loop` data still works.
+  - Interaction-facing behavior preserved and tightened: NPC now explicitly faces player on dialogue start.
+- Admin tool separation implemented in `src/admin/AdminView.tsx` + `src/admin/MapEditorTool.tsx`:
+  - Added dedicated routes/tabs:
+    - `/admin/npc-sprites` (NPC Sprite Studio)
+    - `/admin/npc-characters` (NPC Character Studio)
+    - existing `/admin/npcs` retained as combined NPC Studio.
+  - `MapEditorTool` section support expanded to `npc-sprites` and `npc-characters`.
+  - NPC panel now conditionally renders sprite editor and character editor independently by section.
+- NPC Character behavior UI expanded in `src/admin/MapEditorTool.tsx`:
+  - Movement options now: Static / Static Turning / Wander / Path.
+  - Added Path Mode selector (`Loop` / `Back and Forth`).
+  - Added Wander Leash Radius input.
+  - Pattern input now shown contextually for `path` and `static-turning`.
+  - Story-state placeholder updated to use canonical `wander` movement shape.
+  - Save/load character template paths map legacy movement types into canonical editor values.
+  - Movement sanitizer upgraded to canonicalize old movement data and persist new fields safely.
+
+Validation
+- `npm run build` passed.
+- Story sequence regression run passed after runtime changes:
+  - `output/story-mode/run-20260217-144049/status.json` (`ok: true`)
+  - confirms starter flow, leash guard trigger, Jacob duel/exit, and post-demo Jacob in portlock.
+- 2026-02-17 jacob sprite refresh fix:
+  - Updated story NPC upsert merge logic in `runtime.ts` to preserve existing mapped Jacob/Uncle sprite + animation overrides while still applying missing story defaults and deduping duplicates.
+  - This prevents custom Jacob sprite animation config from being overwritten at runtime by fallback story bootstrap defaults.
+  - Validation: `npm run build` passed.
+
+## 2026-02-17 (Story Authoring + Cache Busting)
+- Added editable NPC interaction cutscene scripting primitives so story sequencing is now admin-authored instead of only hardcoded:
+  - New NPC action schema in world types:
+    - `dialogue` (speaker/lines/setFlag)
+    - `set_flag`
+    - `move_to_player`
+    - `move_path` (direction list)
+    - `face_player`
+    - `wait` (durationMs)
+  - Added `interactionScript` to both `NpcDefinition` and `NpcStoryStateDefinition`.
+  - Runtime now supports executing these scripted actions while locking player control during scene execution.
+  - NPC autonomous AI pauses during scripted scenes (movement interpolation still runs), enabling clean cutscene motion.
+  - NPC dialogue interaction now checks `interactionScript` and runs scene instead of normal dialogue when present.
+- Extended admin NPC tooling to expose interaction cutscene authoring:
+  - `NpcCharacterTemplateEntry` now includes `interactionScript` and `cacheVersion`.
+  - NPC Character UI now includes `Interaction Cutscene JSON` field.
+  - Save/load/sanitize/placement flows preserve and apply interaction scripts.
+  - Map editor clone paths preserve interaction scripts on NPCs and story states.
+- Strengthened admin tool separation for NPC workflows:
+  - `/admin/npc-sprites` = sprite sheet and animation authoring.
+  - `/admin/npc-characters` = character behavior/story authoring.
+  - `/admin/npcs` = NPC-focused map painter/studio route (map editing enabled for NPC placement).
+- Implemented cache-buster tagging strategy on save for asset-driven entities:
+  - NPC Sprite save now appends/updates `?v=<timestamp>` on sprite URL.
+  - Critter save now appends/updates `?v=<timestamp>` on `spriteUrl`.
+  - Player Sprite save now appends/updates `?v=<timestamp>` on `url`.
+  - NPC Character save now stamps `cacheVersion` and map placement applies that version to embedded NPC sprite URL.
+- Added URL-normalization comparisons in Critter admin so sprite bucket matching still works even when cache-buster query params are present.
+
+Validation
+- `npm run build` passed after all changes.
+- Note: attempted Playwright run in this environment hit Chromium sandbox permission error (`bootstrap_check_in ... Permission denied`), so only build verification was completed for this pass.
+
+## 2026-02-17 (NPC Studio Existing-Map Workflow Pass)
+- Tightened `/admin/npcs` behavior in `src/admin/MapEditorTool.tsx` to match existing-map NPC authoring flow:
+  - NPC Studio now hides sprite-sheet editor content (`showNpcSpriteStudio` no longer includes `npcs` route).
+  - NPC Studio tools are restricted to NPC placement/removal (`npc-paint` / `npc-erase`), with automatic fallback to `npc-paint` when entering the route.
+  - Updated NPC Studio header copy to clarify existing-map placement and map-specific story behavior editing intent.
+- Confirmed map-grid right-click behavior in NPC Studio is NPC-only:
+  - Right-click removes NPC instance at the clicked cell.
+  - Right-click on empty cells does nothing (no tile erase side effects in `/admin/npcs`).
+- Map NPC card panel remains active under the map canvas for per-instance management:
+  - Edit card button loads selected map NPC into behavior editor.
+  - Remove card button removes that NPC instance from the map.
+  - Supports editing movement/dialogue/battle teams/story states/interaction script and applying changes back to selected map NPC.
+
+Validation
+- `npm run build` passed.
+- Attempted Playwright rerun for regression (`node scripts/story_mode_playwright.js`) failed in this environment due Chromium launch permission (`bootstrap_check_in ... Permission denied`), so this pass was validated via build only.
+
+## 2026-02-17 (Critter Progression HP Restore)
+- Updated `tryAdvanceCritter` in `src/game/engine/runtime.ts` so both unlock and level-up events fully restore critter HP to max HP.
+- This now applies uniformly to collection and squad views because both derive from the same per-critter `currentHp` progress entry.
+
+Validation
+- `npm run build` passed.
+
+## 2026-02-17 (Character-Instance Authority Cleanup)
+- Enforced character-instance data as the single source of truth for runtime/editor NPC story placement selection:
+  - `src/game/engine/runtime.ts`
+    - Removed forced merge of `DEFAULT_STORY_*` NPC libraries in runtime sanitizers.
+    - Runtime NPC sprite/character libraries now initialize from empty base defaults and use only stored NPC library content.
+  - `src/admin/MapEditorTool.tsx`
+    - Removed forced merge of `DEFAULT_STORY_*` NPC libraries during NPC Studio load.
+    - NPC Studio now merges local cache + server catalogs with server entries taking precedence by id.
+- Existing instance-order behavior remains:
+  - runtime chooses the highest eligible ordered story-state entry (last eligible array entry).
+  - deletion paths compact instance ordering immediately via `compactCharacterPlacementOrder`.
+  - NPC Studio side instance list remains available for selected character timeline management.
+
+Validation
+- `npm run build` passed.
+- Story mode Playwright regression run passed:
+  - `output/story-mode/run-20260217-162237/status.json` (`ok: true`)
+  - confirms login success and story checks including starter selection flags, leash guard, Jacob duel flow, and post-demo Jacob presence.
+- Post-patch story-mode rerun notes:
+  - First retry (`output/story-mode/run-20260217-162430`) failed due traversal flake (`Expected map portlock, got spawn`).
+  - Immediate rerun succeeded end-to-end: `output/story-mode/run-20260217-162502/status.json` (`ok: true`, all story checks true).
+## 2026-02-17 (Admin NPC Save Atlas Persistence Fix)
+- Fixed atlas/tileset disappearing after save in `/admin/npcs`:
+  - `src/admin/MapEditorTool.tsx`: map-save request now omits `tileset` entirely when tile-size inputs are not set, instead of sending `null`.
+  - `vite.config.ts` (`/api/admin/maps/save`): tile library upsert now preserves existing `saved_tiles` and `tileset_config` unless those fields are explicitly provided in the request body.
+- This prevents map saves in NPC Studio from unintentionally clearing stored atlas configuration.
+
+Validation
+- `npm run build` passed.
+## 2026-02-17 (NPC Facing + Animation + Dialogue Validation Pass)
+- Fixed NPC facing override bug in runtime:
+  - `src/game/engine/runtime.ts` `getNpcRuntimeState` no longer reapplies `npc.facing` every frame.
+  - Facing is now applied on spawn and anchor reset only, so `face_player` and movement-direction facing persist correctly.
+- Enforced character-library authority at runtime for ids matching character templates:
+  - `getNpcsForMap` now skips map-level NPC entries whose `id` matches a character-library id, preventing stale duplicate story NPC variants from overriding story behavior/animations.
+- Improved sprite frame selection fallback for moving NPCs:
+  - `getSpriteFrameIndex` now prioritizes move animation set, then walk frames, then idle-set frame cycling when moving.
+  - Prevents moving NPCs from getting stuck on idle-first fallback.
+  - Added case-insensitive animation-set name lookup in `getDirectionalAnimationFrames`.
+- Added NPC animation/facing debug output for Playwright/state verification:
+  - `renderGameToText` NPC payload now includes `moving`, `idleAnimation`, `moveAnimation`, and `frameIndex`.
+- Restored explicit Uncle Hank starter intro lines (2-line dialogue) for starter pickup branch to avoid incorrect post-duel line being shown at intro when character base dialogue differs.
+- Enhanced story Playwright script (`scripts/story_mode_playwright.js`) with new checks:
+  - `uncleFacesPlayerOnInteract`
+  - `jacobMoveFramesObserved`
+  - `jacobExitDownMoveObserved`
+  - `jacobInteractedInPortlock`
+  - `jacobFacesPlayerInPortlock`
+  - Added portlock Jacob interaction sequence captures (`portlock-jacob-interact-attempt-*`).
+
+Validation
+- `npm run build` passed.
+- Playwright runs:
+  - `output/story-mode/run-20260217-164955/status.json` failed one timing-sensitive check (`jacobExitDownMoveObserved`) while all other checks passed.
+  - immediate rerun succeeded fully: `output/story-mode/run-20260217-165038/status.json` (`ok: true`, all story checks true).
+- Verified dialogue + facing/animation evidence in captured state:
+  - Starter intro now 2 lines: `009-uncle-intro-triggered.json` (`totalLines: 2`, text begins `Hey <player-name>...`).
+  - Uncle faces player on interact (`facing: down` while player faces up).
+  - Jacob moving/frames observed in cutscene and wander snapshots (e.g. `019-*`, `028-*`, `034-*`).
+  - Portlock interaction shows Jacob dialogue and facing toward player in `039-portlock-jacob-interact-attempt-3.json`.
+
+## 2026-02-17 (NPC Character Instance Studio pass)
+- Implemented richer NPC instance management support for `/admin/npc-characters` and aligned related NPC/sprite editor UX.
+- `MapEditorTool` updates:
+  - Added `EditorNpcMovementType` normalization helper (`toEditorNpcMovementType`) and shared movement builder for instance editing (`buildPlacementMovement`).
+  - Added `loadNpcCharacterTemplateIntoEditor(...)` helper and switched character `Use` actions + selector loading to it.
+  - Added generic `addCharacterPlacementInstance(characterId, mapId, position)` and reused it from NPC paint placement.
+  - Added live story-state JSON sync in `updateCharacterTemplateById(...)` so instance edits are reflected in the editor draft.
+  - `/admin/npc-characters` now loads map IDs from source maps for instance targeting.
+  - Added a dedicated instance management panel in `/admin/npc-characters`:
+    - add/remove/reorder instances,
+    - edit map ID, position, requiresFlag,
+    - quick-edit instance selection feeding full per-instance edits through the main character form.
+  - Expanded `/admin/npcs` instance panel to support full per-instance fields directly (dialogue/map/position/team/movement/animation fields).
+  - Enabled `Apply To Selected Character Instance` action from `/admin/npc-characters` (not only `/admin/npcs`).
+- `/admin/npc-sprites` UX update:
+  - Added sprite usage panel showing which characters currently use the selected sprite, with quick open into character editor state.
+- Styling:
+  - Added `.npc-instance-list` / `.npc-instance-card` classes in `src/styles.css` for readable multi-field instance cards.
+
+Validation:
+- `npm run build` passed.
+- Playwright captures saved to:
+  - `output/story-mode/admin-npc-characters-ui/shot-0.png`
+  - `output/story-mode/admin-npc-sprites-ui/shot-0.png`
+- Note: these Playwright admin captures hit auth guard (`401 Unauthorized`) in this run, so UI runtime interaction on authenticated admin pages could not be visually verified in that capture session.
+## 2026-02-17 (Admin Inline Sign-In + Auth-Unblock Verification)
+- Added inline sign-in on blocked admin page so `/admin/*` can authenticate in-place without bouncing back to game:
+  - `src/admin/AdminView.tsx`
+    - added small auth form on `Admin Access Required` state (`email` + `password` + submit).
+    - wired submit to `/api/auth/login`, stores token via `setAuthToken`, and immediately unlocks admin tools when returned user is admin.
+    - keeps blocked state with clear message if login succeeds but account is not admin.
+- Added styling for inline admin auth controls:
+  - `src/styles.css`
+    - `.admin-inline-auth`, label/input/status styles.
+
+Validation
+- `npm run build` passed.
+- Story regression still passes (post-change):
+  - `output/story-mode/run-20260217-173907/status.json` (`ok: true`, all story checks true including Jacob move/exit/facing checks).
+- Admin auth unblock capture (Playwright):
+  - `output/story-mode/admin-auth-npc-characters/status.json`
+  - `blockedBefore: true`, then successful inline sign-in and `adminLoaded: true`.
+  - screenshots: `001-admin-initial.png`, `002-admin-after-signin-attempt.png`, `003-admin-npc-characters.png`.
+## 2026-02-17 (NPC Step Interval Unbounded in Studio)
+- Removed fixed `180..4000ms` clamping for NPC step interval in editor paths:
+  - `src/admin/MapEditorTool.tsx`
+    - character save path now uses raw parsed value (fallback `850` if blank/invalid)
+    - map NPC apply path now uses raw parsed value (fallback `850`)
+    - instance movement builder now preserves provided value (floored), no hard cap window
+    - movement sanitizer now keeps finite numeric `stepIntervalMs` as-is (floored), no hard cap window
+- Updated runtime handling to honor unbounded configured intervals:
+  - `src/game/engine/runtime.ts`
+    - `clampNpcStepInterval` now only enforces finite positive integer (`>=1`) with fallback `850`; removed old `180..4000` cap.
+
+Validation
+- `npm run build` passed.
+## 2026-02-17 (Admin Form Layout Single-Scroll Cleanup)
+- Reworked admin layout scrolling behavior so each admin tab uses one page-level scroll container instead of nested scroll panes.
+- CSS updates in `src/styles.css`:
+  - kept `admin-shell__content` as the single tab scroll surface (`overflow-y: auto`).
+  - removed nested scrolling from `admin-layout__left`, `admin-layout__center`, and form/list containers (`saved-paint-list`, `npc-instance-list`, `spritesheet-browser`, `paint-tile-grid`, critter/encounter list panels, etc.).
+  - removed map-canvas max-height clamp from `.admin-panel--map-canvas .map-grid-wrap`; map canvas still supports internal scrolling when needed.
+- Refactored duplicated NPC movement form parsing in `src/admin/MapEditorTool.tsx`:
+  - added `buildNpcMovementFromEditorInputs()` and reused it in both `saveNpcTemplate()` and `applyNpcEditorToSelectedMapNpc()`.
+  - keeps behavior identical while removing duplicated validation/build logic.
+- Updated doc note in `src/admin/README_ADMIN_MAP_EDITOR.md` to describe single-page admin scrolling model.
+
+Validation
+- `npm run build` passed.
+- Playwright admin audit (auto-login + screenshots per tab) saved to:
+  - `output/story-mode/admin-single-scroll-20260217/`
+- Scroll audit status:
+  - `output/story-mode/admin-single-scroll-20260217/status.json`
+  - each tab reports a single scrollable container and `disallowedScrollableCount: 0`.
+## 2026-02-17 (Dialogue Input Lock: No Move/Menu Until Space Through Text)
+- Implemented strict dialogue input lock so NPC text boxes must be advanced with `Space` and player cannot move/open menu while dialogue is active.
+
+Code changes
+- `src/game/engine/runtime.ts`
+  - `keyDown`: added early `this.dialogue` guard to ignore movement keys and only process interact key (`Space`) during dialogue.
+  - `keyUp`: clears held directions and exits early when dialogue is active.
+  - `startDialogue`: clears `heldDirections` to prevent queued movement immediately after text closes.
+  - `isPlayerControlLocked`: now includes `this.dialogue` in lock state.
+- `src/game/engine/GameView.tsx`
+  - `storyInputLockedRef` now also treats active dialogue as input-locked.
+  - added effect to force-close side menu if dialogue appears.
+
+Validation
+- `npm run build` passed.
+- Existing full story Playwright regression script remains flaky in this environment (intermittent unrelated route/animation/login timing notes), so this change was validated primarily through runtime/input-path code verification plus build.
+## 2026-02-17 (Portlock Guard NPC: Ben + North Boundary Gate)
+- Added Ben as a story-character instance (not hardcoded map NPC) so it follows the same NPC character timeline system used by story characters.
+
+Data model / catalog changes
+- `src/game/world/npcCatalog.ts`
+  - Added core story character `ben-story`:
+    - `npcName`: `Ben`
+    - `spriteId`: `boy-1-sprite`
+    - default `facing`: `down`
+    - default dialogue: `You do not have a Critter yet, please turn around it is not safe beyond here.`
+    - default story instance at `mapId: portlock`, `position: { x: 11, y: 1 }`.
+  - Extended core-story normalization to include Ben (same pattern as Uncle Hank/Jacob):
+    - dedupes Ben variants by id/name,
+    - keeps latest Ben character with default fallback if missing.
+
+Runtime movement gate
+- `src/game/engine/runtime.ts`
+  - Added `BEN_NPC_ID = 'ben-story'`.
+  - Added `isBenPortlockBoundaryStepAllowed(targetX, targetY)` and invoked it from `canStepTo(...)`.
+  - Behavior when `demo-done` is NOT unlocked and player is in `portlock`:
+    - blocks stepping into `y <= 0` (north boundary/trail gate),
+    - blocks stepping directly onto Ben’s tile,
+    - triggers Ben dialogue via `startNpcDialogue(ben)` so Ben automatically faces the player and speaks the warning.
+  - After `demo-done` unlocks, this boundary guard no longer blocks movement.
+
+Validation
+- `npm run build` passed.

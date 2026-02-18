@@ -33,8 +33,9 @@ The first module is **Map Editor** and supports:
 
 ## Scrolling
 
-- Admin app shell and editor columns are scrollable.
-- Tileset atlas grid, saved paint list, and map canvas each scroll independently.
+- Admin tabs are intended to scroll as a single page container.
+- Avoid nested form/list scrollers to keep long editing sessions linear.
+- The map canvas may still scroll internally for large maps.
 
 ## Integration Notes
 

@@ -16,6 +16,7 @@ import {
   type CritterMissionType,
   type CritterRarity,
   type CritterStats,
+  type EquippedSkillSlots,
   type PlayerCritterCollectionEntry,
   type PlayerCritterProgress,
 } from '@/game/critters/types';
@@ -38,6 +39,10 @@ const ELEMENT_SET = new Set<CritterElement>(CRITTER_ELEMENTS);
 const RARITY_SET = new Set<CritterRarity>(CRITTER_RARITIES);
 const ABILITY_KIND_SET = new Set<CritterAbilityKind>(CRITTER_ABILITY_KINDS);
 const MISSION_TYPE_SET = new Set<CritterMissionType>(CRITTER_MISSION_TYPES);
+const BUDDO_NAME = 'buddo';
+const BUDDO_STORY_MISSION_ID = 'select-bloom-partner-critter';
+const BUDDO_STORY_FLAG_ID = 'selected-bloom-starter';
+const BUDDO_STORY_LABEL = 'Select Bloom Partner Critter';
 
 export function missionProgressKey(level: number, missionId: string): string {
   return `L${Math.max(1, Math.floor(level))}:M${missionId}`;
@@ -52,6 +57,7 @@ export interface CritterDerivedProgress {
   };
   effectiveStats: CritterStats;
   unlockedAbilityIds: string[];
+  unlockedSkillIds: string[];
 }
 
 export function computeCritterDerivedProgress(critter: CritterDefinition, level: number): CritterDerivedProgress {
@@ -63,6 +69,7 @@ export function computeCritterDerivedProgress(critter: CritterDefinition, level:
     speed: 0,
   };
   const abilityIds = new Set<string>();
+  const skillIds = new Set<string>();
 
   for (const levelRow of critter.levels) {
     // Level row N is earned when the critter reaches level N.
@@ -76,6 +83,9 @@ export function computeCritterDerivedProgress(critter: CritterDefinition, level:
     for (const abilityId of levelRow.abilityUnlockIds) {
       abilityIds.add(abilityId);
     }
+    for (const skillId of levelRow.skillUnlockIds ?? []) {
+      skillIds.add(skillId);
+    }
   }
 
   return {
@@ -87,6 +97,7 @@ export function computeCritterDerivedProgress(critter: CritterDefinition, level:
       speed: Math.max(1, critter.baseStats.speed + statBonus.speed),
     },
     unlockedAbilityIds: [...abilityIds],
+    unlockedSkillIds: [...skillIds],
   };
 }
 
@@ -100,7 +111,7 @@ export function buildCritterLookup(database: CritterDefinition[]): Record<number
 
 export function sanitizeCritterDatabase(raw: unknown): CritterDefinition[] {
   if (!Array.isArray(raw)) {
-    return [...BASE_CRITTER_DATABASE];
+    return ensureBuddoStarterStoryMission([...BASE_CRITTER_DATABASE]);
   }
 
   const parsed: CritterDefinition[] = [];
@@ -114,7 +125,7 @@ export function sanitizeCritterDatabase(raw: unknown): CritterDefinition[] {
     parsed.push(critter);
   }
 
-  return parsed.length > 0 ? parsed : [...BASE_CRITTER_DATABASE];
+  return ensureBuddoStarterStoryMission(parsed.length > 0 ? parsed : [...BASE_CRITTER_DATABASE]);
 }
 
 export function sanitizeCritterDefinition(raw: unknown, index = 0): CritterDefinition | null {
@@ -221,6 +232,7 @@ export function sanitizePlayerCritterProgress(
       statBonus: derived.statBonus,
       effectiveStats: derived.effectiveStats,
       unlockedAbilityIds: derived.unlockedAbilityIds,
+      equippedSkillIds: existing.equippedSkillIds,
       lastProgressAt: existing.lastProgressAt,
     };
   });
@@ -260,6 +272,7 @@ function createDefaultCollectionEntry(critter: CritterDefinition): PlayerCritter
     statBonus: derived.statBonus,
     effectiveStats: derived.effectiveStats,
     unlockedAbilityIds: derived.unlockedAbilityIds,
+    equippedSkillIds: [null, null, null, null],
     lastProgressAt: null,
   };
 }
@@ -300,6 +313,8 @@ function sanitizeCollectionEntry(
     missionProgress[safeKey] = clampInt(value, 0, 999999, 0);
   }
 
+  const equippedSkillIds = sanitizeEquippedSkillSlots(record.equippedSkillIds);
+
   return {
     critterId,
     unlocked: Boolean(record.unlocked),
@@ -322,8 +337,23 @@ function sanitizeCollectionEntry(
       speed: 1,
     },
     unlockedAbilityIds: [],
+    equippedSkillIds,
     lastProgressAt: sanitizeIsoTimestamp(record.lastProgressAt),
   };
+}
+
+function sanitizeEquippedSkillSlots(raw: unknown): EquippedSkillSlots {
+  const defaultSlots: EquippedSkillSlots = [null, null, null, null];
+  if (!Array.isArray(raw) || raw.length < 4) {
+    return defaultSlots;
+  }
+  const result: EquippedSkillSlots = [
+    typeof raw[0] === 'string' && raw[0].trim() ? raw[0].trim() : null,
+    typeof raw[1] === 'string' && raw[1].trim() ? raw[1].trim() : null,
+    typeof raw[2] === 'string' && raw[2].trim() ? raw[2].trim() : null,
+    typeof raw[3] === 'string' && raw[3].trim() ? raw[3].trim() : null,
+  ];
+  return result;
 }
 
 function sanitizeAbilityDefinitions(raw: unknown): CritterAbilityDefinition[] {
@@ -402,6 +432,7 @@ function sanitizeLevelRequirement(
       : {};
   const requiredMissionCount = clampInt(record.requiredMissionCount, 0, missions.length, missions.length);
   const abilityUnlockIds = sanitizeStringArray(record.abilityUnlockIds, 30).filter((id) => abilityIdSet.has(id));
+  const skillUnlockIds = sanitizeStringArray(record.skillUnlockIds, 30).filter((id) => id.length > 0);
 
   return {
     level,
@@ -414,6 +445,7 @@ function sanitizeLevelRequirement(
       speed: clampInt(statDeltaRecord.speed, -999, 999, EMPTY_STAT_DELTA.speed),
     },
     abilityUnlockIds,
+    skillUnlockIds,
   };
 }
 
@@ -463,15 +495,20 @@ function sanitizeLevelMission(raw: unknown, index: number, level: number): Critt
           ),
         ]
       : [];
+  const storyFlagId = type === 'story_flag' ? sanitizeStoryFlagId(record.storyFlagId) : undefined;
+  const label = type === 'story_flag' ? sanitizeMissionLabel(record.label) : undefined;
   const allowKnockoutElements = knockoutCritterIds.length === 0;
+  const normalizedTargetValue = type === 'story_flag' ? 1 : targetValue;
 
   return {
     id,
     type,
-    targetValue,
+    targetValue: normalizedTargetValue,
     ascendsFromCritterId,
     knockoutElements: allowKnockoutElements ? knockoutElements : [],
     knockoutCritterIds,
+    storyFlagId,
+    label,
   };
 }
 
@@ -533,6 +570,28 @@ function sanitizeCritterSpriteUrl(raw: unknown): string {
     return '';
   }
   return trimmed.slice(0, 1000);
+}
+
+function sanitizeStoryFlagId(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') {
+    return undefined;
+  }
+  const normalized = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+/g, '')
+    .replace(/-+$/g, '');
+  return normalized || undefined;
+}
+
+function sanitizeMissionLabel(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  return trimmed ? trimmed.slice(0, 120) : undefined;
 }
 
 function sanitizeStringArray(raw: unknown, maxItems: number): string[] {
@@ -626,4 +685,69 @@ function getMaxConfiguredLevel(levels: CritterLevelRequirement[]): number {
     return 1;
   }
   return Math.max(1, ...levels.map((entry) => entry.level));
+}
+
+function ensureBuddoStarterStoryMission(database: CritterDefinition[]): CritterDefinition[] {
+  return database.map((critter) => {
+    if (critter.name.trim().toLowerCase() !== BUDDO_NAME) {
+      return critter;
+    }
+
+    const existingLevelOne = critter.levels.find((entry) => entry.level === 1);
+    const levelOne: CritterLevelRequirement = existingLevelOne
+      ? {
+          ...existingLevelOne,
+          statDelta: { ...existingLevelOne.statDelta },
+          abilityUnlockIds: [...existingLevelOne.abilityUnlockIds],
+          skillUnlockIds: [...(existingLevelOne.skillUnlockIds ?? [])],
+          missions: [
+            {
+              id: BUDDO_STORY_MISSION_ID,
+              type: 'story_flag',
+              targetValue: 1,
+              storyFlagId: BUDDO_STORY_FLAG_ID,
+              label: BUDDO_STORY_LABEL,
+            },
+          ],
+          requiredMissionCount: 1,
+        }
+      : {
+          level: 1,
+          missions: [
+            {
+              id: BUDDO_STORY_MISSION_ID,
+              type: 'story_flag',
+              targetValue: 1,
+              storyFlagId: BUDDO_STORY_FLAG_ID,
+              label: BUDDO_STORY_LABEL,
+            },
+          ],
+          requiredMissionCount: 1,
+          statDelta: {
+            hp: 0,
+            attack: 0,
+            defense: 0,
+            speed: 0,
+          },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        };
+
+    const otherLevels = critter.levels
+      .filter((entry) => entry.level !== 1)
+      .map((entry) => ({
+        ...entry,
+        statDelta: { ...entry.statDelta },
+        abilityUnlockIds: [...entry.abilityUnlockIds],
+        skillUnlockIds: [...(entry.skillUnlockIds ?? [])],
+        missions: entry.missions.map((mission) => ({ ...mission })),
+      }));
+    const nextLevels = [levelOne, ...otherLevels].sort((left, right) => left.level - right.level);
+    return {
+      ...critter,
+      baseStats: { ...critter.baseStats },
+      abilities: critter.abilities.map((ability) => ({ ...ability })),
+      levels: nextLevels,
+    };
+  });
 }

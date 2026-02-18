@@ -5,7 +5,7 @@ export const portlockMap = createMap({
   name: 'Portlock',
   layers: [
     {
-      id: 'base',
+      id: 1,
       name: 'Base',
       tiles: [
         '',
@@ -60,7 +60,7 @@ export const portlockMap = createMap({
       ]
     },
     {
-      id: 'houses',
+      id: 2,
       name: 'Layer 2',
       tiles: [
         '..............',
@@ -98,7 +98,7 @@ export const portlockMap = createMap({
       ]
     },
     {
-      id: 'trees',
+      id: 3,
       name: 'Layer 4',
       tiles: [
         '...................',
@@ -206,7 +206,7 @@ export const portlockMap = createMap({
         }
       ],
       requiredFacing: 'up',
-      requireInteract: true
+      requireInteract: false
     },
     {
       id: 'portlock_warp_3',
@@ -233,7 +233,7 @@ export const portlockMap = createMap({
         }
       ],
       requiredFacing: 'up',
-      requireInteract: true
+      requireInteract: false
     },
     {
       id: 'portlock_warp_4',

@@ -5,7 +5,7 @@ export const uncleSHouseMap = createMap({
   name: 'Uncle Hank\'s House',
   layers: [
     {
-      id: 'base',
+      id: 1,
       name: 'Base',
       tiles: [
         '',
@@ -65,7 +65,7 @@ export const uncleSHouseMap = createMap({
         }
       ],
       requiredFacing: 'down',
-      requireInteract: true
+      requireInteract: false
     }
   ]
 });

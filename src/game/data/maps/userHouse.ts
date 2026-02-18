@@ -5,7 +5,7 @@ export const userHouseMap = createMap({
   name: 'Home',
   layers: [
     {
-      id: 'base',
+      id: 1,
       name: 'Base',
       tiles: [
         '',
@@ -60,7 +60,7 @@ export const userHouseMap = createMap({
           y: 10
         }
       ],
-      requireInteract: true
+      requireInteract: false
     }
   ]
 });

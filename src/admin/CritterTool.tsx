@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { sanitizeCritterDatabase, sanitizeCritterDefinition } from '@/game/critters/schema';
 import {
   CRITTER_ABILITY_KINDS,
@@ -9,6 +9,7 @@ import {
   type CritterMissionType,
 } from '@/game/critters/types';
 import { apiFetchJson } from '@/shared/apiClient';
+import { loadAdminFlags, type AdminFlagEntry } from '@/admin/flagsApi';
 
 interface CritterListResponse {
   ok: boolean;
@@ -36,11 +37,38 @@ interface LoadSupabaseSpriteSheetsResponse {
   error?: string;
 }
 
+interface SkillsListResponse {
+  ok: boolean;
+  critterSkills?: unknown;
+  error?: string;
+}
+
+interface SkillOption {
+  id: string;
+  name: string;
+  type: 'damage' | 'support';
+  damage?: number;
+  healPercent?: number;
+}
+
+function formatSkillOptionLabel(opt: SkillOption): string {
+  const letter = opt.type === 'damage' ? 'D' : 'S';
+  const value =
+    opt.type === 'damage'
+      ? opt.damage ?? '?'
+      : opt.healPercent != null
+        ? Math.round(opt.healPercent * 100)
+        : '?';
+  return `${opt.name} - ${letter} - ${value}`;
+}
+
 interface MissionDraft {
   id: string;
   type: CritterMissionType;
   targetValue: string;
   ascendsFromCritterId: string;
+  storyFlagId: string;
+  label: string;
   knockoutFilter: 'any' | 'elements' | 'critters';
   knockoutElements: string[];
   knockoutCritterIds: string[];
@@ -53,6 +81,7 @@ interface LevelDraft {
   defenseDelta: string;
   speedDelta: string;
   abilityUnlockIdsInput: string;
+  skillUnlockIdsInput: string;
   missions: MissionDraft[];
 }
 
@@ -93,9 +122,14 @@ export function CritterTool() {
   const [spriteSearchInput, setSpriteSearchInput] = useState('');
   const [missionKnockoutCritterSearchInput, setMissionKnockoutCritterSearchInput] = useState('');
   const [spriteEntries, setSpriteEntries] = useState<SupabaseSpriteSheetListItem[]>([]);
+  const [flagEntries, setFlagEntries] = useState<AdminFlagEntry[]>([]);
   const [isLoadingSpriteEntries, setIsLoadingSpriteEntries] = useState(false);
   const [selectedSpritePath, setSelectedSpritePath] = useState('');
   const [pendingRemovalIds, setPendingRemovalIds] = useState<Set<number>>(new Set());
+  const [skillList, setSkillList] = useState<SkillOption[]>([]);
+  const [skillSearchInputs, setSkillSearchInputs] = useState<Record<string, string>>({});
+  const [skillDropdownOpen, setSkillDropdownOpen] = useState<Record<string, boolean>>({});
+  const skillSearchInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const sortedCritters = useMemo(() => [...critters].sort((left, right) => left.id - right.id), [critters]);
 
@@ -123,6 +157,13 @@ export function CritterTool() {
       (entry) => entry.name.toLowerCase().includes(query) || entry.path.toLowerCase().includes(query),
     );
   }, [spriteEntries, spriteSearchInput]);
+  const knownFlagIds = useMemo(
+    () =>
+      [...new Set(flagEntries.map((entry) => entry.flagId.trim()).filter((entry) => entry.length > 0))].sort((left, right) =>
+        left.localeCompare(right, undefined, { sensitivity: 'base' }),
+      ),
+    [flagEntries],
+  );
 
   const loadCritters = async () => {
     setIsLoading(true);
@@ -140,7 +181,9 @@ export function CritterTool() {
       if (serverCritters.length > 0) {
         setSelectedCritterId(serverCritters[0].id);
         setDraft(critterToDraft(serverCritters[0]));
-        const matchingSprite = spriteEntries.find((entry) => entry.publicUrl === serverCritters[0].spriteUrl);
+        const matchingSprite = spriteEntries.find(
+          (entry) => normalizeAssetUrlForCompare(entry.publicUrl) === normalizeAssetUrlForCompare(serverCritters[0].spriteUrl),
+        );
         setSelectedSpritePath(matchingSprite?.path ?? '');
       } else {
         setSelectedCritterId(null);
@@ -181,9 +224,43 @@ export function CritterTool() {
     }
   };
 
+  const loadFlags = async () => {
+    try {
+      setFlagEntries(await loadAdminFlags());
+    } catch {
+      setFlagEntries([]);
+    }
+  };
+
+  const loadSkills = async () => {
+    try {
+      const result = await apiFetchJson<SkillsListResponse>('/api/admin/skills/list');
+      if (!result.ok) {
+        throw new Error(result.error ?? result.data?.error ?? 'Unable to load skills.');
+      }
+      const rawSkills = result.data?.critterSkills;
+      const skills = Array.isArray(rawSkills) ? rawSkills : [];
+      const list: SkillOption[] = skills
+        .map((s: { skill_id?: string; skill_name?: string; type?: string; damage?: number; healPercent?: number }) => {
+          const id = typeof s?.skill_id === 'string' ? s.skill_id : '';
+          const name = typeof s?.skill_name === 'string' ? s.skill_name : String(s?.skill_id ?? '');
+          const type: 'damage' | 'support' = s?.type === 'support' ? 'support' : 'damage';
+          const damage = type === 'damage' && typeof s?.damage === 'number' ? s.damage : undefined;
+          const healPercent = type === 'support' && typeof s?.healPercent === 'number' ? s.healPercent : undefined;
+          return { id, name, type, damage, healPercent };
+        })
+        .filter((x) => x.id.length > 0);
+      setSkillList(list);
+    } catch {
+      setSkillList([]);
+    }
+  };
+
   useEffect(() => {
     void loadCritters();
     void loadCritterSprites();
+    void loadFlags();
+    void loadSkills();
     // Run once on mount with default critter bucket.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -192,7 +269,9 @@ export function CritterTool() {
     if (!draft.spriteUrl) {
       return;
     }
-    const matchingSprite = spriteEntries.find((entry) => entry.publicUrl === draft.spriteUrl);
+    const matchingSprite = spriteEntries.find(
+      (entry) => normalizeAssetUrlForCompare(entry.publicUrl) === normalizeAssetUrlForCompare(draft.spriteUrl),
+    );
     if (matchingSprite) {
       setSelectedSpritePath(matchingSprite.path);
     }
@@ -209,7 +288,9 @@ export function CritterTool() {
   const selectCritter = (critter: CritterDefinition) => {
     setSelectedCritterId(critter.id);
     setDraft(critterToDraft(critter));
-    const matchingSprite = spriteEntries.find((entry) => entry.publicUrl === critter.spriteUrl);
+    const matchingSprite = spriteEntries.find(
+      (entry) => normalizeAssetUrlForCompare(entry.publicUrl) === normalizeAssetUrlForCompare(critter.spriteUrl),
+    );
     setSelectedSpritePath(matchingSprite?.path ?? '');
     setError('');
     setStatus(`Loaded #${critter.id} ${critter.name}.`);
@@ -296,7 +377,9 @@ export function CritterTool() {
       }
       return nextPending;
     });
-    const matchingSprite = spriteEntries.find((entry) => entry.publicUrl === parsed.spriteUrl);
+    const matchingSprite = spriteEntries.find(
+      (entry) => normalizeAssetUrlForCompare(entry.publicUrl) === normalizeAssetUrlForCompare(parsed.spriteUrl),
+    );
     setSelectedSpritePath(matchingSprite?.path ?? '');
     setStatus(`Applied critter #${parsed.id}. Save Critter Database to persist.`);
   };
@@ -338,7 +421,10 @@ export function CritterTool() {
       if (nextSelectedCritter) {
         setSelectedCritterId(nextSelectedCritter.id);
         setDraft(critterToDraft(nextSelectedCritter));
-        const matchingSprite = spriteEntries.find((entry) => entry.publicUrl === nextSelectedCritter.spriteUrl);
+        const matchingSprite = spriteEntries.find(
+          (entry) =>
+            normalizeAssetUrlForCompare(entry.publicUrl) === normalizeAssetUrlForCompare(nextSelectedCritter.spriteUrl),
+        );
         setSelectedSpritePath(matchingSprite?.path ?? '');
       } else {
         setSelectedCritterId(null);
@@ -360,6 +446,11 @@ export function CritterTool() {
 
   return (
     <section className="admin-layout admin-layout--critter-tool">
+      <datalist id="admin-flag-options">
+        {knownFlagIds.map((flagId) => (
+          <option key={`critter-flag-option-${flagId}`} value={flagId} />
+        ))}
+      </datalist>
       <section className="admin-panel critter-database-panel">
         <h3>Critter Database</h3>
         <div className="admin-row">
@@ -789,6 +880,113 @@ export function CritterTool() {
                     placeholder="ability-id-a, ability-id-b"
                   />
                 </label>
+                <label className="admin-effect-picker-wrap">
+                  <span>Skill Unlock IDs</span>
+                  {(() => {
+                    const levelKey = `level-${levelIndex}`;
+                    const searchInput = skillSearchInputs[levelKey] ?? '';
+                    const isOpen = skillDropdownOpen[levelKey] ?? false;
+                    const selectedIds = levelRow.skillUnlockIdsInput.split(',').map((x) => x.trim()).filter(Boolean);
+                    const filteredOptions = skillList
+                      .filter((s) => !selectedIds.includes(s.id))
+                      .filter(
+                        (s) =>
+                          !searchInput.trim() ||
+                          s.id.toLowerCase().includes(searchInput.trim().toLowerCase()) ||
+                          s.name.toLowerCase().includes(searchInput.trim().toLowerCase()),
+                      )
+                      .sort((a, b) => a.id.localeCompare(b.id))
+                      .slice(0, 12);
+                    return (
+                      <div
+                        className="admin-effect-picker"
+                        onClick={() => skillSearchInputRefs.current[levelKey]?.focus()}
+                      >
+                        {selectedIds.map((id) => {
+                          const opt = skillList.find((s) => s.id === id);
+                          return (
+                            <span key={id} className="admin-effect-picker__chip">
+                              {opt ? formatSkillOptionLabel(opt) : id}
+                              <button
+                                type="button"
+                                className="admin-effect-picker__chip-remove"
+                                aria-label={`Remove ${id}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const next = selectedIds.filter((x) => x !== id).join(', ');
+                                  updateLevelRow(levelIndex, (entry) => ({ ...entry, skillUnlockIdsInput: next }));
+                                }}
+                              >
+                                ×
+                              </button>
+                            </span>
+                          );
+                        })}
+                        <input
+                          ref={(el) => {
+                            skillSearchInputRefs.current[levelKey] = el;
+                          }}
+                          type="text"
+                          className="admin-effect-picker__input"
+                          value={searchInput}
+                          onChange={(e) =>
+                            setSkillSearchInputs((prev) => ({ ...prev, [levelKey]: e.target.value }))
+                          }
+                          onFocus={() => setSkillDropdownOpen((prev) => ({ ...prev, [levelKey]: true }))}
+                          onBlur={() => setTimeout(() => setSkillDropdownOpen((prev) => ({ ...prev, [levelKey]: false })), 150)}
+                          onKeyDown={(e) => {
+                            if (e.key === ',' || e.key === 'Enter') {
+                              e.preventDefault();
+                              const q = searchInput.trim().toLowerCase();
+                              if (q) {
+                                const exact = skillList.find(
+                                  (x) => x.id.toLowerCase() === q || x.name.toLowerCase() === q,
+                                );
+                                if (exact && !selectedIds.includes(exact.id)) {
+                                  const next = [...selectedIds, exact.id].join(', ');
+                                  updateLevelRow(levelIndex, (entry) => ({ ...entry, skillUnlockIdsInput: next }));
+                                }
+                                setSkillSearchInputs((prev) => ({ ...prev, [levelKey]: '' }));
+                              }
+                            } else if (e.key === 'Backspace' && !searchInput && selectedIds.length > 0) {
+                              const next = selectedIds.slice(0, -1).join(', ');
+                              updateLevelRow(levelIndex, (entry) => ({ ...entry, skillUnlockIdsInput: next }));
+                            }
+                          }}
+                          placeholder={selectedIds.length === 0 ? 'Search skills…' : 'Add another (type or comma)'}
+                        />
+                        {isOpen && (
+                          <div
+                            className="admin-effect-picker__dropdown"
+                            onMouseDown={(e) => e.preventDefault()}
+                          >
+                            {filteredOptions.length === 0 ? (
+                              <div className="admin-effect-picker__dropdown-empty">
+                                {searchInput.trim() ? 'No matching skills' : 'All selected or no skills'}
+                              </div>
+                            ) : (
+                              filteredOptions.map((opt) => (
+                                <button
+                                  key={opt.id}
+                                  type="button"
+                                  className="admin-effect-picker__dropdown-item"
+                                  onMouseDown={() => {
+                                    const next = [...selectedIds, opt.id].join(', ');
+                                    updateLevelRow(levelIndex, (entry) => ({ ...entry, skillUnlockIdsInput: next }));
+                                    setSkillSearchInputs((prev) => ({ ...prev, [levelKey]: '' }));
+                                    setSkillDropdownOpen((prev) => ({ ...prev, [levelKey]: false }));
+                                  }}
+                                >
+                                  {formatSkillOptionLabel(opt)}
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </label>
 
                 <div className="admin-row">
                   <button
@@ -804,6 +1002,8 @@ export function CritterTool() {
                             type: 'opposing_knockouts',
                             targetValue: '1',
                             ascendsFromCritterId: '',
+                            storyFlagId: '',
+                            label: '',
                             knockoutFilter: 'any',
                             knockoutElements: [],
                             knockoutCritterIds: [],
@@ -847,12 +1047,14 @@ export function CritterTool() {
                         <select
                           value={mission.type}
                           onChange={(event) => {
-                            const nextType = event.target.value === 'ascension' ? 'ascension' : 'opposing_knockouts';
+                            const nextType = toMissionTypeValue(event.target.value);
                             updateMissionRow(levelIndex, missionIndex, (entry) => ({
                               ...entry,
                               type: nextType,
                               ascendsFromCritterId:
                                 nextType === 'ascension' ? entry.ascendsFromCritterId : '',
+                              storyFlagId: nextType === 'story_flag' ? entry.storyFlagId : '',
+                              label: nextType === 'story_flag' ? entry.label : '',
                               knockoutFilter:
                                 nextType === 'opposing_knockouts' ? entry.knockoutFilter : 'any',
                               knockoutElements:
@@ -926,6 +1128,38 @@ export function CritterTool() {
                             ))}
                           </select>
                         </label>
+                      )}
+
+                      {mission.type === 'story_flag' && (
+                        <>
+                          <label className="critter-mission-row__wide">
+                            Story Flag ID
+                            <input
+                              list="admin-flag-options"
+                              value={mission.storyFlagId}
+                              onChange={(event) =>
+                                updateMissionRow(levelIndex, missionIndex, (entry) => ({
+                                  ...entry,
+                                  storyFlagId: event.target.value,
+                                }))
+                              }
+                              placeholder="selected-bloom-starter"
+                            />
+                          </label>
+                          <label className="critter-mission-row__wide">
+                            Mission Label
+                            <input
+                              value={mission.label}
+                              onChange={(event) =>
+                                updateMissionRow(levelIndex, missionIndex, (entry) => ({
+                                  ...entry,
+                                  label: event.target.value,
+                                }))
+                              }
+                              placeholder="Select Bloom Partner Critter"
+                            />
+                          </label>
+                        </>
                       )}
 
                       {mission.type === 'opposing_knockouts' && mission.knockoutFilter === 'elements' && (
@@ -1066,11 +1300,14 @@ function critterToDraft(critter: CritterDefinition): CritterDraft {
       defenseDelta: String(level.statDelta.defense),
       speedDelta: String(level.statDelta.speed),
       abilityUnlockIdsInput: level.abilityUnlockIds.join(','),
+      skillUnlockIdsInput: (level.skillUnlockIds ?? []).join(','),
       missions: level.missions.map((mission) => ({
         id: mission.id,
         type: mission.type,
         targetValue: String(mission.targetValue),
         ascendsFromCritterId: mission.ascendsFromCritterId ? String(mission.ascendsFromCritterId) : '',
+        storyFlagId: mission.storyFlagId ?? '',
+        label: mission.label ?? '',
         knockoutFilter:
           Array.isArray(mission.knockoutCritterIds) && mission.knockoutCritterIds.length > 0
             ? 'critters'
@@ -1093,7 +1330,7 @@ function draftToRaw(draft: CritterDraft): unknown {
     element: draft.element,
     rarity: draft.rarity,
     description: draft.description.trim(),
-    spriteUrl: draft.spriteUrl.trim(),
+    spriteUrl: withCacheBusterTag(draft.spriteUrl.trim()),
     baseStats: {
       hp: Number.parseInt(draft.hp, 10),
       attack: Number.parseInt(draft.attack, 10),
@@ -1119,6 +1356,10 @@ function draftToRaw(draft: CritterDraft): unknown {
         .split(',')
         .map((entry) => entry.trim())
         .filter((entry) => entry.length > 0),
+      skillUnlockIds: level.skillUnlockIdsInput
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0),
       missions: level.missions.map((mission) => {
         const ascendsFromCritterId = Number.parseInt(mission.ascendsFromCritterId, 10);
         const knockoutCritterIds = mission.knockoutCritterIds
@@ -1133,6 +1374,12 @@ function draftToRaw(draft: CritterDraft): unknown {
           targetValue: Number.parseInt(mission.targetValue, 10),
           ...(mission.type === 'ascension' && Number.isFinite(ascendsFromCritterId)
             ? { ascendsFromCritterId }
+            : {}),
+          ...(mission.type === 'story_flag' && mission.storyFlagId.trim()
+            ? {
+                storyFlagId: mission.storyFlagId.trim(),
+                ...(mission.label.trim() ? { label: mission.label.trim() } : {}),
+              }
             : {}),
           ...(mission.type === 'opposing_knockouts' && knockoutCritterIds.length > 0
             ? { knockoutCritterIds }
@@ -1154,6 +1401,7 @@ function createDefaultLevelDraft(): LevelDraft {
     defenseDelta: '0',
     speedDelta: '0',
     abilityUnlockIdsInput: '',
+    skillUnlockIdsInput: '',
     missions: [],
   };
 }
@@ -1165,7 +1413,20 @@ function getMissionTypeLabel(missionType: CritterMissionType): string {
   if (missionType === 'ascension') {
     return 'Ascension';
   }
+  if (missionType === 'story_flag') {
+    return 'Story Flag';
+  }
   return missionType;
+}
+
+function toMissionTypeValue(value: string): CritterMissionType {
+  if (value === 'ascension') {
+    return 'ascension';
+  }
+  if (value === 'story_flag') {
+    return 'story_flag';
+  }
+  return 'opposing_knockouts';
 }
 
 function toKnockoutFilterValue(value: string): MissionDraft['knockoutFilter'] {
@@ -1225,8 +1486,50 @@ function validateDraftBeforeApply(draft: CritterDraft, critters: CritterDefiniti
           }
         }
       }
+
+      if (mission.type === 'story_flag') {
+        if (!mission.storyFlagId.trim()) {
+          return `Level ${levelIndex + 1} mission ${missionIndex + 1} needs a Story Flag ID.`;
+        }
+      }
     }
   }
 
   return null;
+}
+
+function normalizeAssetUrlForCompare(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  try {
+    const parsed = new URL(trimmed, window.location.origin);
+    parsed.search = '';
+    parsed.hash = '';
+    if (/^https?:\/\//i.test(trimmed)) {
+      return parsed.toString();
+    }
+    return parsed.pathname;
+  } catch {
+    return trimmed.split('?')[0].split('#')[0];
+  }
+}
+
+function withCacheBusterTag(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  try {
+    const parsed = new URL(trimmed, window.location.origin);
+    parsed.searchParams.set('v', String(Date.now()));
+    if (/^https?:\/\//i.test(trimmed)) {
+      return parsed.toString();
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    const separator = trimmed.includes('?') ? '&' : '?';
+    return `${trimmed}${separator}v=${Date.now()}`;
+  }
 }

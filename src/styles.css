@@ -268,6 +268,12 @@ button.secondary:hover:not(:disabled) {
   overflow: hidden;
 }
 
+@media (max-width: 1400px), (max-height: 800px) {
+  .game-screen {
+    font-size: clamp(12px, 1.8vmin, 16px);
+  }
+}
+
 .game-screen__hud {
   position: absolute;
   top: 0.75rem;
@@ -386,17 +392,23 @@ button.secondary:hover:not(:disabled) {
   display: grid;
   place-items: center;
   padding: clamp(0.5rem, 2.2vw, 1.2rem);
-  background: linear-gradient(180deg, rgba(3, 8, 19, 0.42), rgba(2, 6, 14, 0.56));
+  background: linear-gradient(180deg, rgba(3, 12, 28, 0.97), rgba(2, 8, 18, 0.98));
+}
+
+@media (max-width: 1400px), (max-height: 800px) {
+  .battle-overlay {
+    font-size: clamp(12px, 2vmin, 16px);
+  }
 }
 
 .battle-screen {
-  width: min(960px, 100%);
-  max-height: 100%;
+  width: min(880px, 96vw);
+  max-height: min(90vh, 720px);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 0.55rem;
-  border-radius: 18px;
-  padding: clamp(0.65rem, 1.5vw, 1rem);
+  gap: 0.45rem;
+  border-radius: 14px;
+  padding: 0.5rem 0.65rem;
   border: 1px solid rgba(111, 204, 255, 0.42);
   background:
     radial-gradient(130% 75% at 100% 0%, rgba(111, 204, 255, 0.18), transparent 60%),
@@ -407,11 +419,76 @@ button.secondary:hover:not(:disabled) {
     inset 0 0 20px rgba(97, 198, 255, 0.1);
 }
 
+.game-screen__viewport:has(.battle-overlay) {
+  background: #050c18;
+}
+
 .battle-screen__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.65rem;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.battle-critter__squad-grid-wrap {
+  width: 100%;
+  min-height: 0;
+  padding: clamp(0.5em, 2vmin, 1em);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.battle-squad-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.35rem;
+  width: min(110px, 16vmin);
+}
+
+.battle-squad-grid__cell {
+  aspect-ratio: 1;
+  border-radius: 6px;
+  border: 1px solid rgba(111, 204, 255, 0.25);
+  background: rgba(6, 15, 29, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  cursor: pointer;
+  padding: 0;
+}
+
+.battle-squad-grid__cell:disabled {
+  cursor: default;
+}
+
+.battle-squad-grid__cell.is-active {
+  border-color: rgba(122, 246, 168, 0.68);
+  box-shadow: 0 0 10px rgba(122, 246, 168, 0.25);
+}
+
+.battle-squad-grid__cell:not(:disabled):hover {
+  border-color: rgba(141, 255, 190, 0.5);
+  background: rgba(10, 25, 45, 0.85);
+}
+
+.battle-squad-grid__cell.is-fainted {
+  opacity: 0.5;
+  filter: grayscale(0.8);
+}
+
+.battle-squad-grid__sprite {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+
+.battle-squad-grid__empty {
+  font-size: 0.65rem;
+  color: #6a8ba8;
 }
 
 .battle-screen__source,
@@ -422,29 +499,41 @@ button.secondary:hover:not(:disabled) {
 }
 
 .battle-screen__source {
-  font-size: clamp(0.88rem, 2.1vw, 1.08rem);
+  font-size: 0.92rem;
 }
 
 .battle-screen__turn {
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   color: #8fd0ff;
 }
 
 .battle-screen__field {
   min-height: 0;
+  aspect-ratio: 2 / 1;
+  width: 100%;
+  max-height: min(42vh, 320px);
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.6rem;
+  gap: 0.45rem;
 }
 
 .battle-critter {
-  border-radius: 14px;
-  border: 3px solid rgba(112, 200, 255, 0.36);
-  padding: 0.55rem;
+  position: relative;
+  border-radius: 10px;
+  border: 2px solid rgba(112, 200, 255, 0.36);
+  padding: 0.32rem;
   background: rgba(8, 21, 38, 0.84);
   display: grid;
-  gap: 0.42rem;
+  gap: 0.2rem;
   min-height: 0;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  align-self: center;
+  justify-self: center;
 }
 
 .battle-critter--opponent {
@@ -459,36 +548,83 @@ button.secondary:hover:not(:disabled) {
 
 .battle-critter__title {
   margin: 0;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: #95b7d8;
+  line-height: 1.1;
+}
+
+.battle-critter__effect-bubbles {
+  position: absolute;
+  top: 0.2rem;
+  right: 0.2rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+  max-width: 52%;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.battle-critter__effect-bubble {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+  cursor: default;
+}
+
+.battle-critter__effect-bubble .battle-critter__effect-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  object-fit: contain;
+}
+
+.battle-critter__effect-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  object-fit: contain;
+  display: block;
 }
 
 .battle-critter__head {
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.35rem;
+  margin-bottom: -0.12rem;
 }
 
 .battle-critter__head h3 {
   margin: 0;
-  font-size: 0.96rem;
+  font-size: 0.9rem;
   color: #f2f8ff;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .battle-critter__head span {
-  font-size: 0.78rem;
+  font-size: 0.76rem;
   color: #9fd0f2;
+  flex-shrink: 0;
 }
 
 .battle-critter__sprite {
   justify-self: center;
-  width: min(78%, 170px);
+  width: min(72%, 120px);
+  max-height: 100%;
   aspect-ratio: 1 / 1;
   object-fit: contain;
   image-rendering: pixelated;
+  margin-top: -0.08rem;
 }
 
 .battle-critter--player .battle-critter__sprite {
@@ -506,24 +642,28 @@ button.secondary:hover:not(:disabled) {
 }
 
 .battle-critter__sprite--missing {
-  border-radius: 10px;
+  border-radius: 6px;
   background: rgba(255, 255, 255, 0.05);
   display: grid;
   place-items: center;
   color: #89abca;
-  font-size: 0.74rem;
+  font-size: 0.68rem;
 }
 
 .battle-critter__hp {
   display: grid;
-  gap: 0.2rem;
+  gap: 0.08rem;
+  width: 68%;
+  max-width: 8rem;
+  justify-self: center;
+  text-align: center;
 }
 
 .battle-critter__hp-bar {
   position: relative;
   display: block;
   width: 100%;
-  height: 0.72rem;
+  height: 0.38rem;
   border-radius: 999px;
   border: 1px solid rgba(120, 196, 250, 0.34);
   background: rgba(6, 15, 29, 0.86);
@@ -538,16 +678,19 @@ button.secondary:hover:not(:disabled) {
 }
 
 .battle-critter__hp-label {
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   color: #d5e7f7;
+  display: block;
 }
 
 .battle-critter__stats {
   display: flex;
-  gap: 0.4rem;
+  gap: 0.28rem;
   flex-wrap: wrap;
   font-size: 0.68rem;
   color: #9fc0dd;
+  justify-content: center;
+  justify-self: center;
 }
 
 .battle-critter__empty {
@@ -558,17 +701,39 @@ button.secondary:hover:not(:disabled) {
 
 .battle-screen__console {
   display: grid;
-  gap: 0.5rem;
-  border-radius: 12px;
+  gap: 0.4rem;
+  border-radius: 10px;
   border: 1px solid rgba(119, 196, 255, 0.3);
   background: rgba(6, 15, 29, 0.88);
-  padding: 0.55rem;
+  padding: 0.5rem 0.65rem;
+  min-height: 10.5rem;
+  flex-shrink: 0;
+}
+
+.battle-screen__log-wrap {
+  min-height: 3.5rem; /* reserve space so buttons don't move when back link appears */
+  margin-bottom: 0.4rem;
 }
 
 .battle-screen__log {
   margin: 0;
-  min-height: 1.3rem;
   color: #e6f4ff;
+  font-size: 0.88rem;
+  line-height: 1.25;
+}
+
+.battle-screen__back-link {
+  display: inline-block;
+  margin-top: 0.35rem;
+  color: #9fc1df;
+  text-decoration: none;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.battle-screen__back-link:hover {
+  color: #c4dff5;
+  text-decoration: underline;
 }
 
 .battle-screen__hint {
@@ -580,11 +745,104 @@ button.secondary:hover:not(:disabled) {
 .battle-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.42rem;
+  gap: 0.4rem;
+  min-height: 5.5rem;
+  grid-auto-rows: minmax(2.5rem, auto);
 }
 
 .battle-actions button {
-  min-height: 2.2rem;
+  min-height: 2.5rem;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.battle-skill-button {
+  min-height: 2.5rem;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.92rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.battle-skill-button--colored {
+  background: var(--battle-skill-bg) !important;
+  color: #1a1a1a !important;
+  border-color: rgba(0, 0, 0, 0.25) !important;
+}
+
+.battle-skill-button--colored:hover:not(:disabled) {
+  background: var(--battle-skill-bg) !important;
+  filter: brightness(1.08);
+  border-color: rgba(0, 0, 0, 0.35) !important;
+}
+
+.battle-skill-button .skill-cell__element-logo {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.battle-skill-button .skill-cell__name {
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: clamp(0.7rem, 1.2em, 0.88rem);
+}
+
+.battle-skill-button .skill-cell__spacer {
+  flex-shrink: 0;
+}
+
+.battle-skill-button .skill-cell__type {
+  flex-shrink: 0;
+  font-weight: 700;
+  font-size: 0.75em;
+}
+
+.battle-skill-button .skill-cell__value {
+  flex-shrink: 0;
+}
+
+.battle-skill-button .skill-cell__effect-icon {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.element-chart-grid-wrap {
+  overflow-x: auto;
+  margin-top: 0.5rem;
+}
+
+.element-chart-grid {
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.element-chart-grid th,
+.element-chart-grid td {
+  border: 1px solid rgba(121, 198, 255, 0.3);
+  padding: 0.2rem 0.35rem;
+  background: rgba(10, 23, 42, 0.6);
+}
+
+.element-chart-grid th {
+  color: #9fc1df;
+  text-align: left;
+}
+
+.element-chart-grid td input {
+  width: 3rem;
+  padding: 0.15rem;
+  font-size: 0.75rem;
 }
 
 .battle-squad-picker {
@@ -626,6 +884,11 @@ button.secondary:hover:not(:disabled) {
 .battle-screen__continue-button,
 .battle-screen__back-button {
   width: 100% !important;
+}
+
+.battle-actions .battle-screen__continue-button {
+  width: auto !important;
+  align-self: start;
 }
 
 .battle-transition {
@@ -1067,15 +1330,16 @@ button.secondary:hover:not(:disabled) {
   display: grid;
   grid-auto-rows: auto;
   gap: 0.28rem;
-  overflow: hidden;
+  overflow: visible;
 }
 
-/* Collection page sizing: narrower cards with taller vertical profile. */
+/* Collection page sizing: stacked trading-card style with room for Stats, Skills, Missions. */
 .collection-grid .collection-card {
   container-type: inline-size;
   width: 100%;
   justify-self: stretch;
-  min-height: clamp(23rem, 54cqw, 31rem);
+  min-height: clamp(30rem, 72cqw, 42rem);
+  max-height: none;
   padding: clamp(0.42rem, 2.2cqw, 0.7rem) clamp(0.36rem, 1.8cqw, 0.58rem)
     clamp(0.52rem, 2.6cqw, 0.9rem);
   gap: clamp(0.2rem, 1.15cqw, 0.46rem);
@@ -1098,9 +1362,25 @@ button.secondary:hover:not(:disabled) {
 }
 
 .collection-card.is-locked {
+  border-color: rgba(182, 198, 214, 0.28);
+}
+
+.collection-card__body {
+  display: grid;
+  gap: 0.28rem;
+  grid-auto-rows: auto;
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+}
+
+.collection-grid .collection-card__body {
+  gap: clamp(0.2rem, 1.15cqw, 0.46rem);
+}
+
+.collection-card.is-locked .collection-card__body {
   filter: grayscale(0.9);
   opacity: 0.76;
-  border-color: rgba(182, 198, 214, 0.28);
 }
 
 .collection-card__head {
@@ -1203,7 +1483,7 @@ button.secondary:hover:not(:disabled) {
   font-size: 1rem;
 }
 
-.collection-card.is-locked .collection-card__element-logo {
+.collection-card.is-locked .collection-card__body .collection-card__element-logo {
   filter: grayscale(1) brightness(0.8);
   opacity: 0.78;
 }
@@ -1380,7 +1660,8 @@ button.secondary:hover:not(:disabled) {
 
 .collection-card__stats h3,
 .collection-card__missions h3,
-.collection-card__abilities h3 {
+.collection-card__abilities h3,
+.collection-card__skills h3 {
   margin: 0 0 0.24rem;
   font-size: 0.62rem;
   letter-spacing: 0.07em;
@@ -1390,7 +1671,8 @@ button.secondary:hover:not(:disabled) {
 
 .collection-card__stats,
 .collection-card__missions,
-.collection-card__abilities {
+.collection-card__abilities,
+.collection-card__skills {
   background: rgba(10, 23, 42, 0.76);
   border: 1px solid rgba(121, 198, 255, 0.26);
   border-radius: 9px;
@@ -1399,18 +1681,130 @@ button.secondary:hover:not(:disabled) {
   min-width: 0;
 }
 
+.collection-card__skills {
+  position: relative;
+}
+
 .collection-grid .collection-card__stats,
 .collection-grid .collection-card__missions,
-.collection-grid .collection-card__abilities {
-  width: clamp(148px, 84cqw, 268px);
+.collection-grid .collection-card__abilities,
+.collection-grid .collection-card__skills {
+  width: clamp(192px, 96cqw, 320px);
   justify-self: center;
-  padding: clamp(0.06rem, 0.45cqw, 0.14rem) clamp(0.2rem, 1.1cqw, 0.34rem)
-    clamp(0.05rem, 0.35cqw, 0.1rem);
+  padding: clamp(0.08rem, 0.5cqw, 0.16rem) clamp(0.28rem, 1.4cqw, 0.42rem)
+    clamp(0.08rem, 0.4cqw, 0.14rem);
+}
+
+.collection-card__skill-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.3rem;
+}
+
+.collection-card__skill-slot {
+  min-height: 2.1rem;
+  min-width: 0;
+  padding: 0.3rem 0.45rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  background: rgba(255, 255, 255, 0.12);
+  color: #e4edf5;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.22rem;
+  overflow: hidden;
+}
+
+.collection-card__skill-slot .skill-cell__name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: clamp(0.58rem, 3.2cqw, 0.72rem);
+}
+
+.collection-card__skill-slot--empty {
+  cursor: default;
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: rgba(228, 237, 245, 0.5);
+}
+
+.skill-cell__element-logo {
+  width: 1rem;
+  height: 1rem;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.skill-cell__name {
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skill-cell__spacer {
+  flex-shrink: 0;
+}
+
+.skill-cell__type {
+  flex-shrink: 0;
+  font-weight: 700;
+  font-size: 0.75em;
+}
+
+.skill-cell__value {
+  flex-shrink: 0;
+}
+
+.skill-cell__effect-icon {
+  width: 1rem;
+  height: 1rem;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.collection-card__skill-popup {
+  position: absolute;
+  z-index: 10;
+  background: rgba(8, 18, 32, 0.98);
+  border: 1px solid rgba(121, 198, 255, 0.4);
+  border-radius: 10px;
+  padding: 0.5rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 12rem;
+  max-height: 14rem;
+}
+
+.collection-card__skill-popup-title {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #b8d4ee;
+}
+
+.collection-card__skill-popup-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  overflow-y: auto;
+}
+
+.collection-card__skill-popup-option {
+  font-size: 0.72rem;
+  text-align: left;
+  padding: 0.3rem 0.5rem;
 }
 
 .collection-grid .collection-card__stats h3,
 .collection-grid .collection-card__missions h3,
-.collection-grid .collection-card__abilities h3 {
+.collection-grid .collection-card__abilities h3,
+.collection-grid .collection-card__skills h3 {
   margin: 0 0 clamp(0.03rem, 0.35cqw, 0.1rem);
   font-size: clamp(0.68rem, 3.4cqw, 0.9rem);
   line-height: 1.05;
@@ -1547,24 +1941,50 @@ button.secondary:hover:not(:disabled) {
 }
 
 .collection-card__advance {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
   background: linear-gradient(180deg, rgba(57, 176, 106, 0.95), rgba(33, 132, 76, 0.95));
   border: 1px solid rgba(141, 255, 190, 0.58);
   color: #eafff0;
-  border-radius: 8px;
-  font-size: 0.7rem;
+  border-radius: 12px;
+  font-size: 1.1rem;
   font-weight: 700;
-  padding: 0.24rem 0.36rem;
+  padding: 0.6rem 1rem;
+}
+
+.collection-card__advance--unlock {
+  background: linear-gradient(180deg, rgba(72, 200, 120, 0.98), rgba(40, 150, 88, 0.98));
+  border-color: rgba(160, 255, 200, 0.7);
+  box-shadow: 0 0 12px rgba(100, 255, 160, 0.35);
 }
 
 .collection-grid .collection-card__advance {
   width: auto !important;
   min-width: 0;
-  justify-self: center;
-  align-self: center;
-  font-size: clamp(0.66rem, 3.25cqw, 0.84rem);
-  line-height: 1.05;
-  padding: clamp(0.14rem, 0.72cqw, 0.22rem) clamp(0.28rem, 1.35cqw, 0.48rem);
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: clamp(1rem, 5.5cqw, 1.35rem);
+  line-height: 1.15;
+  padding: clamp(0.5rem, 2.8cqw, 0.75rem) clamp(0.75rem, 4cqw, 1.1rem);
   border-radius: 999px;
+}
+
+.collection-grid .collection-card__advance--unlock {
+  box-shadow: 0 0 14px rgba(100, 255, 160, 0.4);
+}
+
+.collection-card__advance:hover:not(:disabled) {
+  transform: translate(-50%, -50%);
+  border-color: rgba(160, 255, 200, 0.85);
+  box-shadow: 0 0 14px rgba(100, 255, 160, 0.5);
+}
+
+.collection-card__advance:active:not(:disabled) {
+  transform: translate(-50%, -50%);
 }
 
 .collection-card--selectable {
@@ -1663,7 +2083,8 @@ button.secondary:hover:not(:disabled) {
 
 .admin-shell__content {
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 0.35rem;
 }
 
@@ -1679,8 +2100,37 @@ button.secondary:hover:not(:disabled) {
   margin-top: 0;
 }
 
+.admin-inline-auth {
+  margin-top: 0.9rem;
+  max-width: 340px;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.admin-inline-auth label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #b9d8f2;
+}
+
+.admin-inline-auth input {
+  width: 100%;
+  border: 1px solid rgba(112, 200, 255, 0.36);
+  background: rgba(8, 21, 39, 0.85);
+  border-radius: 8px;
+  padding: 0.55rem 0.65rem;
+  color: #e7f6ff;
+  font-size: 0.95rem;
+}
+
+.admin-inline-auth__status {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #f4d2d8;
+}
+
 .admin-tool {
-  height: 100%;
+  height: auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -1740,8 +2190,8 @@ button.secondary:hover:not(:disabled) {
 }
 
 .admin-layout {
-  flex: 1;
-  min-height: 0;
+  flex: 0 0 auto;
+  min-height: auto;
   display: grid;
   grid-template-columns: minmax(300px, 420px) minmax(0, 1fr);
   gap: 0.9rem;
@@ -1766,18 +2216,18 @@ button.secondary:hover:not(:disabled) {
   display: flex;
   flex-direction: column;
   gap: 0.8rem;
-  min-height: 0;
-  overflow: auto;
-  padding-right: 0.35rem;
+  min-height: auto;
+  overflow: visible;
+  padding-right: 0;
 }
 
 .admin-layout__center {
   display: flex;
   flex-direction: column;
   gap: 0.8rem;
-  min-height: 0;
-  overflow: auto;
-  padding-right: 0.35rem;
+  min-height: auto;
+  overflow: visible;
+  padding-right: 0;
 }
 
 .admin-map-workspace {
@@ -1839,8 +2289,8 @@ button.secondary:hover:not(:disabled) {
 }
 
 .admin-panel--grow {
-  flex: 1;
-  min-height: 0;
+  flex: 0 0 auto;
+  min-height: auto;
   display: flex;
   flex-direction: column;
 }
@@ -1852,7 +2302,6 @@ button.secondary:hover:not(:disabled) {
 .admin-panel--map-canvas .map-grid-wrap {
   flex: 0 0 auto;
   min-height: 340px;
-  max-height: 62vh;
 }
 
 .admin-row {
@@ -1868,6 +2317,104 @@ button.secondary:hover:not(:disabled) {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
   gap: 0.5rem;
   margin-bottom: 0.6rem;
+}
+
+.admin-effect-picker-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.24rem;
+}
+
+.admin-effect-picker {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.25rem;
+  padding: 0.35rem 0.5rem;
+  background: rgba(8, 21, 39, 0.9);
+  border: 1px solid rgba(121, 198, 255, 0.35);
+  border-radius: 6px;
+  cursor: text;
+}
+
+.admin-effect-picker__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.15rem 0.35rem;
+  font-size: 0.78rem;
+  background: rgba(121, 198, 255, 0.2);
+  border-radius: 4px;
+  border: 1px solid rgba(121, 198, 255, 0.4);
+}
+
+.admin-effect-picker__chip-remove {
+  padding: 0 0.15rem;
+  font-size: 1rem;
+  line-height: 1;
+  color: #9fc2df;
+  background: none;
+  border: none;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.admin-effect-picker__chip-remove:hover {
+  color: #fff;
+  background: rgba(200, 80, 80, 0.4);
+}
+
+.admin-effect-picker__input {
+  flex: 1;
+  min-width: 120px;
+  padding: 0.2rem 0;
+  font-size: 0.9rem;
+  background: transparent !important;
+  border: none !important;
+  outline: none;
+}
+
+.admin-effect-picker__input::placeholder {
+  color: rgba(159, 194, 223, 0.5);
+}
+
+.admin-effect-picker__dropdown {
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 0.2rem;
+  max-height: 220px;
+  overflow-y: auto;
+  background: rgba(8, 21, 39, 0.98);
+  border: 1px solid rgba(121, 198, 255, 0.4);
+  border-radius: 6px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+}
+
+.admin-effect-picker__dropdown-empty {
+  padding: 0.6rem 0.75rem;
+  font-size: 0.82rem;
+  color: rgba(159, 194, 223, 0.7);
+}
+
+.admin-effect-picker__dropdown-item {
+  display: block;
+  width: 100%;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.85rem;
+  text-align: left;
+  color: #e4f3ff;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.admin-effect-picker__dropdown-item:hover {
+  background: rgba(121, 198, 255, 0.15);
 }
 
 .admin-map-window .admin-layout {
@@ -1886,8 +2433,6 @@ button.secondary:hover:not(:disabled) {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
-  max-height: 68vh;
-  overflow: auto;
   margin-top: 0.5rem;
 }
 
@@ -1969,7 +2514,7 @@ button.secondary:hover:not(:disabled) {
 }
 
 .critter-editor-panel {
-  overflow: auto;
+  overflow: visible;
 }
 
 .critter-editor-group {
@@ -2050,8 +2595,6 @@ button.secondary:hover:not(:disabled) {
 }
 
 .critter-mission-critter-list {
-  max-height: 190px;
-  overflow: auto;
   border: 1px solid rgba(112, 200, 255, 0.24);
   border-radius: 8px;
   background: rgba(8, 20, 36, 0.62);
@@ -2119,8 +2662,6 @@ button.secondary:hover:not(:disabled) {
 }
 
 .tileset-grid-wrap {
-  max-height: 320px;
-  overflow: auto;
   border: 1px solid rgba(101, 192, 255, 0.28);
   border-radius: 8px;
   padding: 0.4rem;
@@ -2129,7 +2670,7 @@ button.secondary:hover:not(:disabled) {
 }
 
 .npc-sheet-grid-wrap {
-  max-height: 220px;
+  max-height: none;
 }
 
 .tileset-grid {
@@ -2172,9 +2713,52 @@ button.secondary:hover:not(:disabled) {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  max-height: 240px;
-  overflow: auto;
   margin-top: 0.5rem;
+}
+
+.admin-item-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+
+.admin-item-grid button {
+  min-width: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-skill-list-item.admin-skill-list-item--colored {
+  background: var(--admin-skill-bg) !important;
+  color: #1a1a1a !important;
+  border-color: rgba(0, 0, 0, 0.25);
+}
+
+.admin-skill-list-item.admin-skill-list-item--colored:hover:not(:disabled) {
+  background: var(--admin-skill-bg) !important;
+  filter: brightness(1.08);
+  border-color: rgba(0, 0, 0, 0.35);
+}
+
+.admin-skill-list-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.admin-skill-list-item .skill-cell__element-logo {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.admin-skill-list-item .skill-cell__effect-icon {
+  width: 1.1rem;
+  height: 1.1rem;
 }
 
 .saved-paint-row {
@@ -2217,12 +2801,75 @@ button.secondary:hover:not(:disabled) {
   white-space: nowrap;
 }
 
+.npc-instance-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-top: 0.5rem;
+}
+
+.npc-instance-card {
+  background: rgba(12, 25, 44, 0.78);
+  border: 1px solid rgba(101, 192, 255, 0.26);
+  border-radius: 10px;
+  padding: 0.5rem;
+}
+
+.npc-instance-card.is-selected {
+  box-shadow:
+    0 0 0 1px rgba(94, 231, 255, 0.65),
+    0 0 16px rgba(94, 231, 255, 0.18);
+}
+
+.npc-instance-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+
+.npc-instance-card__header h4 {
+  margin: 0;
+  font-size: 0.84rem;
+}
+
+.npc-instance-card__meta {
+  margin: 0;
+  font-size: 0.72rem;
+  color: #9fbedb;
+  text-align: right;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.npc-instance-card__fields {
+  margin-bottom: 0.45rem;
+}
+
+.npc-instance-card__fields label {
+  min-width: 0;
+}
+
+.npc-instance-card__actions {
+  margin-bottom: 0;
+}
+
+@media (max-width: 760px) {
+  .npc-instance-card__header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .npc-instance-card__meta {
+    text-align: left;
+  }
+}
+
 .encounter-current-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
   gap: 0.4rem;
-  max-height: 300px;
-  overflow: auto;
   margin-top: 0.5rem;
 }
 
@@ -2281,8 +2928,6 @@ button.secondary:hover:not(:disabled) {
 
 .encounter-candidate-grid {
   margin-top: 0.5rem;
-  max-height: 620px;
-  overflow: auto;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 0.6rem;
@@ -2427,8 +3072,6 @@ button.secondary:hover:not(:disabled) {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  max-height: 220px;
-  overflow: auto;
   margin-top: 0.35rem;
 }
 
@@ -2461,8 +3104,6 @@ button.secondary:hover:not(:disabled) {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 0.4rem;
-  max-height: 230px;
-  overflow: auto;
   margin-bottom: 0.5rem;
 }
 
@@ -2727,20 +3368,33 @@ button.secondary:hover:not(:disabled) {
 
 .map-grid__npc-badge {
   position: absolute;
-  right: 1px;
-  top: 1px;
-  min-width: 14px;
-  height: 14px;
+  right: 2px;
+  top: 2px;
+  min-width: 20px;
+  max-width: calc(100% - 4px);
+  min-height: 20px;
   border-radius: 999px;
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
   color: #ffffff;
-  font-size: 0.52rem;
+  font-size: 0.44rem;
+  line-height: 1.1;
+  padding: 0.1rem 0.28rem;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-weight: 700;
-  border: 1px solid rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.7);
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.6);
   z-index: 7;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.map-grid__npc-badge.is-flag-locked {
+  opacity: 0.65;
+  border-style: dashed;
 }
 
 .admin-warning-box {
@@ -2758,6 +3412,95 @@ button.secondary:hover:not(:disabled) {
 .admin-warning-box ul {
   margin: 0;
   padding-left: 1rem;
+}
+
+.starter-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 17;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 9, 18, 0.78);
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.starter-overlay__panel {
+  width: min(880px, 96%);
+  background: rgba(16, 23, 36, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 1rem;
+}
+
+.starter-overlay__speaker {
+  margin: 0;
+  color: #ffd26f;
+  font-weight: 700;
+}
+
+.starter-overlay__hover-prompt {
+  margin: 0.35rem 0 0.85rem;
+  color: #ffe38b;
+}
+
+.starter-overlay__cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.starter-overlay__card {
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  background: rgba(9, 15, 26, 0.92);
+  color: #f1f7ff;
+  display: grid;
+  gap: 0.4rem;
+  justify-items: center;
+  padding: 0.6rem;
+  cursor: pointer;
+  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.starter-overlay__card:hover,
+.starter-overlay__card.is-hovered {
+  border-color: #ffd95f;
+  box-shadow: 0 0 16px rgba(255, 226, 102, 0.5);
+  transform: translateY(-2px);
+}
+
+.starter-overlay__card img,
+.starter-overlay__card-missing {
+  width: 88px;
+  height: 88px;
+  object-fit: contain;
+}
+
+.starter-overlay__card-missing {
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 0.72rem;
+}
+
+.starter-overlay__confirm {
+  width: min(520px, 94%);
+  background: rgba(12, 18, 28, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  padding: 0.9rem 1rem;
+}
+
+.starter-overlay__confirm p {
+  margin: 0.25rem 0 0;
+}
+
+.starter-overlay__confirm-actions {
+  margin-top: 0.8rem;
+  display: flex;
+  gap: 0.5rem;
 }
 
 @media (max-width: 900px) {
@@ -2832,6 +3575,10 @@ button.secondary:hover:not(:disabled) {
   .admin-map-window__header input {
     min-width: 0;
     width: 100%;
+  }
+
+  .starter-overlay__cards {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

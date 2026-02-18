@@ -41,7 +41,8 @@ const ENCOUNTER_ELEMENT_ACCENTS: Record<string, string> = {
   gust: '#d9f6ff',
   stone: '#d7b98f',
   spark: '#ffe06c',
-  shade: '#c5b7ff',
+  shade: '#b8a0e0',
+  normal: '#b0b0b0',
 };
 
 const ENCOUNTER_ELEMENT_LABELS: Record<string, string> = {
@@ -52,6 +53,7 @@ const ENCOUNTER_ELEMENT_LABELS: Record<string, string> = {
   stone: 'ST',
   spark: 'SP',
   shade: 'SH',
+  normal: 'NO',
 };
 
 export function EncounterTool() {
@@ -316,7 +318,7 @@ export function EncounterTool() {
           <p className="admin-note">Each table must have unique critters and weights that sum to exactly 1.0.</p>
           {status && <p className="admin-note">{status}</p>}
           {error && <p className="admin-note" style={{ color: '#f7b9b9' }}>{error}</p>}
-          <div className="saved-paint-list">
+          <div className="admin-item-grid">
             {encounterTables.map((table) => (
               <button
                 key={table.id}

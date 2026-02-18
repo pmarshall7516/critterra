@@ -20,7 +20,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#559b3b',
     accentColor: '#64c47c',
     height: 0,
-    atlasIndex: 994
+    atlasIndex: 994,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -29,7 +30,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#539b3b',
     accentColor: '#64c47d',
     height: 0,
-    atlasIndex: 995
+    atlasIndex: 995,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -38,7 +40,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#519b3b',
     accentColor: '#64c47f',
     height: 0,
-    atlasIndex: 1046
+    atlasIndex: 1046,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -47,7 +50,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#509b3b',
     accentColor: '#64c481',
     height: 0,
-    atlasIndex: 1047
+    atlasIndex: 1047,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -56,7 +60,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#4e9b3b',
     accentColor: '#64c482',
     height: 0,
-    atlasIndex: 1098
+    atlasIndex: 1098,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -65,7 +70,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#4d9b3b',
     accentColor: '#64c484',
     height: 0,
-    atlasIndex: 1099
+    atlasIndex: 1099,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -74,7 +80,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#4b9b3b',
     accentColor: '#64c485',
     height: 0,
-    atlasIndex: 1150
+    atlasIndex: 1150,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -83,7 +90,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#499b3b',
     accentColor: '#64c487',
     height: 0,
-    atlasIndex: 1151
+    atlasIndex: 1151,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -92,7 +100,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#489b3b',
     accentColor: '#64c489',
     height: 0,
-    atlasIndex: 1202
+    atlasIndex: 1202,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -101,7 +110,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#469b3b',
     accentColor: '#64c48a',
     height: 0,
-    atlasIndex: 1203
+    atlasIndex: 1203,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -110,7 +120,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#459b3b',
     accentColor: '#64c48c',
     height: 0,
-    atlasIndex: 1254
+    atlasIndex: 1254,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -119,7 +130,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#439b3b',
     accentColor: '#64c48d',
     height: 0,
-    atlasIndex: 1255
+    atlasIndex: 1255,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -128,7 +140,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#419b3b',
     accentColor: '#64c48f',
     height: 0,
-    atlasIndex: 1048
+    atlasIndex: 1048,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -137,7 +150,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#409b3b',
     accentColor: '#64c491',
     height: 0,
-    atlasIndex: 1100
+    atlasIndex: 1100,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -146,7 +160,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3e9b3b',
     accentColor: '#64c492',
     height: 0,
-    atlasIndex: 1101
+    atlasIndex: 1101,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -155,7 +170,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3d9b3b',
     accentColor: '#64c494',
     height: 0,
-    atlasIndex: 1102
+    atlasIndex: 1102,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -164,7 +180,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b3b',
     accentColor: '#64c496',
     height: 0,
-    atlasIndex: 1103
+    atlasIndex: 1103,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -173,7 +190,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b3d',
     accentColor: '#64c497',
     height: 0,
-    atlasIndex: 682
+    atlasIndex: 682,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -182,7 +200,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b3e',
     accentColor: '#64c499',
     height: 0,
-    atlasIndex: 683
+    atlasIndex: 683,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -191,7 +210,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b40',
     accentColor: '#64c49a',
     height: 0,
-    atlasIndex: 684
+    atlasIndex: 684,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -200,7 +220,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b41',
     accentColor: '#64c49c',
     height: 0,
-    atlasIndex: 736
+    atlasIndex: 736,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -209,7 +230,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b43',
     accentColor: '#64c49e',
     height: 0,
-    atlasIndex: 788
+    atlasIndex: 788,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -218,7 +240,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b45',
     accentColor: '#64c49f',
     height: 0,
-    atlasIndex: 787
+    atlasIndex: 787,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -227,7 +250,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b46',
     accentColor: '#64c4a1',
     height: 0,
-    atlasIndex: 786
+    atlasIndex: 786,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -236,7 +260,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b48',
     accentColor: '#64c4a2',
     height: 0,
-    atlasIndex: 734
+    atlasIndex: 734,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -245,7 +270,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b49',
     accentColor: '#64c4a4',
     height: 0,
-    atlasIndex: 635
+    atlasIndex: 635,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -254,7 +280,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b4b',
     accentColor: '#64c4a6',
     height: 0,
-    atlasIndex: 104
+    atlasIndex: 104,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -263,7 +290,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b4d',
     accentColor: '#64c4a7',
     height: 0,
-    atlasIndex: 615
+    atlasIndex: 615,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -272,7 +300,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b4e',
     accentColor: '#64c4a9',
     height: 0,
-    atlasIndex: 563
+    atlasIndex: 563,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -281,7 +310,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b50',
     accentColor: '#64c4aa',
     height: 0,
-    atlasIndex: 616
+    atlasIndex: 616,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -290,7 +320,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b51',
     accentColor: '#64c4ac',
     height: 0,
-    atlasIndex: 564
+    atlasIndex: 564,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -299,7 +330,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b53',
     accentColor: '#64c4ae',
     height: 0,
-    atlasIndex: 614
+    atlasIndex: 614,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -308,7 +340,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b55',
     accentColor: '#64c4af',
     height: 0,
-    atlasIndex: 562
+    atlasIndex: 562,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -317,7 +350,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b56',
     accentColor: '#64c4b1',
     height: 0,
-    atlasIndex: 511
+    atlasIndex: 511,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -326,7 +360,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b58',
     accentColor: '#64c4b2',
     height: 0,
-    atlasIndex: 459
+    atlasIndex: 459,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -335,7 +370,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b59',
     accentColor: '#64c4b4',
     height: 0,
-    atlasIndex: 722
+    atlasIndex: 722,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -344,7 +380,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b5b',
     accentColor: '#64c4b6',
     height: 0,
-    atlasIndex: 723
+    atlasIndex: 723,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -353,7 +390,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b5d',
     accentColor: '#64c4b7',
     height: 0,
-    atlasIndex: 774
+    atlasIndex: 774,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -362,7 +400,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b5e',
     accentColor: '#64c4b9',
     height: 0,
-    atlasIndex: 775
+    atlasIndex: 775,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -371,7 +410,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b60',
     accentColor: '#64c4ba',
     height: 0,
-    atlasIndex: 718
+    atlasIndex: 718,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -380,7 +420,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b61',
     accentColor: '#64c4bc',
     height: 0,
-    atlasIndex: 719
+    atlasIndex: 719,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -389,7 +430,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b63',
     accentColor: '#64c4be',
     height: 0,
-    atlasIndex: 770
+    atlasIndex: 770,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -398,7 +440,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b65',
     accentColor: '#64c4bf',
     height: 0,
-    atlasIndex: 771
+    atlasIndex: 771,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -407,7 +450,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b66',
     accentColor: '#64c4c1',
     height: 0,
-    atlasIndex: 721
+    atlasIndex: 721,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -416,7 +460,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b68',
     accentColor: '#64c4c2',
     height: 0,
-    atlasIndex: 720
+    atlasIndex: 720,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -425,7 +470,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b69',
     accentColor: '#64c4c4',
     height: 0,
-    atlasIndex: 772
+    atlasIndex: 772,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -434,7 +480,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b6b',
     accentColor: '#64c2c4',
     height: 0,
-    atlasIndex: 825
+    atlasIndex: 825,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -443,7 +490,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b6d',
     accentColor: '#64c1c4',
     height: 0,
-    atlasIndex: 668
+    atlasIndex: 668,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -452,7 +500,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b6e',
     accentColor: '#64bfc4',
     height: 0,
-    atlasIndex: 666
+    atlasIndex: 666,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -461,7 +510,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b70',
     accentColor: '#64bec4',
     height: 0,
-    atlasIndex: 667
+    atlasIndex: 667,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -470,7 +520,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b72',
     accentColor: '#64bcc4',
     height: 0,
-    atlasIndex: 407
+    atlasIndex: 407,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -479,7 +530,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b73',
     accentColor: '#64bac4',
     height: 0,
-    atlasIndex: 406
+    atlasIndex: 406,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -488,7 +540,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b75',
     accentColor: '#64b9c4',
     height: 0,
-    atlasIndex: 408
+    atlasIndex: 408,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -497,7 +550,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b76',
     accentColor: '#64b7c4',
     height: 0,
-    atlasIndex: 3
+    atlasIndex: 3,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -506,7 +560,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b78',
     accentColor: '#64b6c4',
     height: 0,
-    atlasIndex: 4
+    atlasIndex: 4,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -515,7 +570,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b7a',
     accentColor: '#64b4c4',
     height: 0,
-    atlasIndex: 5
+    atlasIndex: 5,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -524,7 +580,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b7b',
     accentColor: '#64b2c4',
     height: 0,
-    atlasIndex: 6
+    atlasIndex: 6,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -533,7 +590,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b8e',
     accentColor: '#649fc4',
     height: 0,
-    atlasIndex: 0
+    atlasIndex: 0,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -542,7 +600,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b90',
     accentColor: '#649ec4',
     height: 0,
-    atlasIndex: 1
+    atlasIndex: 1,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -551,7 +610,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b92',
     accentColor: '#649cc4',
     height: 0,
-    atlasIndex: 2
+    atlasIndex: 2,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -560,7 +620,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b93',
     accentColor: '#649ac4',
     height: 0,
-    atlasIndex: 52
+    atlasIndex: 52,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -569,7 +630,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b95',
     accentColor: '#6499c4',
     height: 0,
-    atlasIndex: 53
+    atlasIndex: 53,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -578,7 +640,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b96',
     accentColor: '#6497c4',
     height: 0,
-    atlasIndex: 54
+    atlasIndex: 54,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -587,7 +650,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b98',
     accentColor: '#6496c4',
     height: 0,
-    atlasIndex: 106
+    atlasIndex: 106,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -596,7 +660,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b9b9a',
     accentColor: '#6494c4',
     height: 0,
-    atlasIndex: 158
+    atlasIndex: 158,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -605,7 +670,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b989b',
     accentColor: '#648fc4',
     height: 0,
-    atlasIndex: 157
+    atlasIndex: 157,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -614,7 +680,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b969b',
     accentColor: '#648dc4',
     height: 0,
-    atlasIndex: 156
+    atlasIndex: 156,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -623,7 +690,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b889b',
     accentColor: '#647fc4',
     height: 0,
-    atlasIndex: 498
+    atlasIndex: 498,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -632,7 +700,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b869b',
     accentColor: '#647dc4',
     height: 0,
-    atlasIndex: 499
+    atlasIndex: 499,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -641,7 +710,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b859b',
     accentColor: '#647cc4',
     height: 0,
-    atlasIndex: 500
+    atlasIndex: 500,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -650,7 +720,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b839b',
     accentColor: '#647ac4',
     height: 0,
-    atlasIndex: 501
+    atlasIndex: 501,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -659,7 +730,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b829b',
     accentColor: '#6479c4',
     height: 0,
-    atlasIndex: 502
+    atlasIndex: 502,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -668,7 +740,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b809b',
     accentColor: '#6477c4',
     height: 0,
-    atlasIndex: 550
+    atlasIndex: 550,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -677,7 +750,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b7e9b',
     accentColor: '#6475c4',
     height: 0,
-    atlasIndex: 551
+    atlasIndex: 551,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -686,7 +760,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b7d9b',
     accentColor: '#6474c4',
     height: 0,
-    atlasIndex: 552
+    atlasIndex: 552,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -695,7 +770,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b7b9b',
     accentColor: '#6472c4',
     height: 0,
-    atlasIndex: 553
+    atlasIndex: 553,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -704,7 +780,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b7a9b',
     accentColor: '#6471c4',
     height: 0,
-    atlasIndex: 554
+    atlasIndex: 554,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -713,7 +790,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b789b',
     accentColor: '#646fc4',
     height: 0,
-    atlasIndex: 602
+    atlasIndex: 602,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -722,7 +800,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b769b',
     accentColor: '#646dc4',
     height: 0,
-    atlasIndex: 603
+    atlasIndex: 603,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -731,7 +810,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b759b',
     accentColor: '#646cc4',
     height: 0,
-    atlasIndex: 604
+    atlasIndex: 604,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -740,7 +820,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b739b',
     accentColor: '#646ac4',
     height: 0,
-    atlasIndex: 605
+    atlasIndex: 605,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -749,7 +830,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b729b',
     accentColor: '#6469c4',
     height: 0,
-    atlasIndex: 606
+    atlasIndex: 606,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -758,7 +840,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b709b',
     accentColor: '#6467c4',
     height: 0,
-    atlasIndex: 654
+    atlasIndex: 654,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -767,7 +850,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b6e9b',
     accentColor: '#6465c4',
     height: 0,
-    atlasIndex: 655
+    atlasIndex: 655,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -776,7 +860,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b6d9b',
     accentColor: '#6464c4',
     height: 0,
-    atlasIndex: 656
+    atlasIndex: 656,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -785,7 +870,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b6b9b',
     accentColor: '#6564c4',
     height: 0,
-    atlasIndex: 657
+    atlasIndex: 657,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -794,7 +880,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b699b',
     accentColor: '#6764c4',
     height: 0,
-    atlasIndex: 658
+    atlasIndex: 658,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -803,7 +890,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b689b',
     accentColor: '#6964c4',
     height: 0,
-    atlasIndex: 706
+    atlasIndex: 706,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -812,7 +900,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b669b',
     accentColor: '#6a64c4',
     height: 0,
-    atlasIndex: 707
+    atlasIndex: 707,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -821,7 +910,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b659b',
     accentColor: '#6c64c4',
     height: 0,
-    atlasIndex: 708
+    atlasIndex: 708,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -830,7 +920,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b639b',
     accentColor: '#6d64c4',
     height: 0,
-    atlasIndex: 709
+    atlasIndex: 709,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -839,7 +930,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b619b',
     accentColor: '#6f64c4',
     height: 0,
-    atlasIndex: 710
+    atlasIndex: 710,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -848,7 +940,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b609b',
     accentColor: '#7164c4',
     height: 0,
-    atlasIndex: 862
+    atlasIndex: 862,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -857,7 +950,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b5e9b',
     accentColor: '#7264c4',
     height: 0,
-    atlasIndex: 863
+    atlasIndex: 863,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -866,7 +960,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b5d9b',
     accentColor: '#7464c4',
     height: 0,
-    atlasIndex: 864
+    atlasIndex: 864,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -875,7 +970,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b5b9b',
     accentColor: '#7564c4',
     height: 0,
-    atlasIndex: 865
+    atlasIndex: 865,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -884,7 +980,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b599b',
     accentColor: '#7764c4',
     height: 0,
-    atlasIndex: 866
+    atlasIndex: 866,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -893,7 +990,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b589b',
     accentColor: '#7964c4',
     height: 0,
-    atlasIndex: 914
+    atlasIndex: 914,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -902,7 +1000,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b569b',
     accentColor: '#7a64c4',
     height: 0,
-    atlasIndex: 915
+    atlasIndex: 915,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -911,7 +1010,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b559b',
     accentColor: '#7c64c4',
     height: 0,
-    atlasIndex: 916
+    atlasIndex: 916,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -920,7 +1020,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b539b',
     accentColor: '#7d64c4',
     height: 0,
-    atlasIndex: 917
+    atlasIndex: 917,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -929,7 +1030,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b519b',
     accentColor: '#7f64c4',
     height: 0,
-    atlasIndex: 918
+    atlasIndex: 918,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -938,7 +1040,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b509b',
     accentColor: '#8164c4',
     height: 0,
-    atlasIndex: 966
+    atlasIndex: 966,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -947,7 +1050,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b4e9b',
     accentColor: '#8264c4',
     height: 0,
-    atlasIndex: 967
+    atlasIndex: 967,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -956,7 +1060,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b4d9b',
     accentColor: '#8464c4',
     height: 0,
-    atlasIndex: 968
+    atlasIndex: 968,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -965,7 +1070,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b4b9b',
     accentColor: '#8564c4',
     height: 0,
-    atlasIndex: 969
+    atlasIndex: 969,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -974,7 +1080,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b499b',
     accentColor: '#8764c4',
     height: 0,
-    atlasIndex: 970
+    atlasIndex: 970,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -983,7 +1090,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b489b',
     accentColor: '#8964c4',
     height: 0,
-    atlasIndex: 1018
+    atlasIndex: 1018,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -992,7 +1100,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b469b',
     accentColor: '#8a64c4',
     height: 0,
-    atlasIndex: 1019
+    atlasIndex: 1019,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1001,7 +1110,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b459b',
     accentColor: '#8c64c4',
     height: 0,
-    atlasIndex: 1020
+    atlasIndex: 1020,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1010,7 +1120,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b439b',
     accentColor: '#8d64c4',
     height: 0,
-    atlasIndex: 1021
+    atlasIndex: 1021,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1019,7 +1130,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b419b',
     accentColor: '#8f64c4',
     height: 0,
-    atlasIndex: 1022
+    atlasIndex: 1022,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1028,7 +1140,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b409b',
     accentColor: '#9164c4',
     height: 0,
-    atlasIndex: 1070
+    atlasIndex: 1070,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1037,7 +1150,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b3e9b',
     accentColor: '#9264c4',
     height: 0,
-    atlasIndex: 1071
+    atlasIndex: 1071,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1046,7 +1160,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b3d9b',
     accentColor: '#9464c4',
     height: 0,
-    atlasIndex: 1072
+    atlasIndex: 1072,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1055,7 +1170,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3b3b9b',
     accentColor: '#9664c4',
     height: 0,
-    atlasIndex: 1073
+    atlasIndex: 1073,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1064,7 +1180,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3d3b9b',
     accentColor: '#9764c4',
     height: 0,
-    atlasIndex: 1074
+    atlasIndex: 1074,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1073,7 +1190,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#3e3b9b',
     accentColor: '#9964c4',
     height: 0,
-    atlasIndex: 763
+    atlasIndex: 763,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1082,7 +1200,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#403b9b',
     accentColor: '#9a64c4',
     height: 0,
-    atlasIndex: 764
+    atlasIndex: 764,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1091,7 +1210,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#413b9b',
     accentColor: '#9c64c4',
     height: 0,
-    atlasIndex: 765
+    atlasIndex: 765,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1100,7 +1220,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#433b9b',
     accentColor: '#9e64c4',
     height: 0,
-    atlasIndex: 766
+    atlasIndex: 766,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1109,7 +1230,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#453b9b',
     accentColor: '#9f64c4',
     height: 0,
-    atlasIndex: 767
+    atlasIndex: 767,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1118,7 +1240,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#463b9b',
     accentColor: '#a164c4',
     height: 0,
-    atlasIndex: 768
+    atlasIndex: 768,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1127,7 +1250,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#483b9b',
     accentColor: '#a264c4',
     height: 0,
-    atlasIndex: 769
+    atlasIndex: 769,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1136,7 +1260,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#493b9b',
     accentColor: '#a464c4',
     height: 0,
-    atlasIndex: 815
+    atlasIndex: 815,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1145,7 +1270,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#4b3b9b',
     accentColor: '#a664c4',
     height: 0,
-    atlasIndex: 816
+    atlasIndex: 816,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1154,7 +1280,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#4d3b9b',
     accentColor: '#a764c4',
     height: 0,
-    atlasIndex: 817
+    atlasIndex: 817,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1163,7 +1290,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#4e3b9b',
     accentColor: '#a964c4',
     height: 0,
-    atlasIndex: 818
+    atlasIndex: 818,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1172,7 +1300,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#503b9b',
     accentColor: '#aa64c4',
     height: 0,
-    atlasIndex: 819
+    atlasIndex: 819,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1181,7 +1310,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#513b9b',
     accentColor: '#ac64c4',
     height: 0,
-    atlasIndex: 820
+    atlasIndex: 820,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1190,7 +1320,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#533b9b',
     accentColor: '#ae64c4',
     height: 0,
-    atlasIndex: 821
+    atlasIndex: 821,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1199,7 +1330,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#553b9b',
     accentColor: '#af64c4',
     height: 0,
-    atlasIndex: 867
+    atlasIndex: 867,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1208,7 +1340,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#563b9b',
     accentColor: '#b164c4',
     height: 0,
-    atlasIndex: 868
+    atlasIndex: 868,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1217,7 +1350,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#583b9b',
     accentColor: '#b264c4',
     height: 0,
-    atlasIndex: 869
+    atlasIndex: 869,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1226,7 +1360,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#593b9b',
     accentColor: '#b464c4',
     height: 0,
-    atlasIndex: 870
+    atlasIndex: 870,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1235,7 +1370,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#5b3b9b',
     accentColor: '#b664c4',
     height: 0,
-    atlasIndex: 871
+    atlasIndex: 871,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1244,7 +1380,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#5d3b9b',
     accentColor: '#b764c4',
     height: 0,
-    atlasIndex: 872
+    atlasIndex: 872,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1253,7 +1390,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#5e3b9b',
     accentColor: '#b964c4',
     height: 0,
-    atlasIndex: 873
+    atlasIndex: 873,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1262,7 +1400,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#603b9b',
     accentColor: '#ba64c4',
     height: 0,
-    atlasIndex: 919
+    atlasIndex: 919,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1271,7 +1410,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#613b9b',
     accentColor: '#bc64c4',
     height: 0,
-    atlasIndex: 920
+    atlasIndex: 920,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1280,7 +1420,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#633b9b',
     accentColor: '#be64c4',
     height: 0,
-    atlasIndex: 921
+    atlasIndex: 921,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1289,7 +1430,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#653b9b',
     accentColor: '#bf64c4',
     height: 0,
-    atlasIndex: 922
+    atlasIndex: 922,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1298,7 +1440,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#663b9b',
     accentColor: '#c164c4',
     height: 0,
-    atlasIndex: 923
+    atlasIndex: 923,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1307,7 +1450,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#683b9b',
     accentColor: '#c264c4',
     height: 0,
-    atlasIndex: 924
+    atlasIndex: 924,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1316,7 +1460,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#693b9b',
     accentColor: '#c464c4',
     height: 0,
-    atlasIndex: 925
+    atlasIndex: 925,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1325,7 +1470,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#6b3b9b',
     accentColor: '#c464c2',
     height: 0,
-    atlasIndex: 971
+    atlasIndex: 971,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1334,7 +1480,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#6d3b9b',
     accentColor: '#c464c1',
     height: 0,
-    atlasIndex: 972
+    atlasIndex: 972,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1343,7 +1490,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#6e3b9b',
     accentColor: '#c464bf',
     height: 0,
-    atlasIndex: 973
+    atlasIndex: 973,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1352,7 +1500,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#703b9b',
     accentColor: '#c464be',
     height: 0,
-    atlasIndex: 974
+    atlasIndex: 974,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1361,7 +1510,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#723b9b',
     accentColor: '#c464bc',
     height: 0,
-    atlasIndex: 975
+    atlasIndex: 975,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1370,7 +1520,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#733b9b',
     accentColor: '#c464ba',
     height: 0,
-    atlasIndex: 976
+    atlasIndex: 976,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1379,7 +1530,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#753b9b',
     accentColor: '#c464b9',
     height: 0,
-    atlasIndex: 977
+    atlasIndex: 977,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1388,7 +1540,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#763b9b',
     accentColor: '#c464b7',
     height: 0,
-    atlasIndex: 1023
+    atlasIndex: 1023,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1397,7 +1550,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#783b9b',
     accentColor: '#c464b6',
     height: 0,
-    atlasIndex: 1024
+    atlasIndex: 1024,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1406,7 +1560,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#7a3b9b',
     accentColor: '#c464b4',
     height: 0,
-    atlasIndex: 1025
+    atlasIndex: 1025,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1415,7 +1570,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#7b3b9b',
     accentColor: '#c464b2',
     height: 0,
-    atlasIndex: 1026
+    atlasIndex: 1026,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1424,7 +1580,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#7d3b9b',
     accentColor: '#c464b1',
     height: 0,
-    atlasIndex: 1027
+    atlasIndex: 1027,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1433,7 +1590,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#7e3b9b',
     accentColor: '#c464af',
     height: 0,
-    atlasIndex: 1028
+    atlasIndex: 1028,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1442,7 +1600,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#803b9b',
     accentColor: '#c464ae',
     height: 0,
-    atlasIndex: 1029
+    atlasIndex: 1029,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1451,7 +1610,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#823b9b',
     accentColor: '#c464ac',
     height: 0,
-    atlasIndex: 1075
+    atlasIndex: 1075,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1460,7 +1620,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#833b9b',
     accentColor: '#c464aa',
     height: 0,
-    atlasIndex: 1076
+    atlasIndex: 1076,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1469,7 +1630,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#853b9b',
     accentColor: '#c464a9',
     height: 0,
-    atlasIndex: 1077
+    atlasIndex: 1077,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1478,7 +1640,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#863b9b',
     accentColor: '#c464a7',
     height: 0,
-    atlasIndex: 1078
+    atlasIndex: 1078,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1487,7 +1650,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#883b9b',
     accentColor: '#c464a6',
     height: 0,
-    atlasIndex: 1079
+    atlasIndex: 1079,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1496,7 +1660,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#8a3b9b',
     accentColor: '#c464a4',
     height: 0,
-    atlasIndex: 1080
+    atlasIndex: 1080,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1505,7 +1670,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#8b3b9b',
     accentColor: '#c464a2',
     height: 0,
-    atlasIndex: 1081
+    atlasIndex: 1081,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1514,7 +1680,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#8d3b9b',
     accentColor: '#c464a1',
     height: 0,
-    atlasIndex: 399
+    atlasIndex: 399,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1523,7 +1690,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#8e3b9b',
     accentColor: '#c4649f',
     height: 0,
-    atlasIndex: 400
+    atlasIndex: 400,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1532,7 +1700,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#903b9b',
     accentColor: '#c4649e',
     height: 0,
-    atlasIndex: 401
+    atlasIndex: 401,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1541,7 +1710,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#923b9b',
     accentColor: '#c4649c',
     height: 0,
-    atlasIndex: 402
+    atlasIndex: 402,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1550,7 +1720,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#933b9b',
     accentColor: '#c4649a',
     height: 0,
-    atlasIndex: 403
+    atlasIndex: 403,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1559,7 +1730,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#953b9b',
     accentColor: '#c46499',
     height: 0,
-    atlasIndex: 404
+    atlasIndex: 404,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1568,7 +1740,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#963b9b',
     accentColor: '#c46497',
     height: 0,
-    atlasIndex: 405
+    atlasIndex: 405,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1577,7 +1750,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#983b9b',
     accentColor: '#c46496',
     height: 0,
-    atlasIndex: 451
+    atlasIndex: 451,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1586,7 +1760,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9a3b9b',
     accentColor: '#c46494',
     height: 0,
-    atlasIndex: 452
+    atlasIndex: 452,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1595,7 +1770,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b9b',
     accentColor: '#c46492',
     height: 0,
-    atlasIndex: 453
+    atlasIndex: 453,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1604,7 +1780,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b9a',
     accentColor: '#c46491',
     height: 0,
-    atlasIndex: 454
+    atlasIndex: 454,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1613,7 +1790,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b98',
     accentColor: '#c4648f',
     height: 0,
-    atlasIndex: 455
+    atlasIndex: 455,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1622,7 +1800,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b96',
     accentColor: '#c4648d',
     height: 0,
-    atlasIndex: 456
+    atlasIndex: 456,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1631,7 +1810,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b95',
     accentColor: '#c4648c',
     height: 0,
-    atlasIndex: 457
+    atlasIndex: 457,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1640,7 +1820,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b93',
     accentColor: '#c4648a',
     height: 0,
-    atlasIndex: 503
+    atlasIndex: 503,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1649,7 +1830,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b92',
     accentColor: '#c46489',
     height: 0,
-    atlasIndex: 504
+    atlasIndex: 504,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1658,7 +1840,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b90',
     accentColor: '#c46487',
     height: 0,
-    atlasIndex: 505
+    atlasIndex: 505,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1667,7 +1850,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b8e',
     accentColor: '#c46485',
     height: 0,
-    atlasIndex: 506
+    atlasIndex: 506,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1676,7 +1860,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b8d',
     accentColor: '#c46484',
     height: 0,
-    atlasIndex: 507
+    atlasIndex: 507,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1685,7 +1870,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b8b',
     accentColor: '#c46482',
     height: 0,
-    atlasIndex: 508
+    atlasIndex: 508,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1694,7 +1880,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b8a',
     accentColor: '#c46481',
     height: 0,
-    atlasIndex: 509
+    atlasIndex: 509,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1703,7 +1890,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b88',
     accentColor: '#c4647f',
     height: 0,
-    atlasIndex: 555
+    atlasIndex: 555,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1712,7 +1900,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b86',
     accentColor: '#c4647d',
     height: 0,
-    atlasIndex: 556
+    atlasIndex: 556,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1721,7 +1910,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b85',
     accentColor: '#c4647c',
     height: 0,
-    atlasIndex: 557
+    atlasIndex: 557,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1730,7 +1920,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b83',
     accentColor: '#c4647a',
     height: 0,
-    atlasIndex: 558
+    atlasIndex: 558,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1739,7 +1930,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b82',
     accentColor: '#c46479',
     height: 0,
-    atlasIndex: 559
+    atlasIndex: 559,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1748,7 +1940,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b80',
     accentColor: '#c46477',
     height: 0,
-    atlasIndex: 560
+    atlasIndex: 560,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1757,7 +1950,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b7e',
     accentColor: '#c46475',
     height: 0,
-    atlasIndex: 561
+    atlasIndex: 561,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1766,7 +1960,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b7d',
     accentColor: '#c46474',
     height: 0,
-    atlasIndex: 607
+    atlasIndex: 607,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1775,7 +1970,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b7b',
     accentColor: '#c46472',
     height: 0,
-    atlasIndex: 608
+    atlasIndex: 608,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1784,7 +1980,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b7a',
     accentColor: '#c46471',
     height: 0,
-    atlasIndex: 609
+    atlasIndex: 609,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1793,7 +1990,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b78',
     accentColor: '#c4646f',
     height: 0,
-    atlasIndex: 610
+    atlasIndex: 610,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1802,7 +2000,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b76',
     accentColor: '#c4646d',
     height: 0,
-    atlasIndex: 611
+    atlasIndex: 611,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1811,7 +2010,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b75',
     accentColor: '#c4646c',
     height: 0,
-    atlasIndex: 612
+    atlasIndex: 612,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1820,7 +2020,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b73',
     accentColor: '#c4646a',
     height: 0,
-    atlasIndex: 613
+    atlasIndex: 613,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1829,7 +2030,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b72',
     accentColor: '#c46469',
     height: 0,
-    atlasIndex: 659
+    atlasIndex: 659,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1838,7 +2040,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b70',
     accentColor: '#c46467',
     height: 0,
-    atlasIndex: 660
+    atlasIndex: 660,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1847,7 +2050,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b6e',
     accentColor: '#c46465',
     height: 0,
-    atlasIndex: 661
+    atlasIndex: 661,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1856,7 +2060,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b6d',
     accentColor: '#c46464',
     height: 0,
-    atlasIndex: 662
+    atlasIndex: 662,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1865,7 +2070,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b6b',
     accentColor: '#c46564',
     height: 0,
-    atlasIndex: 663
+    atlasIndex: 663,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1874,7 +2080,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b69',
     accentColor: '#c46764',
     height: 0,
-    atlasIndex: 664
+    atlasIndex: 664,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1883,7 +2090,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b68',
     accentColor: '#c46964',
     height: 0,
-    atlasIndex: 665
+    atlasIndex: 665,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1892,7 +2100,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b66',
     accentColor: '#c46a64',
     height: 0,
-    atlasIndex: 711
+    atlasIndex: 711,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1901,7 +2110,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b65',
     accentColor: '#c46c64',
     height: 0,
-    atlasIndex: 712
+    atlasIndex: 712,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1910,7 +2120,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b63',
     accentColor: '#c46d64',
     height: 0,
-    atlasIndex: 713
+    atlasIndex: 713,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1919,7 +2130,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b61',
     accentColor: '#c46f64',
     height: 0,
-    atlasIndex: 714
+    atlasIndex: 714,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1928,7 +2140,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b60',
     accentColor: '#c47164',
     height: 0,
-    atlasIndex: 715
+    atlasIndex: 715,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1937,7 +2150,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b5e',
     accentColor: '#c47264',
     height: 0,
-    atlasIndex: 716
+    atlasIndex: 716,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1946,7 +2160,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b5d',
     accentColor: '#c47464',
     height: 0,
-    atlasIndex: 717
+    atlasIndex: 717,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1955,7 +2170,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b5b',
     accentColor: '#c47564',
     height: 0,
-    atlasIndex: 856
+    atlasIndex: 856,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1964,7 +2180,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b59',
     accentColor: '#c47764',
     height: 0,
-    atlasIndex: 857
+    atlasIndex: 857,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1973,7 +2190,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b58',
     accentColor: '#c47964',
     height: 0,
-    atlasIndex: 858
+    atlasIndex: 858,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1982,7 +2200,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b56',
     accentColor: '#c47a64',
     height: 0,
-    atlasIndex: 859
+    atlasIndex: 859,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1991,7 +2210,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b55',
     accentColor: '#c47c64',
     height: 0,
-    atlasIndex: 860
+    atlasIndex: 860,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2000,7 +2220,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b53',
     accentColor: '#c47d64',
     height: 0,
-    atlasIndex: 908
+    atlasIndex: 908,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2009,7 +2230,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b51',
     accentColor: '#c47f64',
     height: 0,
-    atlasIndex: 909
+    atlasIndex: 909,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2018,7 +2240,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b50',
     accentColor: '#c48164',
     height: 0,
-    atlasIndex: 910
+    atlasIndex: 910,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2027,7 +2250,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b4e',
     accentColor: '#c48264',
     height: 0,
-    atlasIndex: 911
+    atlasIndex: 911,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2036,7 +2260,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b4d',
     accentColor: '#c48464',
     height: 0,
-    atlasIndex: 912
+    atlasIndex: 912,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2045,7 +2270,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b4b',
     accentColor: '#c48564',
     height: 0,
-    atlasIndex: 960
+    atlasIndex: 960,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2054,7 +2280,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b49',
     accentColor: '#c48764',
     height: 0,
-    atlasIndex: 961
+    atlasIndex: 961,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2063,7 +2290,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b48',
     accentColor: '#c48964',
     height: 0,
-    atlasIndex: 962
+    atlasIndex: 962,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2072,7 +2300,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b46',
     accentColor: '#c48a64',
     height: 0,
-    atlasIndex: 963
+    atlasIndex: 963,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2081,7 +2310,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b45',
     accentColor: '#c48c64',
     height: 0,
-    atlasIndex: 964
+    atlasIndex: 964,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2090,7 +2320,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b43',
     accentColor: '#c48d64',
     height: 0,
-    atlasIndex: 1012
+    atlasIndex: 1012,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2099,7 +2330,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b41',
     accentColor: '#c48f64',
     height: 0,
-    atlasIndex: 1013
+    atlasIndex: 1013,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2108,7 +2340,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b40',
     accentColor: '#c49164',
     height: 0,
-    atlasIndex: 1014
+    atlasIndex: 1014,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2117,7 +2350,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b3e',
     accentColor: '#c49264',
     height: 0,
-    atlasIndex: 1015
+    atlasIndex: 1015,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2126,7 +2360,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b3d',
     accentColor: '#c49464',
     height: 0,
-    atlasIndex: 1016
+    atlasIndex: 1016,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2135,7 +2370,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3b3b',
     accentColor: '#c49664',
     height: 0,
-    atlasIndex: 1064
+    atlasIndex: 1064,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2144,7 +2380,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3d3b',
     accentColor: '#c49764',
     height: 0,
-    atlasIndex: 1065
+    atlasIndex: 1065,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2153,7 +2390,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b3e3b',
     accentColor: '#c49964',
     height: 0,
-    atlasIndex: 1066
+    atlasIndex: 1066,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2162,7 +2400,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b403b',
     accentColor: '#c49a64',
     height: 0,
-    atlasIndex: 1067
+    atlasIndex: 1067,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2171,7 +2410,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b413b',
     accentColor: '#c49c64',
     height: 0,
-    atlasIndex: 1068
+    atlasIndex: 1068,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2180,7 +2420,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b433b',
     accentColor: '#c49e64',
     height: 0,
-    atlasIndex: 7
+    atlasIndex: 7,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -2189,7 +2430,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b453b',
     accentColor: '#c49f64',
     height: 0,
-    atlasIndex: 8
+    atlasIndex: 8,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -2198,7 +2440,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b463b',
     accentColor: '#c4a164',
     height: 0,
-    atlasIndex: 9
+    atlasIndex: 9,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -2207,7 +2450,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b483b',
     accentColor: '#c4a264',
     height: 0,
-    atlasIndex: 11
+    atlasIndex: 11,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2216,7 +2460,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b493b',
     accentColor: '#c4a464',
     height: 0,
-    atlasIndex: 12
+    atlasIndex: 12,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2225,7 +2470,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b4b3b',
     accentColor: '#c4a664',
     height: 0,
-    atlasIndex: 13
+    atlasIndex: 13,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2234,7 +2480,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b4d3b',
     accentColor: '#c4a764',
     height: 0,
-    atlasIndex: 15
+    atlasIndex: 15,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2243,7 +2490,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b4e3b',
     accentColor: '#c4a964',
     height: 0,
-    atlasIndex: 17
+    atlasIndex: 17,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2252,7 +2500,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b503b',
     accentColor: '#c4aa64',
     height: 0,
-    atlasIndex: 997
+    atlasIndex: 997,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -2261,7 +2510,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b513b',
     accentColor: '#c4ac64',
     height: 0,
-    atlasIndex: 998
+    atlasIndex: 998,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -2270,7 +2520,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b533b',
     accentColor: '#c4ae64',
     height: 0,
-    atlasIndex: 999
+    atlasIndex: 999,
+    ySortWithActors: false
   },
   '': {
     code: '',
@@ -2279,7 +2530,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b553b',
     accentColor: '#c4af64',
     height: 0,
-    atlasIndex: 988
+    atlasIndex: 988,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2288,7 +2540,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b563b',
     accentColor: '#c4b164',
     height: 0,
-    atlasIndex: 989
+    atlasIndex: 989,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2297,7 +2550,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b583b',
     accentColor: '#c4b264',
     height: 0,
-    atlasIndex: 1040
+    atlasIndex: 1040,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2306,7 +2560,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b593b',
     accentColor: '#c4b464',
     height: 0,
-    atlasIndex: 1041
+    atlasIndex: 1041,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2315,7 +2570,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b5b3b',
     accentColor: '#c4b664',
     height: 0,
-    atlasIndex: 1092
+    atlasIndex: 1092,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2324,7 +2580,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b5d3b',
     accentColor: '#c4b764',
     height: 0,
-    atlasIndex: 1093
+    atlasIndex: 1093,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2333,7 +2590,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b5e3b',
     accentColor: '#c4b964',
     height: 0,
-    atlasIndex: 1144
+    atlasIndex: 1144,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2342,7 +2600,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b603b',
     accentColor: '#c4ba64',
     height: 0,
-    atlasIndex: 1196
+    atlasIndex: 1196,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2351,7 +2610,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b613b',
     accentColor: '#c4bc64',
     height: 0,
-    atlasIndex: 990
+    atlasIndex: 990,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2360,7 +2620,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b633b',
     accentColor: '#c4be64',
     height: 0,
-    atlasIndex: 991
+    atlasIndex: 991,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2369,7 +2630,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b653b',
     accentColor: '#c4bf64',
     height: 0,
-    atlasIndex: 1042
+    atlasIndex: 1042,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2378,7 +2640,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b663b',
     accentColor: '#c4c164',
     height: 0,
-    atlasIndex: 1043
+    atlasIndex: 1043,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2387,7 +2650,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b683b',
     accentColor: '#c4c264',
     height: 0,
-    atlasIndex: 1094
+    atlasIndex: 1094,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2396,7 +2660,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b693b',
     accentColor: '#c4c464',
     height: 0,
-    atlasIndex: 1095
+    atlasIndex: 1095,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2405,7 +2670,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b6b3b',
     accentColor: '#c2c464',
     height: 0,
-    atlasIndex: 1147
+    atlasIndex: 1147,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2414,7 +2680,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b6d3b',
     accentColor: '#c1c464',
     height: 0,
-    atlasIndex: 1199
+    atlasIndex: 1199,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2423,7 +2690,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b6e3b',
     accentColor: '#bfc464',
     height: 0,
-    atlasIndex: 1145
+    atlasIndex: 1145,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2432,7 +2700,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b703b',
     accentColor: '#bec464',
     height: 0,
-    atlasIndex: 1146
+    atlasIndex: 1146,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2441,7 +2710,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b723b',
     accentColor: '#bcc464',
     height: 0,
-    atlasIndex: 1197
+    atlasIndex: 1197,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2450,7 +2720,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b733b',
     accentColor: '#bac464',
     height: 0,
-    atlasIndex: 1198
+    atlasIndex: 1198,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2459,7 +2730,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b753b',
     accentColor: '#b9c464',
     height: 0,
-    atlasIndex: 1249
+    atlasIndex: 1249,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2468,7 +2740,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b763b',
     accentColor: '#b7c464',
     height: 0,
-    atlasIndex: 1250
+    atlasIndex: 1250,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2477,7 +2750,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b783b',
     accentColor: '#b6c464',
     height: 0,
-    atlasIndex: 1148
+    atlasIndex: 1148,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2486,7 +2760,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b7a3b',
     accentColor: '#b4c464',
     height: 0,
-    atlasIndex: 1149
+    atlasIndex: 1149,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2495,7 +2770,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b7b3b',
     accentColor: '#b2c464',
     height: 0,
-    atlasIndex: 1200
+    atlasIndex: 1200,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2504,7 +2780,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b7d3b',
     accentColor: '#b1c464',
     height: 0,
-    atlasIndex: 1201
+    atlasIndex: 1201,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2513,7 +2790,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b7e3b',
     accentColor: '#afc464',
     height: 0,
-    atlasIndex: 1252
+    atlasIndex: 1252,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -2522,7 +2800,8 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     color: '#9b803b',
     accentColor: '#aec464',
     height: 0,
-    atlasIndex: 1253
+    atlasIndex: 1253,
+    ySortWithActors: true
   }
 };
 
@@ -2539,6 +2818,7 @@ export interface SavedPaintTileDatabaseEntry {
   primaryCode: string;
   width: number;
   height: number;
+  ySortWithActors: boolean;
   cells: SavedPaintTileDatabaseCell[];
 }
 
@@ -2549,6 +2829,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -2564,6 +2845,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -2579,6 +2861,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -2594,6 +2877,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -2609,6 +2893,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -2624,6 +2909,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -2639,6 +2925,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -2654,6 +2941,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -2669,6 +2957,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -2684,6 +2973,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -2699,6 +2989,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -2714,6 +3005,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 5,
     height: 5,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -2873,6 +3165,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 5,
     height: 5,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -3032,6 +3325,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 7,
     height: 7,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -3335,6 +3629,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 7,
     height: 7,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -3638,6 +3933,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 5,
     height: 5,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -3797,6 +4093,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -3812,6 +4109,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -3827,6 +4125,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -3842,6 +4141,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -3857,6 +4157,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -3872,6 +4173,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -3887,6 +4189,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -3902,6 +4205,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -3917,6 +4221,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -3932,6 +4237,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -3947,6 +4253,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -3962,6 +4269,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 2,
     height: 3,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4007,6 +4315,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 2,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4028,6 +4337,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 2,
     height: 3,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4073,6 +4383,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 2,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4094,6 +4405,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 2,
     height: 3,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4139,6 +4451,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 2,
     height: 3,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4184,6 +4497,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 2,
     height: 3,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4229,6 +4543,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 2,
     height: 3,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4274,6 +4589,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 2,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4295,6 +4611,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -4310,6 +4627,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -4325,6 +4643,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -4340,6 +4659,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -4355,6 +4675,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -4370,6 +4691,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -4385,6 +4707,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -4400,6 +4723,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -4415,6 +4739,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -4430,6 +4755,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -4445,6 +4771,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -4460,6 +4787,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4475,6 +4803,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -4490,6 +4819,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -4505,6 +4835,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4520,6 +4851,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4535,6 +4867,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4550,6 +4883,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4565,6 +4899,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4580,6 +4915,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4595,6 +4931,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 2,
     height: 2,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4628,6 +4965,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 2,
     height: 2,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4661,6 +4999,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4676,6 +5015,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 2,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4697,6 +5037,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4712,6 +5053,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4727,6 +5069,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4742,6 +5085,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4757,6 +5101,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4772,6 +5117,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4787,6 +5133,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: true,
     cells: [
       {
         code: '',
@@ -4802,6 +5149,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -4817,6 +5165,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -4832,6 +5181,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',
@@ -4847,6 +5197,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     primaryCode: '',
     width: 1,
     height: 1,
+    ySortWithActors: false,
     cells: [
       {
         code: '',

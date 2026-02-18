@@ -15,18 +15,31 @@ import {
 import {
   MAX_SQUAD_SLOTS,
   type CritterDefinition,
+  type CritterElement,
+  type EquippedSkillSlots,
   type CritterLevelMissionRequirement,
   type PlayerCritterProgress,
 } from '@/game/critters/types';
 import { sanitizeEncounterTableLibrary } from '@/game/encounters/schema';
 import type { EncounterTableDefinition } from '@/game/encounters/types';
-import { collisionEdgeMaskAt, createMap, tileAt } from '@/game/world/mapBuilder';
+import { collisionEdgeMaskAt, createMap, isInsideMap, tileAt } from '@/game/world/mapBuilder';
 import { CUSTOM_TILESET_CONFIG, type CustomTilesetConfig } from '@/game/world/customTiles';
 import { PLAYER_SPRITE_CONFIG } from '@/game/world/playerSprite';
 import { BASE_TILE_DEFINITIONS, BLANK_TILE_CODE, FALLBACK_TILE_CODE, TILE_DEFINITIONS } from '@/game/world/tiles';
+import {
+  DEFAULT_NPC_CHARACTER_LIBRARY,
+  DEFAULT_NPC_SPRITE_LIBRARY,
+  DEFAULT_STORY_NPC_SPRITE_LIBRARY,
+  normalizeCoreStoryNpcCharacters,
+  type NpcCharacterTemplateEntry,
+  type NpcSpriteLibraryEntry,
+} from '@/game/world/npcCatalog';
 import type {
   InteractionDefinition,
+  NpcInteractionActionDefinition,
   NpcDefinition,
+  NpcMovementGuardDefinition,
+  NpcStoryStateDefinition,
   NpcSpriteConfig,
   TileDefinition,
   WorldMapInput,
@@ -34,6 +47,15 @@ import type {
   WorldMap,
 } from '@/game/world/types';
 import { readStoredWorldContent } from '@/game/content/worldContentStore';
+import type { SkillDefinition, SkillEffectDefinition, ElementChart } from '@/game/skills/types';
+import { DEFAULT_TACKLE_SKILL } from '@/game/skills/types';
+import {
+  buildDefaultElementChart,
+  getElementChartMultiplier,
+  sanitizeElementChart,
+  sanitizeSkillEffectLibrary,
+  sanitizeSkillLibrary,
+} from '@/game/skills/schema';
 
 interface MoveStep {
   from: Vector2;
@@ -47,6 +69,7 @@ interface DialogueState {
   lines: string[];
   index: number;
   setFlag?: string;
+  healSquad?: boolean;
 }
 
 interface TransientMessage {
@@ -56,11 +79,13 @@ interface TransientMessage {
 
 interface NpcRuntimeState {
   position: Vector2;
+  anchorPosition: Vector2;
   facing: Direction;
   turnTimerMs: number;
   moveStep: MoveStep | null;
   moveCooldownMs: number;
   patternIndex: number;
+  patternDirection: 1 | -1;
   animationMs: number;
 }
 
@@ -70,10 +95,39 @@ interface NpcSpriteSheetState {
   columns: number;
 }
 
+interface ResolvedNpcDefinition extends NpcDefinition {
+  __characterKey: string;
+  __sourceMapId: string;
+  __instanceKey: string;
+}
+
+interface StarterSelectionState {
+  confirmCritterId: number | null;
+  optionCritterIds: number[];
+}
+
+interface StoryCutsceneState {
+  id: 'jacob-duel-intro';
+  phase: 'entering' | 'awaiting-battle' | 'post-battle-dialogue' | 'exiting';
+  path: Vector2[];
+}
+
+interface ScriptedSceneState {
+  npcStateKey: string;
+  npcId: string;
+  steps: NpcInteractionActionDefinition[];
+  stepIndex: number;
+  stepStarted: boolean;
+  waitRemainingMs: number;
+  path: Vector2[] | null;
+}
+
 type BattleTransitionEffect = 'scanline' | 'radial-burst' | 'shutter-slice';
 type BattlePhase = 'transition' | 'choose-starter' | 'player-turn' | 'choose-swap' | 'result';
 type BattleResult = 'ongoing' | 'won' | 'lost' | 'escaped';
 type BattleSourceType = 'wild' | 'npc';
+
+type BattleEquippedSkillSlots = [string | null, string | null, string | null, string | null];
 
 interface BattleCritterState {
   slotIndex: number | null;
@@ -89,6 +143,14 @@ interface BattleCritterState {
   speed: number;
   fainted: boolean;
   knockoutProgressCounted: boolean;
+  attackModifier: number;
+  defenseModifier: number;
+  speedModifier: number;
+  /** Effect IDs currently applied to this critter (e.g. stat buffs from skills they used). Cleared on switch/KO. */
+  activeEffectIds: string[];
+  consecutiveSuccessfulGuardCount: number;
+  /** Player team only: skill ids for 4 slots. */
+  equippedSkillIds?: BattleEquippedSkillSlots;
 }
 
 interface BattleSourceState {
@@ -123,6 +185,9 @@ interface BattleRuntimeState {
 interface BattleNarrationEvent {
   message: string;
   attacker: 'player' | 'opponent' | null;
+  /** When present, apply this damage to the defender when this event is shown (so HP bars update in attack order). */
+  applyDamageDefender?: 'player' | 'opponent';
+  applyDamageAmount?: number;
 }
 
 interface BattleAnimationState {
@@ -159,6 +224,9 @@ export interface RuntimeBattleSnapshot {
     defense: number;
     speed: number;
     fainted: boolean;
+    activeEffectIds: string[];
+    activeEffectIconUrls: string[];
+    activeEffectDescriptions: string[];
   }>;
   opponentTeam: Array<{
     slotIndex: number | null;
@@ -173,6 +241,9 @@ export interface RuntimeBattleSnapshot {
     defense: number;
     speed: number;
     fainted: boolean;
+    activeEffectIds: string[];
+    activeEffectIconUrls: string[];
+    activeEffectDescriptions: string[];
   }>;
   canAttack: boolean;
   canGuard: boolean;
@@ -180,6 +251,17 @@ export interface RuntimeBattleSnapshot {
   canRetreat: boolean;
   canCancelSwap: boolean;
   canAdvanceNarration: boolean;
+  /** Resolved skill info for the active player critter's 4 slots (for Attack sub-menu). */
+  playerActiveSkillSlots: Array<{
+    skillId: string;
+    name: string;
+    element: string;
+    type: string;
+    damage?: number;
+    healPercent?: number;
+    effectDescriptions?: string;
+    effectIconUrls?: string[];
+  } | null>;
   activeAnimation:
     | {
         attacker: 'player' | 'opponent';
@@ -212,6 +294,20 @@ export interface RuntimeSnapshot {
     level: number;
   } | null;
   battle: RuntimeBattleSnapshot | null;
+  story: {
+    inputLocked: boolean;
+    starterSelection: {
+      confirmCritterId: number | null;
+      options: Array<{
+        critterId: number;
+        name: string;
+        element: string;
+        rarity: string;
+        spriteUrl: string;
+        description: string;
+      }>;
+    } | null;
+  };
   critters: {
     unlockedCount: number;
     totalCount: number;
@@ -264,6 +360,18 @@ export interface RuntimeSnapshot {
         unlocked: boolean;
       }>;
       unlockedAbilityIds: string[];
+      equippedSkillSlots: Array<{
+        skillId: string;
+        name: string;
+        element: string;
+        type: string;
+        damage?: number;
+        healPercent?: number;
+        effectDescriptions?: string;
+        effectIconUrls?: string[];
+      } | null>;
+      unlockedSkillIds: string[];
+      unlockedSkillOptions: Array<{ skillId: string; name: string }>;
       levelProgress: Array<{
         level: number;
         requiredMissionCount: number;
@@ -280,6 +388,8 @@ export interface RuntimeSnapshot {
           knockoutElements?: string[];
           knockoutCritterIds?: number[];
           knockoutCritterNames?: string[];
+          storyFlagId?: string;
+          label?: string;
         }>;
       }>;
       activeRequirement: {
@@ -299,6 +409,8 @@ export interface RuntimeSnapshot {
           knockoutElements?: string[];
           knockoutCritterIds?: number[];
           knockoutCritterNames?: string[];
+          storyFlagId?: string;
+          label?: string;
         }>;
       } | null;
     }>;
@@ -318,6 +430,19 @@ const COLLISION_EDGE_BIT: Record<Direction, number> = {
   down: 4,
   left: 8,
 };
+
+const UNCLE_HANK_NPC_ID = 'uncle-hank-story';
+const JACOB_NPC_ID = 'jacob-story';
+const STARTER_ENCOUNTER_TABLE_ID = 'starter-critter';
+const FLAG_DEMO_START = 'demo-start';
+const FLAG_SELECTED_STARTER = 'selected-starter-critter';
+const FLAG_STARTER_SELECTION_DONE = 'starter-selection-done';
+const FLAG_DEMO_DONE = 'demo-done';
+const FLAG_JACOB_LEFT_HOUSE = 'jacob-left-house';
+
+const BLACKOUT_MAP_ID = 'user-house';
+const BLACKOUT_POSITION = { x: 5, y: 7 } as const;
+const BLACKOUT_FACING = 'down' as const;
 
 const SPAWN_MAP_INPUT: WorldMapInput = {
   id: 'spawn',
@@ -350,6 +475,18 @@ export class GameRuntime {
   private critterLookup: Record<number, CritterDefinition> = buildCritterLookup(BASE_CRITTER_DATABASE);
   private encounterTables: EncounterTableDefinition[] = [];
   private encounterTableLookup: Record<string, EncounterTableDefinition> = {};
+  private skillDatabase: SkillDefinition[] = [];
+  private skillLookupById: Record<string, SkillDefinition> = {};
+  private skillEffectLibrary: SkillEffectDefinition[] = [];
+  private skillEffectLookupById: Record<string, SkillEffectDefinition> = {};
+  private elementChart: ElementChart = buildDefaultElementChart();
+  private npcSpriteLibrary: NpcSpriteLibraryEntry[] = [
+    ...DEFAULT_NPC_SPRITE_LIBRARY,
+    ...DEFAULT_STORY_NPC_SPRITE_LIBRARY,
+  ];
+  private npcCharacterLibrary: NpcCharacterTemplateEntry[] = normalizeCoreStoryNpcCharacters([
+    ...DEFAULT_NPC_CHARACTER_LIBRARY,
+  ]);
   private customTilesetConfig: CustomTilesetConfig | null = CUSTOM_TILESET_CONFIG;
   private playerSpriteConfig: NpcSpriteConfig = PLAYER_SPRITE_CONFIG;
   private currentMapId: string;
@@ -374,9 +511,16 @@ export class GameRuntime {
   private transientMessage: TransientMessage | null = null;
   private lastEncounter: RuntimeSnapshot['lastEncounter'] = null;
   private activeBattle: BattleRuntimeState | null = null;
+  private starterSelection: StarterSelectionState | null = null;
+  private activeCutscene: StoryCutsceneState | null = null;
+  private activeScriptedScene: ScriptedSceneState | null = null;
+  private pendingStoryAction: 'open-starter-selection' | 'start-jacob-battle' | 'start-jacob-exit' | null = null;
+  private pendingGuardDefeat: { guard: NpcMovementGuardDefinition } | null = null;
+  private pendingGuardBattle: { npc: NpcDefinition; guard: NpcMovementGuardDefinition } | null = null;
   private nextBattleId = 1;
   private warpHintLabel: string | null = null;
   private npcRuntimeStates: Record<string, NpcRuntimeState> = {};
+  private lastNpcResetMapId: string | null = null;
   private npcSpriteSheets: Record<string, NpcSpriteSheetState> = {};
   private playerSpriteSheet: NpcSpriteSheetState = {
     status: 'error',
@@ -403,6 +547,13 @@ export class GameRuntime {
       this.critterLookup = buildCritterLookup(this.critterDatabase);
       this.encounterTables = sanitizeEncounterTableLibrary(storedWorldContent.encounterTables);
       this.encounterTableLookup = buildEncounterTableLookup(this.encounterTables);
+      this.npcSpriteLibrary = [
+        ...sanitizeRuntimeNpcSpriteLibrary(storedWorldContent.npcSpriteLibrary),
+        ...DEFAULT_STORY_NPC_SPRITE_LIBRARY,
+      ];
+      this.npcCharacterLibrary = normalizeCoreStoryNpcCharacters(
+        sanitizeRuntimeNpcCharacterLibrary(storedWorldContent.npcCharacterLibrary),
+      );
       this.customTilesetConfig = storedWorldContent.customTilesetConfig ?? CUSTOM_TILESET_CONFIG;
       this.playerSpriteConfig = storedWorldContent.playerSpriteConfig ?? PLAYER_SPRITE_CONFIG;
 
@@ -410,6 +561,25 @@ export class GameRuntime {
       if (Object.keys(registry).length > 0) {
         this.mapRegistry = registry;
       }
+
+      this.skillEffectLibrary = storedWorldContent.skillEffects ?? [];
+      this.skillEffectLookupById = (this.skillEffectLibrary as SkillEffectDefinition[]).reduce(
+        (acc, e) => {
+          acc[e.effect_id] = e;
+          return acc;
+        },
+        {} as Record<string, SkillEffectDefinition>,
+      );
+      const knownEffectIds = new Set(this.skillEffectLibrary.map((e) => e.effect_id));
+      this.skillDatabase = sanitizeSkillLibrary(storedWorldContent.critterSkills, knownEffectIds);
+      this.skillLookupById = (this.skillDatabase as SkillDefinition[]).reduce(
+        (acc, s) => {
+          acc[s.skill_id] = s;
+          return acc;
+        },
+        {} as Record<string, SkillDefinition>,
+      );
+      this.elementChart = sanitizeElementChart(storedWorldContent.elementChart) ?? buildDefaultElementChart();
     }
 
     const save = !options?.forceNewGame ? loadSave() : null;
@@ -420,6 +590,9 @@ export class GameRuntime {
     this.playerPosition = { x: state.player.x, y: state.player.y };
     this.facing = state.player.facing;
     this.flags = { ...state.progressTracking.mainStory.flags };
+    if (this.flags[FLAG_DEMO_DONE] && !this.flags[FLAG_JACOB_LEFT_HOUSE]) {
+      this.flags[FLAG_JACOB_LEFT_HOUSE] = true;
+    }
     this.mainStoryStageId = state.progressTracking.mainStory.stageId;
     this.sideStoryStageId = state.progressTracking.sideStory.stageId;
     this.sideStoryFlags = { ...state.progressTracking.sideStory.flags };
@@ -460,6 +633,18 @@ export class GameRuntime {
       return;
     }
 
+    if (this.dialogue) {
+      this.heldDirections = [];
+      if (isInteractKey(key)) {
+        this.handleInteract();
+      }
+      return;
+    }
+
+    if (this.isPlayerControlLocked()) {
+      return;
+    }
+
     const direction = toDirection(key);
     if (direction) {
       this.pushHeldDirection(direction);
@@ -472,6 +657,11 @@ export class GameRuntime {
   }
 
   public keyUp(key: string): void {
+    if (this.dialogue || this.isPlayerControlLocked()) {
+      this.heldDirections = [];
+      return;
+    }
+
     const direction = toDirection(key);
     if (!direction) {
       return;
@@ -483,6 +673,7 @@ export class GameRuntime {
   public update(deltaMs: number): void {
     this.playerAnimationMs += deltaMs;
     this.tickMessage(deltaMs);
+    this.updateStoryState(deltaMs);
 
     if (this.activeBattle) {
       this.updateBattle(deltaMs);
@@ -508,7 +699,7 @@ export class GameRuntime {
         }
         this.markDirty();
       }
-    } else if (!this.dialogue) {
+    } else if (!this.dialogue && !this.isPlayerControlLocked()) {
       this.tryMovementFromInput();
     }
 
@@ -519,6 +710,7 @@ export class GameRuntime {
 
   public render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
     const map = this.getCurrentMap();
+    const mapNpcs = this.getNpcsForMap(map.id);
     const playerRenderPos = this.getPlayerRenderPosition();
 
     const viewTilesX = width / TILE_SIZE;
@@ -602,7 +794,7 @@ export class GameRuntime {
       }
     }
 
-    for (const npc of map.npcs) {
+    for (const npc of mapNpcs) {
       const npcState = this.getNpcRuntimeState(npc);
       const npcRenderPosition = this.getNpcRenderPosition(npc);
       depthDraws.push({
@@ -675,12 +867,17 @@ export class GameRuntime {
       lastSavedAt: this.lastSavedAt,
       lastEncounter: this.lastEncounter ? { ...this.lastEncounter } : null,
       battle: this.getBattleSnapshot(),
+      story: {
+        inputLocked: this.isPlayerControlLocked(),
+        starterSelection: this.getStarterSelectionSnapshot(),
+      },
       critters: critterSummary,
     };
   }
 
   public renderGameToText(): string {
     const map = this.getCurrentMap();
+    const mapNpcs = this.getNpcsForMap(map.id);
     const playerRenderPosition = this.getPlayerRenderPosition();
     const facingTile = this.getFacingTile();
     const facingTileCode = tileAt(map, facingTile.x, facingTile.y);
@@ -730,15 +927,27 @@ export class GameRuntime {
       message: this.transientMessage?.text ?? null,
       encounter: this.lastEncounter,
       battle: this.getBattleSnapshot(),
+      story: {
+        inputLocked: this.isPlayerControlLocked(),
+        starterSelection: this.getStarterSelectionSnapshot(),
+      },
       flags: activeFlags,
-      npcs: map.npcs.map((npc) => ({
-        id: npc.id,
-        name: npc.name,
-        x: this.getNpcRenderPosition(npc).x,
-        y: this.getNpcRenderPosition(npc).y,
-        facing: this.getNpcRuntimeState(npc).facing,
-        movementType: npc.movement?.type ?? 'static',
-      })),
+      npcs: mapNpcs.map((npc) => {
+        const npcState = this.getNpcRuntimeState(npc);
+        const npcRenderPosition = this.getNpcRenderPosition(npc);
+        return {
+          id: npc.id,
+          name: npc.name,
+          x: npcRenderPosition.x,
+          y: npcRenderPosition.y,
+          facing: npcState.facing,
+          moving: npcState.moveStep !== null,
+          movementType: npc.movement?.type ?? 'static',
+          idleAnimation: npc.idleAnimation ?? npc.sprite?.defaultIdleAnimation ?? null,
+          moveAnimation: npc.moveAnimation ?? npc.sprite?.defaultMoveAnimation ?? null,
+          frameIndex: this.getNpcFrameIndex(npc, npcState.facing, npcState.moveStep !== null),
+        };
+      }),
       nearbyWarps: map.warps
         .filter((warp) =>
           this.getWarpFromPositions(warp).some((from) => {
@@ -790,6 +999,51 @@ export class GameRuntime {
     this.showMessage('Progress Saved');
   }
 
+  public selectStarterCandidate(critterId: number): boolean {
+    if (!this.starterSelection) {
+      return false;
+    }
+    if (!this.starterSelection.optionCritterIds.includes(critterId)) {
+      return false;
+    }
+    this.starterSelection.confirmCritterId = critterId;
+    return true;
+  }
+
+  public cancelStarterCandidate(): boolean {
+    if (!this.starterSelection || this.starterSelection.confirmCritterId === null) {
+      return false;
+    }
+    this.starterSelection.confirmCritterId = null;
+    return true;
+  }
+
+  public confirmStarterCandidate(): boolean {
+    if (!this.starterSelection || this.starterSelection.confirmCritterId === null) {
+      return false;
+    }
+
+    const critterId = this.starterSelection.confirmCritterId;
+    const critter = this.critterLookup[critterId];
+    if (!critter) {
+      return false;
+    }
+
+    this.selectedStarterId = String(critter.id);
+    this.flags[FLAG_SELECTED_STARTER] = true;
+    this.flags[`selected-${critter.element}-starter`] = true;
+    this.starterSelection = null;
+    this.pendingStoryAction = null;
+    const uncleNpc = this.getNpcsForMap(this.currentMapId).find((entry) => entry.id === UNCLE_HANK_NPC_ID);
+    if (uncleNpc?.dialogueLines && uncleNpc.dialogueLines.length > 0) {
+      this.startDialogue(uncleNpc.dialogueSpeaker ?? uncleNpc.name, uncleNpc.dialogueLines, uncleNpc.dialogueSetFlag);
+    } else {
+      this.startDialogue('Uncle Hank', ['Try Unlocking your new Critter in your Collection.']);
+    }
+    this.markProgressDirty();
+    return true;
+  }
+
   public tryAdvanceCritter(critterId: number): boolean {
     const critter = this.critterLookup[critterId];
     if (!critter) {
@@ -818,8 +1072,6 @@ export class GameRuntime {
     }
 
     const nextLevel = Math.max(1, targetLevel);
-    const previousMaxHp = Math.max(1, progress.effectiveStats.hp);
-    const previousCurrentHp = clamp(progress.currentHp, 0, previousMaxHp);
     progress.unlocked = true;
     progress.level = nextLevel;
     progress.unlockedAt = progress.unlockedAt ?? new Date().toISOString();
@@ -829,8 +1081,16 @@ export class GameRuntime {
     progress.statBonus = derived.statBonus;
     progress.effectiveStats = derived.effectiveStats;
     const nextMaxHp = Math.max(1, derived.effectiveStats.hp);
-    progress.currentHp = currentLevel === 0 ? nextMaxHp : clamp(previousCurrentHp, 0, nextMaxHp);
+    // Unlocks and level-ups both restore HP to full.
+    progress.currentHp = nextMaxHp;
     progress.unlockedAbilityIds = derived.unlockedAbilityIds;
+    const newSkillIds = levelRow.skillUnlockIds ?? [];
+    const hasNoEquippedSkills = progress.equippedSkillIds.every((id) => id === null);
+    if (hasNoEquippedSkills && newSkillIds.length > 0) {
+      const next = [...progress.equippedSkillIds] as typeof progress.equippedSkillIds;
+      next[0] = newSkillIds[0];
+      progress.equippedSkillIds = next;
+    }
     const autoAssignedToSquad = currentLevel === 0 && this.tryAutoAssignFirstUnlockedCritter(critter.id);
 
     this.markProgressDirty();
@@ -840,6 +1100,17 @@ export class GameRuntime {
         : `${critter.name} reached Lv.${nextLevel}!`,
       5000,
     );
+
+    if (
+      currentLevel === 0 &&
+      this.flags[FLAG_SELECTED_STARTER] &&
+      !this.flags[FLAG_STARTER_SELECTION_DONE] &&
+      this.playerCritterProgress.squad.some((entry) => entry === critter.id)
+    ) {
+      this.flags[FLAG_STARTER_SELECTION_DONE] = true;
+      this.markProgressDirty();
+    }
+
     return true;
   }
 
@@ -910,15 +1181,31 @@ export class GameRuntime {
     return true;
   }
 
-  public battleChooseAction(action: 'attack' | 'guard' | 'swap' | 'retreat'): boolean {
+  public setEquippedSkill(critterId: number, slotIndex: number, skillId: string | null): boolean {
+    const slot = Math.floor(slotIndex);
+    if (slot < 0 || slot > 3) return false;
+    const progress = this.playerCritterProgress.collection.find((e) => e.critterId === critterId);
+    if (!progress?.unlocked) return false;
+    const critter = this.critterLookup[critterId];
+    if (!critter) return false;
+    const derived = computeCritterDerivedProgress(critter, progress.level);
+    if (skillId !== null) {
+      if (!derived.unlockedSkillIds.includes(skillId)) return false;
+    } else {
+      const equippedCount = progress.equippedSkillIds.filter((id) => id !== null).length;
+      if (equippedCount <= 1) return false;
+    }
+    const next = [...progress.equippedSkillIds] as EquippedSkillSlots;
+    next[slot] = skillId;
+    progress.equippedSkillIds = next;
+    this.markProgressDirty();
+    return true;
+  }
+
+  public battleChooseAction(action: 'guard' | 'swap' | 'retreat'): boolean {
     const battle = this.activeBattle;
     if (!battle || battle.phase !== 'player-turn' || battle.result !== 'ongoing' || battle.activeNarration) {
       return false;
-    }
-
-    if (action === 'attack') {
-      this.resolvePlayerTurnAction(battle, 'attack');
-      return true;
     }
 
     if (action === 'guard') {
@@ -947,6 +1234,31 @@ export class GameRuntime {
     return false;
   }
 
+  public battleChooseSkill(skillSlotIndex: number): boolean {
+    const battle = this.activeBattle;
+    if (!battle || battle.phase !== 'player-turn' || battle.result !== 'ongoing' || battle.activeNarration) {
+      return false;
+    }
+    const slot = Math.floor(skillSlotIndex);
+    if (slot < 0 || slot > 3) {
+      return false;
+    }
+    const player = this.getActiveBattleCritter(battle, 'player');
+    if (!player?.equippedSkillIds) {
+      return false;
+    }
+    const skillId = player.equippedSkillIds[slot];
+    if (!skillId) {
+      return false;
+    }
+    const skill = this.skillLookupById[skillId] ?? DEFAULT_TACKLE_SKILL;
+    if (!skill) {
+      return false;
+    }
+    this.resolvePlayerTurnAction(battle, 'attack', slot);
+    return true;
+  }
+
   public battleSelectSquadSlot(slotIndex: number): boolean {
     const battle = this.activeBattle;
     if (!battle || battle.activeNarration || (battle.phase !== 'choose-starter' && battle.phase !== 'choose-swap')) {
@@ -968,6 +1280,14 @@ export class GameRuntime {
     }
 
     const previousIndex = battle.playerActiveIndex;
+    if (previousIndex !== null && battle.playerTeam[previousIndex]) {
+      const prev = battle.playerTeam[previousIndex];
+      prev.consecutiveSuccessfulGuardCount = 0;
+      prev.attackModifier = 1;
+      prev.defenseModifier = 1;
+      prev.speedModifier = 1;
+      prev.activeEffectIds = [];
+    }
     battle.playerActiveIndex = teamIndex;
 
     if (battle.phase === 'choose-starter') {
@@ -1002,8 +1322,11 @@ export class GameRuntime {
   }
 
   public battleAcknowledgeResult(): boolean {
-    if (!this.activeBattle || this.activeBattle.phase !== 'result' || this.activeBattle.activeNarration) {
+    if (!this.activeBattle || this.activeBattle.phase !== 'result') {
       return false;
+    }
+    if (this.activeBattle.result === 'lost') {
+      this.performBlackout();
     }
     this.activeBattle = null;
     return true;
@@ -1030,6 +1353,310 @@ export class GameRuntime {
     }
 
     return map;
+  }
+
+  private getNpcsForMap(mapId: string): ResolvedNpcDefinition[] {
+    const resolved: ResolvedNpcDefinition[] = [];
+    const seenCharacterKeys = new Set<string>();
+    const characterIds = new Set(this.npcCharacterLibrary.map((entry) => entry.id));
+    const map = this.mapRegistry[mapId];
+    if (!map) {
+      return resolved;
+    }
+
+    for (const sourceMap of Object.values(this.mapRegistry)) {
+      for (const sourceNpc of sourceMap.npcs) {
+        // Character-library entries are authoritative for story NPCs.
+        if (characterIds.has(sourceNpc.id) || isCoreStoryNpcName(sourceNpc.name)) {
+          continue;
+        }
+        const nextNpc = this.resolveNpcForStory(sourceNpc, sourceMap.id);
+        if (nextNpc.npc.requiresFlag && !this.flags[nextNpc.npc.requiresFlag]) {
+          continue;
+        }
+        if (nextNpc.npc.hideIfFlag && this.flags[nextNpc.npc.hideIfFlag]) {
+          continue;
+        }
+        if (nextNpc.mapId !== mapId) {
+          continue;
+        }
+        seenCharacterKeys.add(nextNpc.npc.__characterKey);
+        resolved.push(nextNpc.npc);
+      }
+    }
+
+    const storyCharacters = this.getCharacterStoryNpcsForMap(mapId);
+    for (const npc of storyCharacters) {
+      if (seenCharacterKeys.has(npc.__characterKey)) {
+        continue;
+      }
+      resolved.push(npc);
+    }
+
+    return resolved;
+  }
+
+  private resolveNpcForStory(
+    baseNpc: NpcDefinition,
+    sourceMapId: string,
+  ): { mapId: string; npc: ResolvedNpcDefinition } {
+    let mapId = sourceMapId;
+    let position: Vector2 = { ...baseNpc.position };
+    let facing = baseNpc.facing;
+    let dialogueId = baseNpc.dialogueId;
+    let dialogueLines = baseNpc.dialogueLines ? [...baseNpc.dialogueLines] : undefined;
+    let dialogueSpeaker = baseNpc.dialogueSpeaker;
+    let dialogueSetFlag = baseNpc.dialogueSetFlag;
+    let firstInteractionSetFlag = baseNpc.firstInteractionSetFlag;
+    let firstInteractBattle = Boolean(baseNpc.firstInteractBattle);
+    let healer = Boolean(baseNpc.healer);
+    let battleTeamIds = baseNpc.battleTeamIds ? [...baseNpc.battleTeamIds] : undefined;
+    let movement = baseNpc.movement
+      ? {
+          ...baseNpc.movement,
+          pattern: baseNpc.movement.pattern ? [...baseNpc.movement.pattern] : undefined,
+        }
+      : undefined;
+    let interactionScript = baseNpc.interactionScript
+      ? baseNpc.interactionScript.map((step) => ({ ...step }))
+      : undefined;
+    let idleAnimation = baseNpc.idleAnimation;
+    let moveAnimation = baseNpc.moveAnimation;
+    let sprite = baseNpc.sprite;
+    let movementGuards = baseNpc.movementGuards
+      ? baseNpc.movementGuards.map((guard) => ({
+          ...guard,
+          dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+        }))
+      : undefined;
+    let activeStoryStateKey = 'base';
+
+    const states = Array.isArray(baseNpc.storyStates) ? baseNpc.storyStates : [];
+    for (let stateIndex = 0; stateIndex < states.length; stateIndex += 1) {
+      const state = states[stateIndex];
+      if (state.requiresFlag && !this.flags[state.requiresFlag]) {
+        continue;
+      }
+      activeStoryStateKey = state.id?.trim() || `instance-${stateIndex + 1}`;
+      if (state.mapId && this.mapRegistry[state.mapId]) {
+        mapId = state.mapId;
+      }
+      if (state.position) {
+        position = { ...state.position };
+      }
+      if (state.facing) {
+        facing = state.facing;
+      }
+      if (typeof state.dialogueId === 'string' && state.dialogueId.trim()) {
+        dialogueId = state.dialogueId;
+      }
+      if (Array.isArray(state.dialogueLines)) {
+        dialogueLines = state.dialogueLines.filter((line) => typeof line === 'string');
+      }
+      if (typeof state.dialogueSpeaker === 'string' && state.dialogueSpeaker.trim()) {
+        dialogueSpeaker = state.dialogueSpeaker;
+      }
+      if (typeof state.dialogueSetFlag === 'string' && state.dialogueSetFlag.trim()) {
+        dialogueSetFlag = state.dialogueSetFlag;
+      }
+      if (typeof state.firstInteractionSetFlag === 'string' && state.firstInteractionSetFlag.trim()) {
+        firstInteractionSetFlag = state.firstInteractionSetFlag;
+      }
+      if (typeof state.firstInteractBattle === 'boolean') {
+        firstInteractBattle = state.firstInteractBattle;
+      }
+      if (typeof state.healer === 'boolean') {
+        healer = state.healer;
+      }
+      if (Array.isArray(state.battleTeamIds)) {
+        battleTeamIds = state.battleTeamIds.filter((entry) => typeof entry === 'string');
+      }
+      if (state.movement) {
+        movement = {
+          ...state.movement,
+          pattern: state.movement.pattern ? [...state.movement.pattern] : undefined,
+        };
+      }
+      if (Array.isArray(state.interactionScript)) {
+        interactionScript = state.interactionScript.map((step) => ({ ...step }));
+      }
+      if (typeof state.idleAnimation === 'string' && state.idleAnimation.trim()) {
+        idleAnimation = state.idleAnimation;
+      }
+      if (typeof state.moveAnimation === 'string' && state.moveAnimation.trim()) {
+        moveAnimation = state.moveAnimation;
+      }
+      if (state.sprite) {
+        sprite = state.sprite;
+      }
+      if (Array.isArray(state.movementGuards)) {
+        movementGuards = state.movementGuards.map((guard) => ({
+          ...guard,
+          dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+        }));
+      }
+    }
+
+    const resolvedNpc: ResolvedNpcDefinition = {
+      ...baseNpc,
+      position,
+      facing,
+      dialogueId,
+      dialogueLines,
+      dialogueSpeaker,
+      dialogueSetFlag,
+      firstInteractionSetFlag,
+      firstInteractBattle,
+      healer,
+      battleTeamIds,
+      movement,
+      interactionScript,
+      idleAnimation,
+      moveAnimation,
+      sprite,
+      movementGuards,
+      __characterKey: `${sourceMapId}:${baseNpc.id}`,
+      __sourceMapId: sourceMapId,
+      __instanceKey: `${sourceMapId}:${baseNpc.id}:${activeStoryStateKey}`,
+    };
+
+    return {
+      mapId,
+      npc: resolvedNpc,
+    };
+  }
+
+  private getCharacterStoryNpcsForMap(mapId: string): ResolvedNpcDefinition[] {
+    const resolved: ResolvedNpcDefinition[] = [];
+    for (const character of this.npcCharacterLibrary) {
+      const active = this.resolveActiveCharacterInstance(character);
+      if (!active) {
+        continue;
+      }
+      if (active.state.mapId !== mapId) {
+        continue;
+      }
+      const state = active.state;
+      if (!state.position) {
+        continue;
+      }
+      const resolvedSprite = this.resolveCharacterSprite(character, state);
+      const npc: ResolvedNpcDefinition = {
+        id: character.id,
+        name: character.npcName,
+        position: { ...state.position },
+        facing: state.facing ?? character.facing,
+        color: character.color || '#9b73b8',
+        dialogueId: state.dialogueId ?? character.dialogueId ?? 'custom_npc_dialogue',
+        dialogueSpeaker: state.dialogueSpeaker ?? character.dialogueSpeaker,
+        dialogueLines: state.dialogueLines ? [...state.dialogueLines] : character.dialogueLines ? [...character.dialogueLines] : undefined,
+        dialogueSetFlag: state.dialogueSetFlag ?? character.dialogueSetFlag,
+        firstInteractionSetFlag: state.firstInteractionSetFlag ?? character.firstInteractionSetFlag,
+        firstInteractBattle:
+          typeof state.firstInteractBattle === 'boolean'
+            ? state.firstInteractBattle
+            : Boolean(character.firstInteractBattle),
+        healer: typeof state.healer === 'boolean' ? state.healer : Boolean(character.healer),
+        battleTeamIds: state.battleTeamIds ? [...state.battleTeamIds] : character.battleTeamIds ? [...character.battleTeamIds] : undefined,
+        movement: state.movement
+          ? {
+              ...state.movement,
+              pattern: state.movement.pattern ? [...state.movement.pattern] : undefined,
+            }
+          : character.movement
+            ? {
+                ...character.movement,
+                pattern: character.movement.pattern ? [...character.movement.pattern] : undefined,
+              }
+            : undefined,
+        idleAnimation: state.idleAnimation ?? character.idleAnimation,
+        moveAnimation: state.moveAnimation ?? character.moveAnimation,
+        sprite: resolvedSprite,
+        movementGuards: state.movementGuards
+          ? state.movementGuards.map((guard) => ({
+              ...guard,
+              dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+            }))
+          : character.movementGuards
+            ? character.movementGuards.map((guard) => ({
+                ...guard,
+                dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+              }))
+            : undefined,
+        interactionScript: state.interactionScript
+          ? state.interactionScript.map((step) => ({ ...step }))
+          : character.interactionScript
+            ? character.interactionScript.map((step) => ({ ...step }))
+            : undefined,
+        __characterKey: `character:${character.id}`,
+        __sourceMapId: `character:${character.id}`,
+        __instanceKey: `character:${character.id}:instance-${active.index + 1}`,
+      };
+      resolved.push(npc);
+    }
+    return resolved;
+  }
+
+  private resolveActiveCharacterInstance(
+    character: NpcCharacterTemplateEntry,
+  ): { index: number; state: NpcStoryStateDefinition } | null {
+    const states = Array.isArray(character.storyStates) ? character.storyStates : [];
+    if (states.length === 0) {
+      return null;
+    }
+
+    let active: { index: number; state: NpcStoryStateDefinition } | null = null;
+    for (let index = 0; index < states.length; index += 1) {
+      const state = states[index];
+      if (!state || !state.mapId || !state.position || !this.mapRegistry[state.mapId]) {
+        continue;
+      }
+      if (state.requiresFlag && !this.flags[state.requiresFlag]) {
+        continue;
+      }
+      active = { index, state };
+    }
+    return active;
+  }
+
+  private resolveCharacterSprite(
+    character: NpcCharacterTemplateEntry,
+    state: NpcStoryStateDefinition,
+  ): NpcSpriteConfig | undefined {
+    if (state.sprite) {
+      return {
+        ...state.sprite,
+        facingFrames: { ...state.sprite.facingFrames },
+        walkFrames: state.sprite.walkFrames
+          ? {
+              up: state.sprite.walkFrames.up ? [...state.sprite.walkFrames.up] : undefined,
+              down: state.sprite.walkFrames.down ? [...state.sprite.walkFrames.down] : undefined,
+              left: state.sprite.walkFrames.left ? [...state.sprite.walkFrames.left] : undefined,
+              right: state.sprite.walkFrames.right ? [...state.sprite.walkFrames.right] : undefined,
+            }
+          : undefined,
+      };
+    }
+
+    if (!character.spriteId) {
+      return undefined;
+    }
+    const entry = this.npcSpriteLibrary.find((candidate) => candidate.id === character.spriteId);
+    if (!entry) {
+      return undefined;
+    }
+    return {
+      ...entry.sprite,
+      facingFrames: { ...entry.sprite.facingFrames },
+      walkFrames: entry.sprite.walkFrames
+        ? {
+            up: entry.sprite.walkFrames.up ? [...entry.sprite.walkFrames.up] : undefined,
+            down: entry.sprite.walkFrames.down ? [...entry.sprite.walkFrames.down] : undefined,
+            left: entry.sprite.walkFrames.left ? [...entry.sprite.walkFrames.left] : undefined,
+            right: entry.sprite.walkFrames.right ? [...entry.sprite.walkFrames.right] : undefined,
+          }
+        : undefined,
+    };
   }
 
   private getTileDefinition(code: string): TileDefinition {
@@ -1070,18 +1697,20 @@ export class GameRuntime {
     const image = new Image();
     image.onload = () => {
       const columns = Math.floor(image.width / config.tileWidth);
-      if (columns <= 0) {
-        return;
-      }
+      if (columns <= 0) return;
       const rows = Math.floor(image.height / config.tileHeight);
-      if (rows <= 0) {
-        return;
+      if (rows <= 0) return;
+      const apply = () => {
+        this.tilesetImage = image;
+        this.tilesetColumns = columns;
+        this.tilesetRows = rows;
+        this.tilesetCellCount = columns * rows;
+      };
+      if (typeof image.decode === 'function') {
+        image.decode().then(apply).catch(apply);
+      } else {
+        apply();
       }
-
-      this.tilesetImage = image;
-      this.tilesetColumns = columns;
-      this.tilesetRows = rows;
-      this.tilesetCellCount = columns * rows;
     };
     image.onerror = () => {
       this.tilesetImage = null;
@@ -1158,7 +1787,22 @@ export class GameRuntime {
 
   private ensureNpcRuntimeState(): void {
     const map = this.getCurrentMap();
-    for (const npc of map.npcs) {
+    if (this.lastNpcResetMapId !== this.currentMapId) {
+      this.lastNpcResetMapId = this.currentMapId;
+      for (const npc of this.getNpcsForMap(map.id)) {
+        const key = this.getNpcStateKey(npc);
+        const state = this.npcRuntimeStates[key];
+        if (state) {
+          state.position = { ...npc.position };
+          state.anchorPosition = { ...npc.position };
+          state.facing = npc.facing ?? state.facing;
+          state.moveStep = null;
+          state.patternIndex = 0;
+          state.patternDirection = 1;
+        }
+      }
+    }
+    for (const npc of this.getNpcsForMap(map.id)) {
       this.getNpcRuntimeState(npc);
       this.ensureNpcSpriteLoaded(npc);
     }
@@ -1182,11 +1826,18 @@ export class GameRuntime {
     image.onload = () => {
       const atlasCellWidth = Math.max(1, sprite.atlasCellWidth ?? sprite.frameWidth);
       const columns = Math.floor(image.width / atlasCellWidth);
-      this.playerSpriteSheet = {
-        status: columns > 0 ? 'ready' : 'error',
-        image: columns > 0 ? image : null,
-        columns: Math.max(0, columns),
+      const setReady = () => {
+        this.playerSpriteSheet = {
+          status: columns > 0 ? 'ready' : 'error',
+          image: columns > 0 ? image : null,
+          columns: Math.max(0, columns),
+        };
       };
+      if (typeof image.decode === 'function') {
+        image.decode().then(setReady).catch(setReady);
+      } else {
+        setReady();
+      }
     };
     image.onerror = () => {
       this.playerSpriteSheet = {
@@ -1219,11 +1870,18 @@ export class GameRuntime {
     image.onload = () => {
       const atlasCellWidth = Math.max(1, sprite.atlasCellWidth ?? sprite.frameWidth);
       const columns = Math.floor(image.width / atlasCellWidth);
-      this.npcSpriteSheets[sprite.url] = {
-        status: columns > 0 ? 'ready' : 'error',
-        image: columns > 0 ? image : null,
-        columns: Math.max(0, columns),
+      const setReady = () => {
+        this.npcSpriteSheets[sprite.url] = {
+          status: columns > 0 ? 'ready' : 'error',
+          image: columns > 0 ? image : null,
+          columns: Math.max(0, columns),
+        };
       };
+      if (typeof image.decode === 'function') {
+        image.decode().then(setReady).catch(setReady);
+      } else {
+        setReady();
+      }
     };
     image.onerror = () => {
       this.npcSpriteSheets[sprite.url] = {
@@ -1236,27 +1894,45 @@ export class GameRuntime {
   }
 
   private getNpcRuntimeState(npc: NpcDefinition): NpcRuntimeState {
-    const key = this.getNpcStateKey(npc.id);
+    const key = this.getNpcStateKey(npc);
     const existing = this.npcRuntimeStates[key];
     if (existing) {
+      const stepIntervalMs = clampNpcStepInterval(npc.movement?.stepIntervalMs);
+      existing.moveCooldownMs = Math.min(existing.moveCooldownMs, stepIntervalMs);
+      if (existing.anchorPosition.x !== npc.position.x || existing.anchorPosition.y !== npc.position.y) {
+        existing.anchorPosition = { ...npc.position };
+        existing.position = { ...npc.position };
+        existing.moveStep = null;
+        existing.patternIndex = 0;
+        existing.patternDirection = 1;
+        if (npc.facing) {
+          existing.facing = npc.facing;
+        }
+      }
       return existing;
     }
 
     const created: NpcRuntimeState = {
       position: { ...npc.position },
-      facing: 'down',
+      anchorPosition: { ...npc.position },
+      facing: npc.facing ?? randomDirection(),
       turnTimerMs: randomTurnDelay(),
       moveStep: null,
       moveCooldownMs: clampNpcStepInterval(npc.movement?.stepIntervalMs),
       patternIndex: 0,
+      patternDirection: 1,
       animationMs: 0,
     };
     this.npcRuntimeStates[key] = created;
     return created;
   }
 
-  private getNpcStateKey(npcId: string): string {
-    return `${this.currentMapId}:${npcId}`;
+  private getNpcStateKey(npc: NpcDefinition): string {
+    const resolvedNpc = npc as ResolvedNpcDefinition;
+    if (typeof resolvedNpc.__characterKey === 'string' && resolvedNpc.__characterKey.trim()) {
+      return resolvedNpc.__characterKey;
+    }
+    return `${this.currentMapId}:${npc.id}`;
   }
 
   private pushHeldDirection(direction: Direction): void {
@@ -1266,9 +1942,10 @@ export class GameRuntime {
 
   private updateNpcs(deltaMs: number): void {
     const map = this.getCurrentMap();
+    const mapNpcs = this.getNpcsForMap(map.id);
     this.ensureNpcRuntimeState();
 
-    for (const npc of map.npcs) {
+    for (const npc of mapNpcs) {
       const state = this.getNpcRuntimeState(npc);
       state.animationMs += deltaMs;
       this.ensureNpcSpriteLoaded(npc);
@@ -1281,17 +1958,28 @@ export class GameRuntime {
         }
       }
 
-      if (this.activeBattle || this.dialogue || state.moveStep) {
+      if (this.activeBattle || this.dialogue || this.activeScriptedScene || state.moveStep) {
         continue;
       }
 
-      const movementType = npc.movement?.type ?? 'static';
+      const movementType = this.getNpcMovementType(npc);
       if (movementType === 'static') {
+        continue;
+      }
+
+      if (movementType === 'static-turning') {
         state.turnTimerMs -= deltaMs;
-        if (state.turnTimerMs <= 0) {
-          state.facing = randomDifferentDirection(state.facing);
-          state.turnTimerMs = randomTurnDelay();
+        if (state.turnTimerMs > 0) {
+          continue;
         }
+        const turnPattern = this.getNpcMovementPattern(npc);
+        if (turnPattern.length > 0) {
+          state.facing = turnPattern[state.patternIndex % turnPattern.length];
+          state.patternIndex = (state.patternIndex + 1) % turnPattern.length;
+        } else {
+          state.facing = randomDifferentDirection(state.facing);
+        }
+        state.turnTimerMs = clampNpcStepInterval(npc.movement?.stepIntervalMs);
         continue;
       }
 
@@ -1300,22 +1988,100 @@ export class GameRuntime {
         continue;
       }
 
-      if (movementType === 'loop') {
-        const pattern = (npc.movement?.pattern ?? []).filter(isDirection);
+      if (movementType === 'path') {
+        const pattern = this.getNpcMovementPattern(npc);
         if (pattern.length === 0) {
           state.moveCooldownMs = clampNpcStepInterval(npc.movement?.stepIntervalMs);
           continue;
         }
 
-        const direction = pattern[state.patternIndex % pattern.length];
-        state.patternIndex = (state.patternIndex + 1) % pattern.length;
+        const direction = this.getNextNpcPathDirection(state, pattern, npc.movement?.pathMode);
         this.tryNpcMove(npc, state, direction);
         continue;
       }
 
-      const direction = randomDirection();
-      this.tryNpcMove(npc, state, direction);
+      this.tryNpcWanderMove(npc, state);
     }
+  }
+
+  private getNpcMovementType(npc: NpcDefinition): 'static' | 'static-turning' | 'wander' | 'path' {
+    const movementType = npc.movement?.type;
+    if (movementType === 'static-turning') {
+      return 'static-turning';
+    }
+    if (movementType === 'wander' || movementType === 'random') {
+      return 'wander';
+    }
+    if (movementType === 'path' || movementType === 'loop') {
+      return 'path';
+    }
+    return 'static';
+  }
+
+  private getNpcMovementPattern(npc: NpcDefinition): Direction[] {
+    return (npc.movement?.pattern ?? []).filter(isDirection);
+  }
+
+  private getNextNpcPathDirection(
+    state: NpcRuntimeState,
+    pattern: Direction[],
+    pathMode: 'loop' | 'pingpong' | undefined,
+  ): Direction {
+    const length = pattern.length;
+    if (length <= 1) {
+      state.patternIndex = 0;
+      state.patternDirection = 1;
+      return pattern[0];
+    }
+    const mode = pathMode === 'pingpong' ? 'pingpong' : 'loop';
+    if (mode === 'loop') {
+      const direction = pattern[state.patternIndex % length];
+      state.patternIndex = (state.patternIndex + 1) % length;
+      state.patternDirection = 1;
+      return direction;
+    }
+
+    const safeIndex = clamp(state.patternIndex, 0, length - 1);
+    const direction = pattern[safeIndex];
+    let nextIndex = safeIndex + state.patternDirection;
+    if (nextIndex < 0 || nextIndex >= length) {
+      state.patternDirection = (state.patternDirection * -1) as 1 | -1;
+      nextIndex = safeIndex + state.patternDirection;
+      if (nextIndex < 0 || nextIndex >= length) {
+        nextIndex = safeIndex;
+      }
+    }
+    state.patternIndex = nextIndex;
+    return direction;
+  }
+
+  private tryNpcWanderMove(npc: NpcDefinition, state: NpcRuntimeState): void {
+    const candidates = shuffleDirections();
+    for (const direction of candidates) {
+      const delta = DIRECTION_DELTAS[direction];
+      const target = {
+        x: state.position.x + delta.x,
+        y: state.position.y + delta.y,
+      };
+      if (!this.isNpcMoveWithinLeash(npc, state, target)) {
+        continue;
+      }
+      if (!this.canNpcStepTo(npc, state.position, target, direction)) {
+        continue;
+      }
+      this.tryNpcMove(npc, state, direction);
+      return;
+    }
+    state.moveCooldownMs = clampNpcStepInterval(npc.movement?.stepIntervalMs);
+  }
+
+  private isNpcMoveWithinLeash(npc: NpcDefinition, state: NpcRuntimeState, target: Vector2): boolean {
+    if (!Number.isFinite(npc.movement?.leashRadius)) {
+      return true;
+    }
+    const leashRadius = Math.max(1, Math.floor(npc.movement?.leashRadius ?? 0));
+    const distanceFromAnchor = Math.abs(target.x - state.anchorPosition.x) + Math.abs(target.y - state.anchorPosition.y);
+    return distanceFromAnchor <= leashRadius;
   }
 
   private tryNpcMove(npc: NpcDefinition, state: NpcRuntimeState, direction: Direction): void {
@@ -1325,7 +2091,7 @@ export class GameRuntime {
       x: state.position.x + delta.x,
       y: state.position.y + delta.y,
     };
-    if (this.canNpcStepTo(npc.id, state.position, target, direction)) {
+    if (this.canNpcStepTo(npc, state.position, target, direction)) {
       state.moveStep = {
         from: { ...state.position },
         to: target,
@@ -1389,11 +2155,150 @@ export class GameRuntime {
     if (!this.isTilePassable(x, y, this.playerPosition, direction)) {
       return false;
     }
+    if (!this.isDemoLeashStepAllowed(x, y)) {
+      return false;
+    }
+    if (!this.isNpcMovementGuardStepAllowed(x, y)) {
+      return false;
+    }
 
     return !this.isNpcOccupyingTile(x, y);
   }
 
-  private canNpcStepTo(npcId: string, from: Vector2, target: Vector2, direction: Direction): boolean {
+  private isDemoLeashStepAllowed(targetX: number, targetY: number): boolean {
+    if (!this.shouldEnforceDemoLeash()) {
+      return true;
+    }
+    const unclePosition = this.getUncleHankPosition();
+    if (!unclePosition) {
+      return true;
+    }
+    const verticalBoundaryTiles = 6;
+    const verticalDistance = Math.abs(targetY - unclePosition.y);
+    if (verticalDistance <= verticalBoundaryTiles) {
+      return true;
+    }
+    if (!this.dialogue) {
+      this.startDialogue('Uncle Hank', ["Don't leave yet! Unlock your Partner Critter first!"]);
+    }
+    return false;
+  }
+
+  private shouldEnforceDemoLeash(): boolean {
+    return this.currentMapId === 'uncle-s-house' && this.flags[FLAG_DEMO_START] && !this.flags[FLAG_DEMO_DONE];
+  }
+
+  private getUncleHankPosition(): Vector2 | null {
+    const uncle = this.getNpcsForMap('uncle-s-house').find((entry) => entry.id === UNCLE_HANK_NPC_ID);
+    if (!uncle) {
+      return null;
+    }
+    const state = this.getNpcRuntimeState(uncle);
+    return state.moveStep?.to ?? state.position;
+  }
+
+  private isNpcMovementGuardStepAllowed(targetX: number, targetY: number): boolean {
+    const mapNpcs = this.getNpcsForMap(this.currentMapId);
+    for (const npc of mapNpcs) {
+      const guards = Array.isArray(npc.movementGuards) ? npc.movementGuards : [];
+      for (const guard of guards) {
+        if (!this.isNpcMovementGuardActive(guard)) {
+          continue;
+        }
+        if (!this.doesNpcMovementGuardMatchTarget(guard, targetX, targetY)) {
+          continue;
+        }
+        if (Array.isArray(npc.battleTeamIds) && npc.battleTeamIds.length > 0) {
+          const npcState = this.getNpcRuntimeState(npc);
+          npcState.facing = oppositeDirection(this.facing);
+          const preBattleLines = (npc.dialogueLines && npc.dialogueLines.length > 0
+            ? npc.dialogueLines
+            : Array.isArray(guard.dialogueLines)
+              ? guard.dialogueLines.filter((line): line is string => typeof line === 'string' && line.trim().length > 0)
+              : []
+          ) as string[];
+          if (preBattleLines.length > 0) {
+            this.pendingGuardBattle = { npc, guard };
+            const speaker =
+              typeof guard.dialogueSpeaker === 'string' && guard.dialogueSpeaker.trim()
+                ? guard.dialogueSpeaker.trim()
+                : npc.dialogueSpeaker ?? npc.name;
+            this.startDialogue(speaker, preBattleLines);
+            return false;
+          }
+          this.startMovementGuardBattle(npc, guard);
+          return false;
+        }
+        if (!this.dialogue) {
+          this.startNpcMovementGuardDialogue(npc, guard);
+        }
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private isNpcMovementGuardActive(guard: NpcMovementGuardDefinition): boolean {
+    const requiresFlag = typeof guard.requiresFlag === 'string' ? guard.requiresFlag.trim() : '';
+    if (requiresFlag && !this.flags[requiresFlag]) {
+      return false;
+    }
+    const hideIfFlag = typeof guard.hideIfFlag === 'string' ? guard.hideIfFlag.trim() : '';
+    if (hideIfFlag && this.flags[hideIfFlag]) {
+      return false;
+    }
+    const defeatedFlag = typeof guard.defeatedFlag === 'string' ? guard.defeatedFlag.trim() : '';
+    if (defeatedFlag && this.flags[defeatedFlag]) {
+      return false;
+    }
+    return true;
+  }
+
+  private doesNpcMovementGuardMatchTarget(guard: NpcMovementGuardDefinition, targetX: number, targetY: number): boolean {
+    const hasExactX = typeof guard.x === 'number' && Number.isFinite(guard.x);
+    const hasExactY = typeof guard.y === 'number' && Number.isFinite(guard.y);
+    const hasMinX = typeof guard.minX === 'number' && Number.isFinite(guard.minX);
+    const hasMaxX = typeof guard.maxX === 'number' && Number.isFinite(guard.maxX);
+    const hasMinY = typeof guard.minY === 'number' && Number.isFinite(guard.minY);
+    const hasMaxY = typeof guard.maxY === 'number' && Number.isFinite(guard.maxY);
+    if (!hasExactX && !hasExactY && !hasMinX && !hasMaxX && !hasMinY && !hasMaxY) {
+      return false;
+    }
+    if (hasExactX && targetX !== Math.floor(guard.x as number)) {
+      return false;
+    }
+    if (hasExactY && targetY !== Math.floor(guard.y as number)) {
+      return false;
+    }
+
+    const minX = hasMinX ? Math.floor(guard.minX as number) : Number.NEGATIVE_INFINITY;
+    const maxX = hasMaxX ? Math.floor(guard.maxX as number) : Number.POSITIVE_INFINITY;
+    const minY = hasMinY ? Math.floor(guard.minY as number) : Number.NEGATIVE_INFINITY;
+    const maxY = hasMaxY ? Math.floor(guard.maxY as number) : Number.POSITIVE_INFINITY;
+    return targetX >= minX && targetX <= maxX && targetY >= minY && targetY <= maxY;
+  }
+
+  private startNpcMovementGuardDialogue(npc: NpcDefinition, guard: NpcMovementGuardDefinition): void {
+    const npcState = this.getNpcRuntimeState(npc);
+    npcState.facing = oppositeDirection(this.facing);
+
+    const lines = Array.isArray(guard.dialogueLines)
+      ? guard.dialogueLines.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      : [];
+    const setFlag = typeof guard.setFlag === 'string' && guard.setFlag.trim() ? guard.setFlag.trim() : undefined;
+    if (lines.length > 0) {
+      const speaker =
+        typeof guard.dialogueSpeaker === 'string' && guard.dialogueSpeaker.trim()
+          ? guard.dialogueSpeaker.trim()
+          : npc.dialogueSpeaker ?? npc.name;
+      this.startDialogue(speaker, lines, setFlag);
+      return;
+    }
+    const fallbackLines = npc.dialogueLines && npc.dialogueLines.length > 0 ? npc.dialogueLines : ['...'];
+    this.startDialogue(npc.dialogueSpeaker ?? npc.name, fallbackLines, setFlag);
+  }
+
+  private canNpcStepTo(npc: NpcDefinition, from: Vector2, target: Vector2, direction: Direction): boolean {
     if (!this.isTilePassable(target.x, target.y, from, direction)) {
       return false;
     }
@@ -1406,11 +2311,13 @@ export class GameRuntime {
     }
 
     const map = this.getCurrentMap();
-    for (const npc of map.npcs) {
-      if (npc.id === npcId) {
+    const mapNpcs = this.getNpcsForMap(map.id);
+    const npcKey = this.getNpcStateKey(npc);
+    for (const entry of mapNpcs) {
+      if (this.getNpcStateKey(entry) === npcKey) {
         continue;
       }
-      const state = this.getNpcRuntimeState(npc);
+      const state = this.getNpcRuntimeState(entry);
       const occupiedPosition = state.moveStep?.to ?? state.position;
       if (occupiedPosition.x === target.x && occupiedPosition.y === target.y) {
         return false;
@@ -1464,7 +2371,7 @@ export class GameRuntime {
 
   private isNpcOccupyingTile(x: number, y: number): boolean {
     const map = this.getCurrentMap();
-    return map.npcs.some((npc) => {
+    return this.getNpcsForMap(map.id).some((npc) => {
       const state = this.getNpcRuntimeState(npc);
       const occupiedPosition = state.moveStep?.to ?? state.position;
       return occupiedPosition.x === x && occupiedPosition.y === y;
@@ -1485,8 +2392,9 @@ export class GameRuntime {
 
     const target = this.getFacingTile();
     const map = this.getCurrentMap();
+    const mapNpcs = this.getNpcsForMap(map.id);
 
-    const npc = map.npcs.find((entry) => {
+    const npc = mapNpcs.find((entry) => {
       const state = this.getNpcRuntimeState(entry);
       return state.position.x === target.x && state.position.y === target.y;
     });
@@ -1509,28 +2417,165 @@ export class GameRuntime {
   private startNpcDialogue(npc: NpcDefinition): void {
     const npcState = this.getNpcRuntimeState(npc);
     npcState.facing = oppositeDirection(this.facing);
-    npcState.turnTimerMs = randomTurnDelay();
+    npcState.turnTimerMs =
+      this.getNpcMovementType(npc) === 'static-turning'
+        ? clampNpcStepInterval(npc.movement?.stepIntervalMs)
+        : randomTurnDelay();
+
+    const firstInteractionFlag = npc.firstInteractionSetFlag?.trim();
+    if (firstInteractionFlag && !this.flags[firstInteractionFlag]) {
+      this.flags[firstInteractionFlag] = true;
+      this.markProgressDirty();
+    }
+
+    const firstInteractBattleFlagKey = this.getFirstInteractBattleFlagKey(npc);
+    if (
+      npc.firstInteractBattle &&
+      firstInteractBattleFlagKey &&
+      !this.flags[firstInteractBattleFlagKey] &&
+      this.startNpcBattle(npc)
+    ) {
+      this.flags[firstInteractBattleFlagKey] = true;
+      this.markProgressDirty();
+      return;
+    }
+
+    const postDuel = this.getPostDuelGuardDialogue(npc);
+    if (postDuel) {
+      this.startDialogue(postDuel.speaker, postDuel.lines, postDuel.setFlag);
+      return;
+    }
+
+    if (npc.id === UNCLE_HANK_NPC_ID && !this.flags[FLAG_SELECTED_STARTER] && !this.flags[FLAG_DEMO_DONE]) {
+      this.pendingStoryAction = 'open-starter-selection';
+      const starterLines = npc.dialogueLines && npc.dialogueLines.length > 0
+        ? npc.dialogueLines
+        : [
+            'Hey <player-name>! How are you doing?',
+            "Here for Critter pickup? I've got three right here that need a new home.",
+          ];
+      this.startDialogue(npc.dialogueSpeaker ?? npc.name, starterLines, npc.dialogueSetFlag);
+      return;
+    }
+
+    if (Array.isArray(npc.interactionScript) && npc.interactionScript.length > 0) {
+      this.startScriptedScene(npc, npc.interactionScript);
+      return;
+    }
 
     if (npc.dialogueLines && npc.dialogueLines.length > 0) {
-      this.startDialogue(npc.dialogueSpeaker ?? npc.name, npc.dialogueLines, npc.dialogueSetFlag);
+      this.startDialogue(npc.dialogueSpeaker ?? npc.name, npc.dialogueLines, npc.dialogueSetFlag, npc.healer);
       return;
     }
 
     const script = DIALOGUES[npc.dialogueId];
     if (!script) {
-      this.startDialogue(npc.name, ['...']);
+      this.startDialogue(npc.name, ['...'], undefined, npc.healer);
       return;
     }
 
-    this.startDialogue(script.speaker, script.lines, script.setFlag);
+    this.startDialogue(script.speaker, script.lines, script.setFlag, npc.healer);
   }
 
-  private startDialogue(speaker: string, lines: string[], setFlag?: string): void {
+  private getFirstInteractBattleFlagKey(npc: NpcDefinition): string | null {
+    if (!npc.firstInteractBattle) {
+      return null;
+    }
+    const resolvedNpc = npc as ResolvedNpcDefinition;
+    const instanceKey = typeof resolvedNpc.__instanceKey === 'string' ? resolvedNpc.__instanceKey.trim() : '';
+    if (instanceKey) {
+      return `npc-first-interact-battle:${instanceKey}`;
+    }
+    return `npc-first-interact-battle:${this.currentMapId}:${npc.id}:${npc.position.x},${npc.position.y}`;
+  }
+
+  private getPostDuelGuardDialogue(
+    npc: NpcDefinition,
+  ): { speaker: string; lines: string[]; setFlag?: string } | null {
+    const guards = Array.isArray(npc.movementGuards) ? npc.movementGuards : [];
+    for (const guard of guards) {
+      const defeatedFlag = typeof guard.defeatedFlag === 'string' ? guard.defeatedFlag.trim() : '';
+      if (!defeatedFlag || !this.flags[defeatedFlag]) {
+        continue;
+      }
+      const lines = Array.isArray(guard.postDuelDialogueLines)
+        ? guard.postDuelDialogueLines.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+        : [];
+      if (lines.length === 0) {
+        continue;
+      }
+      const speaker =
+        typeof guard.postDuelDialogueSpeaker === 'string' && guard.postDuelDialogueSpeaker.trim()
+          ? guard.postDuelDialogueSpeaker.trim()
+          : npc.dialogueSpeaker ?? npc.name;
+      const setFlag = typeof guard.setFlag === 'string' && guard.setFlag.trim() ? guard.setFlag.trim() : undefined;
+      return { speaker, lines, setFlag };
+    }
+    return null;
+  }
+
+  private startMovementGuardBattle(npc: NpcDefinition, guard: NpcMovementGuardDefinition): void {
+    const playerTeam = this.buildPlayerBattleTeam();
+    if (playerTeam.length === 0) {
+      this.performBlackout();
+      return;
+    }
+    const opponentTeam = this.buildNpcBattleTeam(npc.battleTeamIds ?? []);
+    if (opponentTeam.length === 0) {
+      return;
+    }
+    const npcState = this.getNpcRuntimeState(npc);
+    npcState.facing = oppositeDirection(this.facing);
+    this.pendingGuardDefeat = { guard };
+    this.startBattle(
+      {
+        type: 'npc',
+        mapId: this.currentMapId,
+        label: npc.name,
+        npcId: npc.id,
+      },
+      playerTeam,
+      opponentTeam,
+      `${npc.name} is blocking the way!`,
+    );
+  }
+
+  private startNpcBattle(npc: NpcDefinition): boolean {
+    const playerTeam = this.buildPlayerBattleTeam();
+    if (playerTeam.length === 0) {
+      this.performBlackout();
+      return false;
+    }
+
+    const opponentTeam = this.buildNpcBattleTeam(npc.battleTeamIds ?? []);
+    if (opponentTeam.length === 0) {
+      this.showMessage(`${npc.name} is not ready to battle yet.`, 2200);
+      return false;
+    }
+
+    this.startBattle(
+      {
+        type: 'npc',
+        mapId: this.currentMapId,
+        label: npc.name,
+        npcId: npc.id,
+      },
+      playerTeam,
+      opponentTeam,
+      `${npc.name} challenged you to a duel!`,
+    );
+    return true;
+  }
+
+  private startDialogue(speaker: string, lines: string[], setFlag?: string, healSquad?: boolean): void {
+    const parsedLines = lines.map((line) => this.formatStoryText(line));
+    this.heldDirections = [];
     this.dialogue = {
-      speaker,
-      lines,
+      speaker: this.formatStoryText(speaker),
+      lines: parsedLines,
       index: 0,
       setFlag,
+      healSquad: Boolean(healSquad),
     };
   }
 
@@ -1548,8 +2593,32 @@ export class GameRuntime {
       this.flags[this.dialogue.setFlag] = true;
       this.markProgressDirty();
     }
+    if (this.dialogue.healSquad) {
+      this.healSquadToFull();
+      this.showMessage('Your squad was healed to full!', 2200);
+      this.markProgressDirty();
+    }
 
     this.dialogue = null;
+    if (this.pendingGuardBattle) {
+      const { npc, guard } = this.pendingGuardBattle;
+      this.pendingGuardBattle = null;
+      this.startMovementGuardBattle(npc, guard);
+      return;
+    }
+    if (this.pendingStoryAction === 'open-starter-selection') {
+      this.pendingStoryAction = null;
+      this.openStarterSelection();
+      return;
+    }
+    if (this.pendingStoryAction === 'start-jacob-battle') {
+      this.pendingStoryAction = null;
+      this.startJacobBattle();
+      return;
+    }
+    if (this.pendingStoryAction === 'start-jacob-exit') {
+      this.startJacobExitCutscene();
+    }
   }
 
   private checkAutomaticWarp(): void {
@@ -1615,7 +2684,7 @@ export class GameRuntime {
   ): void {
     const playerTeam = this.buildPlayerBattleTeam();
     if (playerTeam.length === 0) {
-      this.showMessage('No squad critter is ready to battle.', 2200);
+      this.performBlackout();
       return;
     }
 
@@ -1750,6 +2819,12 @@ export class GameRuntime {
         speed: Math.max(1, effectiveStats.speed),
         fainted: false,
         knockoutProgressCounted: false,
+        attackModifier: 1,
+        defenseModifier: 1,
+        speedModifier: 1,
+        activeEffectIds: [],
+        consecutiveSuccessfulGuardCount: 0,
+        equippedSkillIds: progress.equippedSkillIds,
       });
     }
 
@@ -1795,6 +2870,17 @@ export class GameRuntime {
     const derived = computeCritterDerivedProgress(critter, level);
     const maxHp = Math.max(1, derived.effectiveStats.hp);
 
+    // Randomly select up to 4 moves from unlocked movepool
+    const unlockedSkillIds = derived.unlockedSkillIds ?? [];
+    const shuffledSkills = [...unlockedSkillIds].sort(() => Math.random() - 0.5);
+    const selectedSkills = shuffledSkills.slice(0, 4);
+    const equippedSkillIds: BattleEquippedSkillSlots = [
+      selectedSkills[0] ?? null,
+      selectedSkills[1] ?? null,
+      selectedSkills[2] ?? null,
+      selectedSkills[3] ?? null,
+    ];
+
     return {
       slotIndex: null,
       critterId: critter.id,
@@ -1809,10 +2895,20 @@ export class GameRuntime {
       speed: Math.max(1, derived.effectiveStats.speed),
       fainted: false,
       knockoutProgressCounted: false,
+      attackModifier: 1,
+      defenseModifier: 1,
+      speedModifier: 1,
+      activeEffectIds: [],
+      consecutiveSuccessfulGuardCount: 0,
+      equippedSkillIds,
     };
   }
 
-  private resolvePlayerTurnAction(battle: BattleRuntimeState, action: 'attack' | 'guard'): void {
+  private resolvePlayerTurnAction(
+    battle: BattleRuntimeState,
+    action: 'attack' | 'guard',
+    playerSkillSlotIndex?: number,
+  ): void {
     if (battle.phase !== 'player-turn' || battle.result !== 'ongoing') {
       return;
     }
@@ -1829,50 +2925,80 @@ export class GameRuntime {
     const narration: BattleNarrationEvent[] = [];
 
     if (action === 'guard') {
-      const guardMessage = `Your ${player.name} took a defensive stance.`;
+      const guardSuccessChance = Math.pow(0.5, player.consecutiveSuccessfulGuardCount);
+      const guardSucceeded = Math.random() < guardSuccessChance;
+      if (guardSucceeded) {
+        player.consecutiveSuccessfulGuardCount += 1;
+      } else {
+        player.consecutiveSuccessfulGuardCount = 0;
+      }
       narration.push({
-        message: guardMessage,
+        message: `Your ${player.name} used Guard!`,
         attacker: null,
       });
-      const opponentAttack = this.executeBattleAttack(battle, 'opponent', true);
-      if (opponentAttack.narration) {
-        narration.push(opponentAttack.narration);
+      if (!guardSucceeded) {
+        narration.push({ message: "Guard failed!", attacker: null });
+      }
+      const opponentResult = this.executeBattleSkill(battle, 'opponent', true, guardSucceeded);
+      if (opponentResult.narration) {
+        narration.push(opponentResult.narration);
       }
       this.startBattleNarration(battle, narration);
       return;
     }
 
-    const playerActsFirst = player.speed >= opponent.speed;
+    const playerSkill =
+      typeof playerSkillSlotIndex === 'number' && player.equippedSkillIds
+        ? (this.skillLookupById[player.equippedSkillIds[playerSkillSlotIndex] ?? ''] ?? DEFAULT_TACKLE_SKILL)
+        : DEFAULT_TACKLE_SKILL;
+
+    const playerActsFirst =
+      player.speed * Math.max(1, player.speedModifier) >= opponent.speed * Math.max(1, opponent.speedModifier);
+
     if (playerActsFirst) {
-      const playerAttack = this.executeBattleAttack(battle, 'player', false);
-      if (playerAttack.narration) {
-        narration.push(playerAttack.narration);
+      const playerResult = this.executeBattleSkillWithSkill(
+        battle,
+        'player',
+        playerSkill,
+        playerSkillSlotIndex ?? 0,
+        false,
+        false,
+      );
+      if (playerResult.narration) {
+        narration.push(playerResult.narration);
       }
-      if (playerAttack.defenderFainted || battle.result !== 'ongoing' || battle.phase !== 'player-turn') {
+      if (playerResult.defenderFainted || battle.result !== 'ongoing' || battle.phase !== 'player-turn') {
         this.startBattleNarration(battle, narration);
         return;
       }
 
-      const opponentAttack = this.executeBattleAttack(battle, 'opponent', false);
-      if (opponentAttack.narration) {
-        narration.push(opponentAttack.narration);
+      const opponentResult = this.executeBattleSkill(battle, 'opponent', false, false);
+      if (opponentResult.narration) {
+        narration.push(opponentResult.narration);
       }
       this.startBattleNarration(battle, narration);
       return;
     }
 
-    const opponentAttack = this.executeBattleAttack(battle, 'opponent', false);
-    if (opponentAttack.narration) {
-      narration.push(opponentAttack.narration);
+    const opponentResult = this.executeBattleSkill(battle, 'opponent', false, false);
+    if (opponentResult.narration) {
+      narration.push(opponentResult.narration);
     }
-    if (opponentAttack.defenderFainted || battle.result !== 'ongoing' || battle.phase !== 'player-turn') {
+    if (opponentResult.defenderFainted || battle.result !== 'ongoing' || battle.phase !== 'player-turn') {
       this.startBattleNarration(battle, narration);
       return;
     }
 
-    const playerAttack = this.executeBattleAttack(battle, 'player', false);
-    if (playerAttack.narration) {
-      narration.push(playerAttack.narration);
+    const playerResult = this.executeBattleSkillWithSkill(
+      battle,
+      'player',
+      playerSkill,
+      playerSkillSlotIndex ?? 0,
+      false,
+      false,
+    );
+    if (playerResult.narration) {
+      narration.push(playerResult.narration);
     }
     this.startBattleNarration(battle, narration);
   }
@@ -1892,37 +3018,79 @@ export class GameRuntime {
         attacker: null,
       },
     ];
-    const opponentAttack = this.executeBattleAttack(battle, 'opponent', false);
+    const opponentAttack = this.executeBattleSkill(battle, 'opponent', false, false);
     if (opponentAttack.narration) {
       narration.push(opponentAttack.narration);
     }
     this.startBattleNarration(battle, narration);
   }
 
-  private executeBattleAttack(
+  private executeBattleSkill(
     battle: BattleRuntimeState,
     attackingTeam: 'player' | 'opponent',
     defenderGuarded: boolean,
-  ): { narration: BattleNarrationEvent | null; defenderFainted: boolean } {
+    guardSucceeded: boolean,
+  ): { narration: BattleNarrationEvent | null; defenderFainted: boolean; damageToDefender?: number } {
+    const attacker = this.getActiveBattleCritter(battle, attackingTeam);
+    let skill = DEFAULT_TACKLE_SKILL;
+    let skillSlotIndex = 0;
+
+    // For opponents, try to use a random move from their equipped skills
+    if (attackingTeam === 'opponent' && attacker?.equippedSkillIds) {
+      const availableSkills = attacker.equippedSkillIds.filter((id): id is string => id !== null);
+      if (availableSkills.length > 0) {
+        const randomIndex = Math.floor(Math.random() * availableSkills.length);
+        const selectedSkillId = availableSkills[randomIndex];
+        if (selectedSkillId) {
+          const foundSkill = this.skillLookupById[selectedSkillId];
+          if (foundSkill) {
+            skill = foundSkill;
+            skillSlotIndex = attacker.equippedSkillIds.indexOf(selectedSkillId);
+          }
+        }
+      }
+    }
+
+    return this.executeBattleSkillWithSkill(
+      battle,
+      attackingTeam,
+      skill,
+      skillSlotIndex,
+      defenderGuarded,
+      guardSucceeded,
+    );
+  }
+
+  private executeBattleSkillWithSkill(
+    battle: BattleRuntimeState,
+    attackingTeam: 'player' | 'opponent',
+    skill: SkillDefinition,
+    _skillSlotIndex: number,
+    defenderGuarded: boolean,
+    guardSucceeded: boolean,
+  ): { narration: BattleNarrationEvent | null; defenderFainted: boolean; damageToDefender?: number } {
     const attacker = this.getActiveBattleCritter(battle, attackingTeam);
     const defender = this.getActiveBattleCritter(battle, attackingTeam === 'player' ? 'opponent' : 'player');
     if (!attacker || !defender || attacker.fainted) {
       return { narration: null, defenderFainted: false };
     }
 
-    const basePower = Math.max(1, attacker.attack + Math.floor(attacker.level * 0.75));
-    const defenseMitigation = Math.max(0, Math.floor(defender.defense * 0.62));
-    const scaledPower = Math.max(1, basePower - defenseMitigation);
-    const variance = randomNumber(0.85, 1.15);
-    const guardedMultiplier = defenderGuarded ? 0.55 : 1;
-    const damage = Math.max(1, Math.floor(scaledPower * variance * guardedMultiplier));
+    const applyDamageDefender: 'player' | 'opponent' = attackingTeam === 'player' ? 'opponent' : 'player';
+    const defenderTeam = attackingTeam === 'player' ? battle.opponentTeam : battle.playerTeam;
+    const defenderActiveIndex = attackingTeam === 'player' ? battle.opponentActiveIndex : battle.playerActiveIndex;
 
-    defender.currentHp = Math.max(0, defender.currentHp - damage);
-    defender.fainted = defender.currentHp <= 0;
-
-    const guardSuffix = defenderGuarded ? ' Guard reduced the damage.' : '';
-    let message = `${this.formatBattleAttackPrefix(battle, attackingTeam, attacker.name, defender.name)} dealt ${damage} damage.${guardSuffix}`;
-    if (!defender.fainted) {
+    if (skill.type === 'support') {
+      const healPercent = (skill.healPercent ?? 0) + (skill.element === attacker.element && (skill.healPercent ?? 0) > 0 ? 0.03 : 0);
+      const healAmount = Math.floor(attacker.maxHp * healPercent);
+      const actualHeal = Math.min(healAmount, Math.max(0, attacker.maxHp - attacker.currentHp));
+      if (actualHeal > 0) {
+        attacker.currentHp = Math.min(attacker.maxHp, attacker.currentHp + actualHeal);
+      }
+      this.applySkillEffectsToAttacker(attacker, skill);
+      const message =
+        actualHeal > 0
+          ? `Your ${attacker.name} used ${skill.skill_name} and healed ${actualHeal} HP!`
+          : `Your ${attacker.name} used ${skill.skill_name}.`;
       return {
         narration: {
           message,
@@ -1932,21 +3100,131 @@ export class GameRuntime {
       };
     }
 
-    if (attackingTeam === 'player') {
-      message = `${message} ${this.handleOpponentKnockout(battle)}`.trim();
-    } else {
-      message = `${message} ${this.handlePlayerKnockout(battle)}`.trim();
+    const power = skill.damage ?? 20;
+    const A = Math.max(1, attacker.attack * Math.max(1, attacker.attackModifier));
+    const D = Math.max(1, defender.defense * Math.max(1, defender.defenseModifier));
+    const levelTerm = (2 * attacker.level) / 5 + 2;
+    const base = ((levelTerm * power * A) / D) / 50 + 2;
+    const typeMult = getElementChartMultiplier(
+      this.elementChart,
+      skill.element,
+      defender.element as CritterElement,
+    );
+    const stab = skill.element === attacker.element ? 1.2 : 1;
+    const isCrit = Math.random() < 0.0155;
+    const critMult = isCrit ? 2 : 1;
+    const defenseForCrit = Math.max(1, defender.defense);
+    const baseForCrit = isCrit
+      ? ((levelTerm * power * A) / defenseForCrit) / 50 + 2
+      : base;
+    const guardMult =
+      defenderGuarded && guardSucceeded ? 0.02 : defenderGuarded && !guardSucceeded ? 1 : 1;
+    const variance = randomNumber(0.85, 1.15);
+    const damage = Math.max(
+      1,
+      Math.floor(baseForCrit * typeMult * stab * critMult * guardMult * variance),
+    );
+
+    this.applySkillEffectsToAttacker(attacker, skill);
+
+    const guardSuffix =
+      defenderGuarded && guardSucceeded
+        ? ' Guard reduced the damage.'
+        : defenderGuarded && !guardSucceeded
+          ? ''
+          : '';
+    const critSuffix = isCrit ? ' Critical hit!' : '';
+    const typeEffectSuffix =
+      typeMult >= 2
+        ? " It's super effective!"
+        : typeMult >= 1.1
+          ? " It's effective!"
+          : typeMult < 1 && typeMult > 0
+            ? " It's not very effective..."
+            : typeMult === 0
+              ? " It had no effect."
+              : '';
+    const attackPrefix = this.formatBattleAttackWithSkillPrefix(
+      battle,
+      attackingTeam,
+      attacker.name,
+      defender.name,
+      skill.skill_name,
+    );
+    let message = `${attackPrefix} dealt ${damage} damage.${critSuffix}${typeEffectSuffix}${guardSuffix}`.trim();
+    if (defender.fainted) {
+      const knockoutSuffix = this.buildKnockoutMessage(battle, applyDamageDefender, defenderActiveIndex ?? -1);
+      message = `${message} ${knockoutSuffix}`.trim();
     }
+
+    const wouldFaint = defender.currentHp <= damage;
     return {
       narration: {
         message,
         attacker: attackingTeam,
+        applyDamageDefender,
+        applyDamageAmount: damage,
       },
-      defenderFainted: true,
+      defenderFainted: wouldFaint,
+      damageToDefender: damage,
     };
   }
 
-  private handleOpponentKnockout(battle: BattleRuntimeState): string {
+  private applySkillEffectsToAttacker(attacker: BattleCritterState, skill: SkillDefinition): void {
+    const effectIds = skill.effectIds ?? [];
+    for (const effectId of effectIds) {
+      const effect = this.skillEffectLookupById[effectId];
+      if (!effect) continue;
+      if (effect.effect_type === 'atk_buff') {
+        attacker.attackModifier += effect.buffPercent;
+      } else if (effect.effect_type === 'def_buff') {
+        attacker.defenseModifier += effect.buffPercent;
+      } else if (effect.effect_type === 'speed_buff') {
+        attacker.speedModifier += effect.buffPercent;
+      }
+      if (!attacker.activeEffectIds.includes(effectId)) {
+        attacker.activeEffectIds.push(effectId);
+      }
+    }
+  }
+
+  /** Build knockout follow-up message without mutating battle state (for deferred damage narration). */
+  private buildKnockoutMessage(
+    battle: BattleRuntimeState,
+    defenderTeam: 'player' | 'opponent',
+    defeatedIndex: number,
+  ): string {
+    const team = defenderTeam === 'player' ? battle.playerTeam : battle.opponentTeam;
+    const defeated = defeatedIndex >= 0 && defeatedIndex < team.length ? team[defeatedIndex] : null;
+    const nextIndex = this.findNextAliveTeamIndexExcluding(team, defeatedIndex);
+    if (defenderTeam === 'opponent') {
+      if (nextIndex < 0) {
+        return battle.source.type === 'wild'
+          ? `The wild ${defeated?.name ?? 'critter'} fainted. You won the battle.`
+          : `${battle.source.label}'s ${defeated?.name ?? 'critter'} fainted. You won the battle.`;
+      }
+      return `${battle.source.label} sent out ${team[nextIndex].name}.`;
+    }
+    if (nextIndex < 0) {
+      return `Your ${defeated?.name ?? 'critter'} fainted. You blacked out.`;
+    }
+    return `Your ${defeated?.name ?? 'critter'} fainted. Choose another squad critter.`;
+  }
+
+  private findNextAliveTeamIndexExcluding(team: BattleCritterState[], excludeIndex: number): number {
+    for (let index = 0; index < team.length; index += 1) {
+      if (index === excludeIndex) {
+        continue;
+      }
+      const entry = team[index];
+      if (!entry.fainted && entry.currentHp > 0) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  private handleOpponentKnockout(battle: BattleRuntimeState, playerAttackerCritterId: number | null): string {
     const defeatedIndex = battle.opponentActiveIndex;
     if (defeatedIndex === null) {
       return 'The opposing critter fainted.';
@@ -1958,7 +3236,7 @@ export class GameRuntime {
     }
 
     if (!defeated.knockoutProgressCounted) {
-      this.recordOpposingKnockoutProgress(defeated.critterId);
+      this.recordOpposingKnockoutProgress(defeated.critterId, playerAttackerCritterId);
       defeated.knockoutProgressCounted = true;
     }
 
@@ -2012,6 +3290,26 @@ export class GameRuntime {
     return `${battle.source.label}'s ${attackerName} attacked your ${defenderName} and`;
   }
 
+  private formatBattleAttackWithSkillPrefix(
+    battle: BattleRuntimeState,
+    attackingTeam: 'player' | 'opponent',
+    attackerName: string,
+    defenderName: string,
+    skillName: string,
+  ): string {
+    if (attackingTeam === 'player') {
+      if (battle.source.type === 'wild') {
+        return `Your ${attackerName} used ${skillName} on the wild ${defenderName} and`;
+      }
+      return `Your ${attackerName} used ${skillName} on ${battle.source.label}'s ${defenderName} and`;
+    }
+
+    if (battle.source.type === 'wild') {
+      return `The wild ${attackerName} used ${skillName} on your ${defenderName} and`;
+    }
+    return `${battle.source.label}'s ${attackerName} used ${skillName} on your ${defenderName} and`;
+  }
+
   private startBattleNarration(battle: BattleRuntimeState, events: BattleNarrationEvent[]): void {
     if (events.length === 0) {
       battle.logLine = 'Choose your move.';
@@ -2036,6 +3334,30 @@ export class GameRuntime {
 
     battle.activeNarration = next;
     battle.logLine = next.message;
+
+    if (
+      next.applyDamageDefender !== undefined &&
+      next.applyDamageAmount !== undefined &&
+      next.applyDamageAmount > 0
+    ) {
+      const team = next.applyDamageDefender === 'player' ? battle.playerTeam : battle.opponentTeam;
+      const activeIndex = next.applyDamageDefender === 'player' ? battle.playerActiveIndex : battle.opponentActiveIndex;
+      const defender = activeIndex !== null ? team[activeIndex] : null;
+      if (defender) {
+        defender.currentHp = Math.max(0, defender.currentHp - next.applyDamageAmount);
+        defender.fainted = defender.currentHp <= 0;
+        if (defender.fainted) {
+          if (next.applyDamageDefender === 'opponent') {
+            const playerAttackerCritterId =
+              battle.playerActiveIndex !== null ? battle.playerTeam[battle.playerActiveIndex]?.critterId ?? null : null;
+            this.handleOpponentKnockout(battle, playerAttackerCritterId);
+          } else {
+            this.handlePlayerKnockout(battle);
+          }
+        }
+      }
+    }
+
     if (next.attacker) {
       battle.activeAnimation = {
         attacker: next.attacker,
@@ -2067,6 +3389,21 @@ export class GameRuntime {
     battle.phase = 'result';
     battle.pendingForcedSwap = false;
     battle.logLine = message;
+    const wasGuardBattle = this.pendingGuardDefeat !== null;
+    if (this.pendingGuardDefeat) {
+      if (result === 'won') {
+        const guard = this.pendingGuardDefeat.guard;
+        const defeatedFlag = typeof guard.defeatedFlag === 'string' ? guard.defeatedFlag.trim() : '';
+        if (defeatedFlag) {
+          this.flags[defeatedFlag] = true;
+          this.markProgressDirty();
+        }
+      }
+      this.pendingGuardDefeat = null;
+    }
+    if (battle.source.type === 'npc' && battle.source.npcId === JACOB_NPC_ID && !wasGuardBattle) {
+      this.handleJacobBattleComplete();
+    }
     if (this.syncPlayerBattleHealthToProgress(battle)) {
       this.markProgressDirty();
     }
@@ -2106,6 +3443,76 @@ export class GameRuntime {
     return team === 'player' ? battle.playerTeam[index] ?? null : battle.opponentTeam[index] ?? null;
   }
 
+  private getPlayerActiveSkillSlots(battle: BattleRuntimeState): RuntimeBattleSnapshot['playerActiveSkillSlots'] {
+    const player = this.getActiveBattleCritter(battle, 'player');
+    const slots: RuntimeBattleSnapshot['playerActiveSkillSlots'] = [null, null, null, null];
+    if (!player?.equippedSkillIds) {
+      return slots;
+    }
+    for (let i = 0; i < 4; i += 1) {
+      const skillId = player.equippedSkillIds[i];
+      if (!skillId) continue;
+      const skill = this.skillLookupById[skillId];
+      if (!skill) continue;
+      const effectDescriptions = (skill.effectIds ?? [])
+        .map((id) => {
+          const effect = this.skillEffectLookupById[id];
+          if (!effect?.description) return null;
+          const buffLabel = Math.round((effect.buffPercent ?? 0) * 100);
+          return effect.description.replace(/<buff>/g, String(buffLabel));
+        })
+        .filter(Boolean)
+        .join(' ');
+      const effectIconUrls = (skill.effectIds ?? [])
+        .map((id) => this.skillEffectLookupById[id]?.iconUrl)
+        .filter((url): url is string => typeof url === 'string' && url.length > 0);
+      slots[i] = {
+        skillId: skill.skill_id,
+        name: skill.skill_name,
+        element: skill.element,
+        type: skill.type,
+        ...(skill.type === 'damage' && skill.damage != null && { damage: skill.damage }),
+        ...(skill.type === 'support' && skill.healPercent != null && { healPercent: skill.healPercent }),
+        ...(effectDescriptions && { effectDescriptions }),
+        ...(effectIconUrls.length > 0 && { effectIconUrls }),
+      };
+    }
+    return slots;
+  }
+
+  private mapBattleTeamEntryToSnapshot(entry: BattleCritterState): RuntimeBattleSnapshot['playerTeam'][number] {
+    const activeEffectIds = entry.activeEffectIds ?? [];
+    const activeEffectIconUrls: string[] = [];
+    const activeEffectDescriptions: string[] = [];
+    for (const id of activeEffectIds) {
+      const effect = this.skillEffectLookupById[id];
+      const url = effect?.iconUrl;
+      if (typeof url === 'string' && url.length > 0) {
+        activeEffectIconUrls.push(url);
+        const desc = effect?.description;
+        const buffLabel = Math.round((effect?.buffPercent ?? 0) * 100);
+        activeEffectDescriptions.push(desc ? desc.replace(/<buff>/g, String(buffLabel)) : '');
+      }
+    }
+    return {
+      slotIndex: entry.slotIndex,
+      critterId: entry.critterId,
+      name: entry.name,
+      element: entry.element,
+      spriteUrl: entry.spriteUrl,
+      level: entry.level,
+      maxHp: entry.maxHp,
+      currentHp: entry.currentHp,
+      attack: entry.attack,
+      defense: entry.defense,
+      speed: entry.speed,
+      fainted: entry.fainted,
+      activeEffectIds,
+      activeEffectIconUrls,
+      activeEffectDescriptions,
+    };
+  }
+
   private getBattleSnapshot(): RuntimeBattleSnapshot | null {
     const battle = this.activeBattle;
     if (!battle) {
@@ -2133,40 +3540,15 @@ export class GameRuntime {
       logLine: battle.logLine,
       playerActiveIndex: battle.playerActiveIndex,
       opponentActiveIndex: battle.opponentActiveIndex,
-      playerTeam: battle.playerTeam.map((entry) => ({
-        slotIndex: entry.slotIndex,
-        critterId: entry.critterId,
-        name: entry.name,
-        element: entry.element,
-        spriteUrl: entry.spriteUrl,
-        level: entry.level,
-        maxHp: entry.maxHp,
-        currentHp: entry.currentHp,
-        attack: entry.attack,
-        defense: entry.defense,
-        speed: entry.speed,
-        fainted: entry.fainted,
-      })),
-      opponentTeam: battle.opponentTeam.map((entry) => ({
-        slotIndex: entry.slotIndex,
-        critterId: entry.critterId,
-        name: entry.name,
-        element: entry.element,
-        spriteUrl: entry.spriteUrl,
-        level: entry.level,
-        maxHp: entry.maxHp,
-        currentHp: entry.currentHp,
-        attack: entry.attack,
-        defense: entry.defense,
-        speed: entry.speed,
-        fainted: entry.fainted,
-      })),
+      playerTeam: battle.playerTeam.map((entry) => this.mapBattleTeamEntryToSnapshot(entry)),
+      opponentTeam: battle.opponentTeam.map((entry) => this.mapBattleTeamEntryToSnapshot(entry)),
       canAttack: canUseActions,
       canGuard: canUseActions,
       canSwap: canUseActions && this.hasAvailableSwapTarget(battle),
       canRetreat: canUseActions && battle.source.type === 'wild',
       canCancelSwap: battle.phase === 'choose-swap' && !battle.pendingForcedSwap && !narrationActive,
       canAdvanceNarration: narrationActive,
+      playerActiveSkillSlots: this.getPlayerActiveSkillSlots(battle),
       activeAnimation: battle.activeAnimation
         ? {
             attacker: battle.activeAnimation.attacker,
@@ -2318,6 +3700,546 @@ export class GameRuntime {
     this.warpHintLabel = best?.label ?? null;
   }
 
+  private isPlayerControlLocked(): boolean {
+    return Boolean(this.dialogue || this.activeCutscene || this.starterSelection || this.activeScriptedScene);
+  }
+
+  private getStarterSelectionSnapshot(): RuntimeSnapshot['story']['starterSelection'] {
+    if (!this.starterSelection) {
+      return null;
+    }
+    const options = this.starterSelection.optionCritterIds
+      .map((critterId) => this.critterLookup[critterId])
+      .filter((entry): entry is CritterDefinition => Boolean(entry))
+      .map((entry) => ({
+        critterId: entry.id,
+        name: entry.name,
+        element: entry.element,
+        rarity: entry.rarity,
+        spriteUrl: entry.spriteUrl,
+        description: entry.description,
+      }));
+    return {
+      confirmCritterId: this.starterSelection.confirmCritterId,
+      options,
+    };
+  }
+
+  private updateStoryState(_deltaMs: number): void {
+    this.updateActiveScriptedScene(_deltaMs);
+    if (!this.activeBattle) {
+      this.tryStartJacobCutscene();
+      this.updateJacobCutsceneMovement();
+    }
+  }
+
+  private startScriptedScene(npc: NpcDefinition, steps: NpcInteractionActionDefinition[]): void {
+    if (steps.length === 0 || this.activeScriptedScene) {
+      return;
+    }
+    this.activeScriptedScene = {
+      npcStateKey: this.getNpcStateKey(npc),
+      npcId: npc.id,
+      steps: steps.map((step) => ({ ...step })),
+      stepIndex: 0,
+      stepStarted: false,
+      waitRemainingMs: 0,
+      path: null,
+    };
+    this.heldDirections = [];
+    this.moveStep = null;
+  }
+
+  private updateActiveScriptedScene(deltaMs: number): void {
+    const scene = this.activeScriptedScene;
+    if (!scene) {
+      return;
+    }
+    const npc = this.getNpcsForMap(this.currentMapId).find((entry) => this.getNpcStateKey(entry) === scene.npcStateKey);
+    if (!npc) {
+      this.activeScriptedScene = null;
+      return;
+    }
+    const npcState = this.getNpcRuntimeState(npc);
+    if (scene.path && scene.path.length > 0) {
+      this.advanceCutsceneNpcPath(npc, npcState, scene.path);
+      if (scene.path.length === 0 && !npcState.moveStep) {
+        scene.path = null;
+        scene.stepIndex += 1;
+        scene.stepStarted = false;
+      }
+      return;
+    }
+    const step = scene.steps[scene.stepIndex];
+    if (!step) {
+      this.activeScriptedScene = null;
+      return;
+    }
+
+    if (step.type === 'dialogue') {
+      if (!scene.stepStarted) {
+        const lines = Array.isArray(step.lines) ? step.lines.filter((line) => typeof line === 'string' && line.trim().length > 0) : [];
+        if (lines.length > 0) {
+          this.startDialogue(step.speaker ?? npc.name, lines, step.setFlag);
+        }
+        scene.stepStarted = true;
+        return;
+      }
+      if (this.dialogue) {
+        return;
+      }
+      scene.stepIndex += 1;
+      scene.stepStarted = false;
+      return;
+    }
+
+    if (step.type === 'set_flag') {
+      const flag = step.flag.trim();
+      if (flag.length > 0) {
+        this.flags[flag] = true;
+        this.markProgressDirty();
+      }
+      scene.stepIndex += 1;
+      scene.stepStarted = false;
+      return;
+    }
+
+    if (step.type === 'face_player') {
+      npcState.facing = oppositeDirection(this.facing);
+      scene.stepIndex += 1;
+      scene.stepStarted = false;
+      return;
+    }
+
+    if (step.type === 'wait') {
+      if (!scene.stepStarted) {
+        scene.waitRemainingMs = clamp(Math.floor(step.durationMs), 0, 60000);
+        scene.stepStarted = true;
+      }
+      scene.waitRemainingMs = Math.max(0, scene.waitRemainingMs - deltaMs);
+      if (scene.waitRemainingMs <= 0) {
+        scene.stepIndex += 1;
+        scene.stepStarted = false;
+      }
+      return;
+    }
+
+    if (step.type === 'move_to_player') {
+      const target = this.pickAdjacentStoryTarget(this.playerPosition, npc, npcState.position);
+      scene.path = this.buildNpcPath(npc, npcState.position, target);
+      if (!scene.path || scene.path.length === 0) {
+        scene.path = null;
+        scene.stepIndex += 1;
+      }
+      scene.stepStarted = false;
+      return;
+    }
+
+    if (step.type === 'move_path') {
+      const directions = Array.isArray(step.directions) ? step.directions.filter((entry) => isDirection(entry)) : [];
+      const path = this.buildNpcPathFromDirections(npc, npcState.position, directions);
+      scene.path = path;
+      if (scene.path.length === 0) {
+        scene.path = null;
+        scene.stepIndex += 1;
+      }
+      scene.stepStarted = false;
+      return;
+    }
+
+    scene.stepIndex += 1;
+    scene.stepStarted = false;
+  }
+
+  private buildNpcPathFromDirections(npc: NpcDefinition, from: Vector2, directions: Direction[]): Vector2[] {
+    if (directions.length === 0) {
+      return [];
+    }
+    const path: Vector2[] = [];
+    let cursor = { ...from };
+    for (const direction of directions) {
+      const delta = DIRECTION_DELTAS[direction];
+      const next = {
+        x: cursor.x + delta.x,
+        y: cursor.y + delta.y,
+      };
+      if (!this.canNpcStepTo(npc, cursor, next, direction)) {
+        break;
+      }
+      path.push(next);
+      cursor = next;
+    }
+    return path;
+  }
+
+  private openStarterSelection(): void {
+    if (this.starterSelection) {
+      return;
+    }
+    const table = this.encounterTableLookup[STARTER_ENCOUNTER_TABLE_ID];
+    if (!table || table.entries.length === 0) {
+      this.startDialogue('Uncle Hank', ['Hmm... I need to restock my starter critters.']);
+      return;
+    }
+    const optionCritterIds = [...new Set(table.entries.map((entry) => entry.critterId))]
+      .filter((critterId) => Boolean(this.critterLookup[critterId]))
+      .slice(0, 3);
+    if (optionCritterIds.length === 0) {
+      this.startDialogue('Uncle Hank', ['Hmm... I need to restock my starter critters.']);
+      return;
+    }
+    this.starterSelection = {
+      confirmCritterId: null,
+      optionCritterIds,
+    };
+    this.heldDirections = [];
+    this.moveStep = null;
+  }
+
+  private tryStartJacobCutscene(): void {
+    if (this.flags[FLAG_DEMO_DONE] || !this.flags[FLAG_STARTER_SELECTION_DONE]) {
+      return;
+    }
+    if (this.currentMapId !== 'uncle-s-house') {
+      return;
+    }
+    if (this.activeCutscene || this.activeBattle || this.dialogue) {
+      return;
+    }
+
+    const jacobNpc = this.getNpcsForMap(this.currentMapId).find((entry) => entry.id === JACOB_NPC_ID);
+    if (!jacobNpc) {
+      return;
+    }
+    const jacobState = this.getNpcRuntimeState(jacobNpc);
+    jacobState.position = { ...jacobNpc.position };
+    jacobState.moveStep = null;
+    jacobState.facing = 'up';
+
+    const target = this.pickAdjacentStoryTarget(this.playerPosition, jacobNpc, jacobState.position);
+    const path = this.buildNpcPath(jacobNpc, jacobState.position, target);
+    this.activeCutscene = {
+      id: 'jacob-duel-intro',
+      phase: 'entering',
+      path,
+    };
+    this.heldDirections = [];
+    this.moveStep = null;
+  }
+
+  private updateJacobCutsceneMovement(): void {
+    if (!this.activeCutscene || this.activeCutscene.id !== 'jacob-duel-intro') {
+      return;
+    }
+    const jacobNpc = this.getNpcsForMap(this.currentMapId).find((entry) => entry.id === JACOB_NPC_ID);
+    if (!jacobNpc) {
+      return;
+    }
+
+    const jacobState = this.getNpcRuntimeState(jacobNpc);
+    if (this.activeCutscene.phase === 'entering') {
+      const complete = this.advanceCutsceneNpcPath(jacobNpc, jacobState, this.activeCutscene.path);
+      if (!complete) {
+        return;
+      }
+      this.activeCutscene.phase = 'awaiting-battle';
+      this.pendingStoryAction = 'start-jacob-battle';
+      this.startDialogue('Jacob', [
+        '<player-name>! You\'ve got a Critter?!',
+        "Can we duel? I'm itchin' to see which Critter you chose.",
+      ]);
+      return;
+    }
+
+    if (this.activeCutscene.phase === 'exiting') {
+      const complete = this.advanceCutsceneNpcPath(jacobNpc, jacobState, this.activeCutscene.path);
+      if (!complete) {
+        return;
+      }
+      this.flags[FLAG_JACOB_LEFT_HOUSE] = true;
+      this.flags[FLAG_DEMO_DONE] = true;
+      this.activeCutscene = null;
+      this.markProgressDirty();
+    }
+  }
+
+  private advanceCutsceneNpcPath(
+    npc: NpcDefinition,
+    state: NpcRuntimeState,
+    path: Vector2[],
+  ): boolean {
+    if (state.moveStep) {
+      return false;
+    }
+    if (path.length === 0) {
+      return true;
+    }
+    const nextWaypoint = path[0];
+    const nextStep = this.nextStepToward(state.position, nextWaypoint);
+    if (!nextStep) {
+      path.shift();
+      return path.length === 0;
+    }
+    const deltaX = nextStep.x - state.position.x;
+    const deltaY = nextStep.y - state.position.y;
+    const direction = toDirectionFromDelta(deltaX, deltaY);
+    if (!direction) {
+      path.shift();
+      return path.length === 0;
+    }
+    state.facing = direction;
+    if (!this.canNpcStepTo(npc, state.position, nextStep, direction)) {
+      path.shift();
+      return path.length === 0;
+    }
+    state.moveStep = {
+      from: { ...state.position },
+      to: { ...nextStep },
+      elapsed: 0,
+      duration: MOVE_DURATION_MS,
+    };
+    if (nextStep.x === nextWaypoint.x && nextStep.y === nextWaypoint.y) {
+      path.shift();
+    }
+    return path.length === 0;
+  }
+
+  private startJacobBattle(): void {
+    const playerTeam = this.buildPlayerBattleTeam();
+    if (playerTeam.length === 0) {
+      this.activeCutscene = null;
+      this.performBlackout();
+      return;
+    }
+
+    const jacobNpc = this.getNpcsForMap(this.currentMapId).find((entry) => entry.id === JACOB_NPC_ID);
+    const opponentTeam = this.buildNpcBattleTeam(jacobNpc?.battleTeamIds ?? []);
+    if (opponentTeam.length === 0) {
+      this.activeCutscene = null;
+      return;
+    }
+    this.startBattle(
+      {
+        type: 'npc',
+        mapId: this.currentMapId,
+        label: jacobNpc?.name ?? 'Jacob',
+        npcId: JACOB_NPC_ID,
+      },
+      playerTeam,
+      opponentTeam,
+      `${jacobNpc?.name ?? 'Jacob'} challenged you to a duel!`,
+    );
+  }
+
+  private handleJacobBattleComplete(): void {
+    if (this.flags[FLAG_DEMO_DONE]) {
+      return;
+    }
+    if (this.activeCutscene?.id === 'jacob-duel-intro') {
+      this.activeCutscene.phase = 'post-battle-dialogue';
+    }
+    this.pendingStoryAction = 'start-jacob-exit';
+    this.startDialogue('Jacob', ['That duel was fun! Thanks <player-name>!']);
+  }
+
+  private startJacobExitCutscene(): void {
+    const jacobNpc = this.getNpcsForMap(this.currentMapId).find((entry) => entry.id === JACOB_NPC_ID);
+    const uncleNpc = this.getNpcsForMap(this.currentMapId).find((entry) => entry.id === UNCLE_HANK_NPC_ID);
+    const uncleSpeaker = uncleNpc?.dialogueSpeaker ?? uncleNpc?.name ?? 'Uncle Hank';
+    const uncleLines =
+      uncleNpc?.dialogueLines && uncleNpc.dialogueLines.length > 0
+        ? uncleNpc.dialogueLines
+        : ['What a nice duel! Have fun now <player-name>.'];
+    const uncleSetFlag = uncleNpc?.dialogueSetFlag;
+    if (!jacobNpc) {
+      this.flags[FLAG_JACOB_LEFT_HOUSE] = true;
+      this.flags[FLAG_DEMO_DONE] = true;
+      this.activeCutscene = null;
+      this.pendingStoryAction = null;
+      this.markProgressDirty();
+      this.startDialogue(uncleSpeaker, uncleLines, uncleSetFlag);
+      return;
+    }
+    const jacobState = this.getNpcRuntimeState(jacobNpc);
+    const exitTarget = { x: 6, y: 12 };
+    const path = this.buildNpcPath(jacobNpc, jacobState.position, exitTarget);
+    this.activeCutscene = {
+      id: 'jacob-duel-intro',
+      phase: 'exiting',
+      path,
+    };
+    this.pendingStoryAction = null;
+    this.startDialogue(uncleSpeaker, uncleLines, uncleSetFlag);
+  }
+
+  private pickAdjacentStoryTarget(target: Vector2, npc: NpcDefinition, fallbackFrom: Vector2): Vector2 {
+    const candidates = [
+      { x: target.x, y: target.y + 1 },
+      { x: target.x + 1, y: target.y },
+      { x: target.x - 1, y: target.y },
+      { x: target.x, y: target.y - 1 },
+    ];
+    const map = this.getCurrentMap();
+    for (const candidate of candidates) {
+      if (!isInsideMap(map, candidate.x, candidate.y)) {
+        continue;
+      }
+      const code = tileAt(map, candidate.x, candidate.y);
+      if (!code || code === BLANK_TILE_CODE || !this.getTileDefinition(code).walkable) {
+        continue;
+      }
+      if (this.isNpcOccupyingTile(candidate.x, candidate.y)) {
+        continue;
+      }
+      const path = this.buildNpcPath(npc, fallbackFrom, candidate);
+      if (path.length > 0 || (candidate.x === fallbackFrom.x && candidate.y === fallbackFrom.y)) {
+        return candidate;
+      }
+    }
+    return { ...fallbackFrom };
+  }
+
+  private buildNpcPath(npc: NpcDefinition, from: Vector2, to: Vector2): Vector2[] {
+    if (from.x === to.x && from.y === to.y) {
+      return [];
+    }
+
+    const map = this.getCurrentMap();
+    const toKey = `${to.x},${to.y}`;
+    const startKey = `${from.x},${from.y}`;
+    const queue: Vector2[] = [{ ...from }];
+    const visited = new Set<string>([startKey]);
+    const cameFrom = new Map<string, string>();
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current) {
+        continue;
+      }
+
+      const currentKey = `${current.x},${current.y}`;
+      if (currentKey === toKey) {
+        break;
+      }
+
+      for (const direction of ['up', 'right', 'down', 'left'] as const) {
+        const delta = DIRECTION_DELTAS[direction];
+        const next = {
+          x: current.x + delta.x,
+          y: current.y + delta.y,
+        };
+        const nextKey = `${next.x},${next.y}`;
+        if (visited.has(nextKey)) {
+          continue;
+        }
+        if (!isInsideMap(map, next.x, next.y)) {
+          continue;
+        }
+        if (!this.canNpcStepTo(npc, current, next, direction)) {
+          continue;
+        }
+        visited.add(nextKey);
+        cameFrom.set(nextKey, currentKey);
+        queue.push(next);
+      }
+    }
+
+    if (!visited.has(toKey)) {
+      return [];
+    }
+
+    const path: Vector2[] = [];
+    let cursorKey = toKey;
+    while (cursorKey !== startKey) {
+      const [xText, yText] = cursorKey.split(',');
+      const x = Number.parseInt(xText, 10);
+      const y = Number.parseInt(yText, 10);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return [];
+      }
+      path.push({ x, y });
+      const previousKey = cameFrom.get(cursorKey);
+      if (!previousKey) {
+        return [];
+      }
+      cursorKey = previousKey;
+    }
+
+    path.reverse();
+    return path;
+  }
+
+  private nextStepToward(from: Vector2, to: Vector2): Vector2 | null {
+    if (from.x === to.x && from.y === to.y) {
+      return null;
+    }
+    if (from.x !== to.x) {
+      return {
+        x: from.x + (to.x > from.x ? 1 : -1),
+        y: from.y,
+      };
+    }
+    return {
+      x: from.x,
+      y: from.y + (to.y > from.y ? 1 : -1),
+    };
+  }
+
+  private formatStoryText(input: string): string {
+    const starterName =
+      (this.selectedStarterId && this.critterLookup[Number.parseInt(this.selectedStarterId, 10)]?.name) ||
+      'your starter critter';
+    return input
+      .replace(/<username>/gi, this.playerName)
+      .replace(/<player-name>/gi, this.playerName)
+      .replace(/<player-starter-critter-name>/gi, starterName);
+  }
+
+  private buildNpcBattleTeam(teamIds: string[]): BattleCritterState[] {
+    const parsedTeam = teamIds
+      .map((entry) => this.parseNpcBattleTeamEntry(entry))
+      .filter((entry): entry is { critter: CritterDefinition; level: number | null } => Boolean(entry))
+      .map((entry) => this.buildWildBattleCritter(entry.critter, entry.level));
+    if (parsedTeam.length > 0) {
+      return parsedTeam;
+    }
+
+    const moolnir =
+      this.critterDatabase.find((entry) => entry.name.trim().toLowerCase() === 'moolnir') ??
+      this.critterDatabase[0];
+    if (!moolnir) {
+      return [];
+    }
+    return [this.buildWildBattleCritter(moolnir, 1)];
+  }
+
+  private parseNpcBattleTeamEntry(token: string): { critter: CritterDefinition; level: number | null } | null {
+    if (typeof token !== 'string' || !token.trim()) {
+      return null;
+    }
+    const trimmed = token.trim();
+    const [rawCritterToken, rawLevelToken] = trimmed.split(/[@:]/, 2);
+    const critterToken = rawCritterToken.trim().toLowerCase();
+    if (!critterToken) {
+      return null;
+    }
+
+    const maybeNumericId = Number.parseInt(critterToken.replace(/^#/, ''), 10);
+    const critter =
+      (Number.isFinite(maybeNumericId) ? this.critterLookup[maybeNumericId] : undefined) ??
+      this.critterDatabase.find((entry) => entry.name.trim().toLowerCase() === critterToken) ??
+      this.critterDatabase.find((entry) => slugify(entry.name) === critterToken);
+    if (!critter) {
+      return null;
+    }
+
+    const level = rawLevelToken ? Number.parseInt(rawLevelToken, 10) : null;
+    return {
+      critter,
+      level: Number.isFinite(level) && level !== null ? Math.max(1, level) : null,
+    };
+  }
+
   private tickAutosave(deltaMs: number): void {
     if (!this.dirty) {
       this.autosaveMs = AUTOSAVE_INTERVAL_MS;
@@ -2331,15 +4253,26 @@ export class GameRuntime {
     }
   }
 
-  private recordOpposingKnockoutProgress(opposingCritterId: number): void {
+  private recordOpposingKnockoutProgress(opposingCritterId: number, knockoutAttackerCritterId: number | null): void {
     const opposingCritter = this.critterLookup[opposingCritterId];
     if (!opposingCritter) {
+      return;
+    }
+    if (knockoutAttackerCritterId === null) {
       return;
     }
 
     const nowIso = new Date().toISOString();
     let updatedAny = false;
-    for (const critter of this.critterDatabase) {
+    /* Attacker always gets credit. Locked critters (level 1 missions) get credit for any knockout. */
+    const critterIdsToUpdate = new Set<number>([knockoutAttackerCritterId]);
+    for (const entry of this.playerCritterProgress.collection) {
+      if (!entry.unlocked) {
+        critterIdsToUpdate.add(entry.critterId);
+      }
+    }
+    const crittersToUpdate = this.critterDatabase.filter((c) => critterIdsToUpdate.has(c.id));
+    for (const critter of crittersToUpdate) {
       const progress = this.playerCritterProgress.collection.find((entry) => entry.critterId === critter.id);
       if (!progress) {
         continue;
@@ -2472,6 +4405,47 @@ export class GameRuntime {
     }
   }
 
+  private resolveEquippedSkillSlotsForSnapshot(
+    equippedSkillIds: EquippedSkillSlots | undefined,
+  ): RuntimeSnapshot['critters']['collection'][number]['equippedSkillSlots'] {
+    const slots: RuntimeSnapshot['critters']['collection'][number]['equippedSkillSlots'] = [
+      null,
+      null,
+      null,
+      null,
+    ];
+    if (!equippedSkillIds) return slots;
+    for (let i = 0; i < 4; i += 1) {
+      const skillId = equippedSkillIds[i];
+      if (!skillId) continue;
+      const skill = this.skillLookupById[skillId];
+      if (!skill) continue;
+      const effectDescriptions = (skill.effectIds ?? [])
+        .map((id) => {
+          const effect = this.skillEffectLookupById[id];
+          if (!effect?.description) return null;
+          const buffLabel = Math.round((effect.buffPercent ?? 0) * 100);
+          return effect.description.replace(/<buff>/g, String(buffLabel));
+        })
+        .filter(Boolean)
+        .join(' ');
+      const effectIconUrls = (skill.effectIds ?? [])
+        .map((id) => this.skillEffectLookupById[id]?.iconUrl)
+        .filter((url): url is string => typeof url === 'string' && url.length > 0);
+      slots[i] = {
+        skillId: skill.skill_id,
+        name: skill.skill_name,
+        element: skill.element,
+        type: skill.type,
+        ...(skill.type === 'damage' && skill.damage != null && { damage: skill.damage }),
+        ...(skill.type === 'support' && skill.healPercent != null && { healPercent: skill.healPercent }),
+        ...(effectDescriptions && { effectDescriptions }),
+        ...(effectIconUrls.length > 0 && { effectIconUrls }),
+      };
+    }
+    return slots;
+  }
+
   private getCritterSummary(): RuntimeSnapshot['critters'] {
     const collectionById = this.playerCritterProgress.collection.reduce<
       Record<number, PlayerCritterProgress['collection'][number]>
@@ -2508,6 +4482,8 @@ export class GameRuntime {
             knockoutElements,
             knockoutCritterIds,
             knockoutCritterNames,
+            storyFlagId: mission.storyFlagId,
+            label: mission.label,
           };
         });
         const completedMissionCount = missions.reduce((count, mission) => count + (mission.completed ? 1 : 0), 0);
@@ -2552,6 +4528,12 @@ export class GameRuntime {
           unlocked: availableAbilityIds.has(ability.id),
         })),
         unlockedAbilityIds: progress?.unlockedAbilityIds ?? derived.unlockedAbilityIds,
+        equippedSkillSlots: this.resolveEquippedSkillSlotsForSnapshot(progress?.equippedSkillIds),
+        unlockedSkillIds: derived.unlockedSkillIds,
+        unlockedSkillOptions: derived.unlockedSkillIds.map((id) => {
+          const skill = this.skillLookupById[id];
+          return { skillId: id, name: skill?.skill_name ?? id };
+        }),
         levelProgress,
         activeRequirement: activeRequirementLevelRow
           ? {
@@ -2657,6 +4639,13 @@ export class GameRuntime {
     level: number,
     progress: Record<string, number>,
   ): number {
+    if (mission.type === 'story_flag') {
+      if (!mission.storyFlagId) {
+        return 0;
+      }
+      return this.flags[mission.storyFlagId] ? 1 : 0;
+    }
+
     if (mission.type === 'ascension') {
       const sourceCritterId = mission.ascendsFromCritterId;
       if (!sourceCritterId) {
@@ -2746,6 +4735,36 @@ export class GameRuntime {
     this.dirty = true;
   }
 
+  /** Heal all squad critters to full HP (used by healers and blackout). */
+  private healSquadToFull(): void {
+    const squadIds = new Set(
+      this.playerCritterProgress.squad.filter((id): id is number => id !== null && id !== undefined),
+    );
+    for (const entry of this.playerCritterProgress.collection) {
+      if (!squadIds.has(entry.critterId)) {
+        continue;
+      }
+      const maxHp = Math.max(1, entry.effectiveStats?.hp ?? 1);
+      entry.currentHp = maxHp;
+    }
+  }
+
+  /** Warp player to user-house (5,7) facing down and heal all squad critters to full. */
+  private performBlackout(): void {
+    const mapId = this.mapRegistry[BLACKOUT_MAP_ID] ? BLACKOUT_MAP_ID : 'spawn';
+    this.currentMapId = mapId;
+    this.playerPosition = { x: BLACKOUT_POSITION.x, y: BLACKOUT_POSITION.y };
+    this.facing = BLACKOUT_FACING;
+    this.moveStep = null;
+    this.heldDirections = [];
+    this.dialogue = null;
+    this.pendingGuardBattle = null;
+
+    this.healSquadToFull();
+    this.showMessage('You blacked out and woke up at home. Your squad was healed.', 3200);
+    this.markProgressDirty();
+  }
+
   private markProgressDirty(): void {
     this.markDirty();
     this.persistNow();
@@ -2782,19 +4801,28 @@ export class GameRuntime {
   }
 
   private getObjectiveText(): string {
-    if (!this.flags.talked_to_brother) {
-      return 'Talk to Eli before leaving home.';
+    if (!this.flags[FLAG_SELECTED_STARTER]) {
+      if (this.currentMapId === 'spawn') {
+        return 'Head north to reach Portlock.';
+      }
+      if (this.currentMapId === 'portlock') {
+        return 'Enter Uncle Hank\'s house for your starter pickup.';
+      }
+      if (this.currentMapId === 'uncle-s-house') {
+        return this.starterSelection ? 'Choose your starter critter.' : 'Talk to Uncle Hank.';
+      }
+      return 'Find Uncle Hank to begin your story.';
     }
 
-    if (!this.flags.met_rival_parent) {
-      return 'Visit Kira\'s house to meet Aunt Mara.';
+    if (!this.flags[FLAG_STARTER_SELECTION_DONE]) {
+      return 'Unlock your starter critter in Collection.';
     }
 
-    if (!this.flags.inspected_starter_crate) {
-      return 'Inspect the starter basket inside Kira\'s house.';
+    if (!this.flags[FLAG_DEMO_DONE]) {
+      return this.activeBattle ? 'Finish your duel with Jacob.' : 'Get ready for Jacob\'s duel.';
     }
 
-    return 'Head north when you are ready to begin Route 1.';
+    return 'Explore Portlock with your partner critter.';
   }
 
   private drawTile(
@@ -2982,20 +5010,26 @@ export class GameRuntime {
           return Math.floor(frame);
         }
       }
-    }
-
-    const idleFramesFromSet = this.getDirectionalAnimationFrames(sprite.animationSets, idleAnimationName, facing);
-    if (idleFramesFromSet.length > 0) {
-      const frame = idleFramesFromSet[0];
-      if (Number.isFinite(frame) && frame >= 0) {
-        return Math.floor(frame);
-      }
-    }
-
-    if (isMoving) {
       const walkFrames = sprite.walkFrames?.[facing];
       if (Array.isArray(walkFrames) && walkFrames.length > 0) {
         const frame = walkFrames[Math.floor(animationMs / 140) % walkFrames.length];
+        if (Number.isFinite(frame) && frame >= 0) {
+          return Math.floor(frame);
+        }
+      }
+
+      // If move animation frames are missing, use idle-set frames as a last moving fallback.
+      const idleFramesFromSet = this.getDirectionalAnimationFrames(sprite.animationSets, idleAnimationName, facing);
+      if (idleFramesFromSet.length > 0) {
+        const frame = idleFramesFromSet[Math.floor(animationMs / 180) % idleFramesFromSet.length];
+        if (Number.isFinite(frame) && frame >= 0) {
+          return Math.floor(frame);
+        }
+      }
+    } else {
+      const idleFramesFromSet = this.getDirectionalAnimationFrames(sprite.animationSets, idleAnimationName, facing);
+      if (idleFramesFromSet.length > 0) {
+        const frame = idleFramesFromSet[0];
         if (Number.isFinite(frame) && frame >= 0) {
           return Math.floor(frame);
         }
@@ -3019,7 +5053,18 @@ export class GameRuntime {
       return [];
     }
 
-    const set = animationSets[animationName];
+    let set = animationSets[animationName];
+    if (!set) {
+      const normalizedName = animationName.trim().toLowerCase();
+      if (normalizedName) {
+        for (const [candidateName, candidateSet] of Object.entries(animationSets)) {
+          if (candidateName.trim().toLowerCase() === normalizedName) {
+            set = candidateSet;
+            break;
+          }
+        }
+      }
+    }
     if (!set) {
       return [];
     }
@@ -3102,6 +5147,196 @@ function buildEncounterTableLookup(tables: EncounterTableDefinition[]): Record<s
     lookup[table.id] = table;
   }
   return lookup;
+}
+
+function sanitizeRuntimeNpcSpriteLibrary(raw: unknown): NpcSpriteLibraryEntry[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const merged = new Map<string, NpcSpriteLibraryEntry>();
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const id = typeof record.id === 'string' && record.id.trim() ? record.id.trim() : '';
+    const label = typeof record.label === 'string' && record.label.trim() ? record.label.trim() : id;
+    const spriteRaw = record.sprite;
+    if (!id || !spriteRaw || typeof spriteRaw !== 'object' || Array.isArray(spriteRaw)) {
+      continue;
+    }
+    const spriteRecord = spriteRaw as Record<string, unknown>;
+    const url = typeof spriteRecord.url === 'string' && spriteRecord.url.trim() ? spriteRecord.url.trim() : '';
+    if (!url) {
+      continue;
+    }
+    const facing = spriteRecord.facingFrames;
+    if (!facing || typeof facing !== 'object' || Array.isArray(facing)) {
+      continue;
+    }
+    const facingFramesRecord = facing as Record<string, unknown>;
+    const facingFrames: Record<Direction, number> = {
+      up: Number.isFinite(facingFramesRecord.up) ? Math.max(0, Math.floor(facingFramesRecord.up as number)) : 0,
+      down: Number.isFinite(facingFramesRecord.down)
+        ? Math.max(0, Math.floor(facingFramesRecord.down as number))
+        : 0,
+      left: Number.isFinite(facingFramesRecord.left)
+        ? Math.max(0, Math.floor(facingFramesRecord.left as number))
+        : 0,
+      right: Number.isFinite(facingFramesRecord.right)
+        ? Math.max(0, Math.floor(facingFramesRecord.right as number))
+        : 0,
+    };
+    merged.set(id, {
+      id,
+      label: label || id,
+      sprite: {
+        ...(spriteRecord as unknown as NpcSpriteConfig),
+        url,
+        facingFrames,
+      },
+    });
+  }
+
+  return [...merged.values()];
+}
+
+function sanitizeRuntimeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateEntry[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const merged = new Map<string, NpcCharacterTemplateEntry>();
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const id = typeof record.id === 'string' && record.id.trim() ? record.id.trim() : '';
+    const npcName = typeof record.npcName === 'string' && record.npcName.trim() ? record.npcName.trim() : '';
+    if (!id || !npcName) {
+      continue;
+    }
+    const storyStatesRaw = Array.isArray(record.storyStates) ? record.storyStates : [];
+    const storyStates: NpcStoryStateDefinition[] = [];
+    for (const stateEntry of storyStatesRaw) {
+      if (!stateEntry || typeof stateEntry !== 'object' || Array.isArray(stateEntry)) {
+        continue;
+      }
+      const stateRecord = stateEntry as Record<string, unknown>;
+      const mapId = typeof stateRecord.mapId === 'string' && stateRecord.mapId.trim() ? stateRecord.mapId.trim() : undefined;
+      const positionRecord =
+        stateRecord.position && typeof stateRecord.position === 'object' && !Array.isArray(stateRecord.position)
+          ? (stateRecord.position as Record<string, unknown>)
+          : null;
+      const position =
+        positionRecord &&
+        Number.isFinite(positionRecord.x) &&
+        Number.isFinite(positionRecord.y)
+          ? {
+              x: Math.floor(positionRecord.x as number),
+              y: Math.floor(positionRecord.y as number),
+            }
+          : undefined;
+      if (!mapId || !position) {
+        continue;
+      }
+      storyStates.push({
+        ...(stateRecord as unknown as NpcStoryStateDefinition),
+        mapId,
+        position,
+        requiresFlag:
+          typeof stateRecord.requiresFlag === 'string' && stateRecord.requiresFlag.trim()
+            ? stateRecord.requiresFlag.trim()
+            : undefined,
+        firstInteractionSetFlag:
+          typeof stateRecord.firstInteractionSetFlag === 'string' && stateRecord.firstInteractionSetFlag.trim()
+            ? stateRecord.firstInteractionSetFlag.trim()
+            : undefined,
+        firstInteractBattle:
+          typeof stateRecord.firstInteractBattle === 'boolean' ? stateRecord.firstInteractBattle : undefined,
+        healer: typeof stateRecord.healer === 'boolean' ? stateRecord.healer : undefined,
+        dialogueLines: Array.isArray(stateRecord.dialogueLines)
+          ? stateRecord.dialogueLines.filter((line): line is string => typeof line === 'string')
+          : undefined,
+        battleTeamIds: Array.isArray(stateRecord.battleTeamIds)
+          ? stateRecord.battleTeamIds.filter((team): team is string => typeof team === 'string')
+          : undefined,
+        movementGuards: sanitizeRuntimeNpcMovementGuards(stateRecord.movementGuards),
+      });
+    }
+    merged.set(id, {
+      ...(record as unknown as NpcCharacterTemplateEntry),
+      id,
+      npcName,
+      label: typeof record.label === 'string' && record.label.trim() ? record.label.trim() : npcName,
+      firstInteractionSetFlag:
+        typeof record.firstInteractionSetFlag === 'string' && record.firstInteractionSetFlag.trim()
+          ? record.firstInteractionSetFlag.trim()
+          : undefined,
+      firstInteractBattle: typeof record.firstInteractBattle === 'boolean' ? record.firstInteractBattle : undefined,
+      healer: typeof record.healer === 'boolean' ? record.healer : undefined,
+      movementGuards: sanitizeRuntimeNpcMovementGuards(record.movementGuards),
+      storyStates,
+    });
+  }
+
+  return normalizeCoreStoryNpcCharacters([...merged.values()]);
+}
+
+function sanitizeRuntimeNpcMovementGuards(raw: unknown): NpcMovementGuardDefinition[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const guards: NpcMovementGuardDefinition[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const hasTarget =
+      (typeof record.x === 'number' && Number.isFinite(record.x)) ||
+      (typeof record.y === 'number' && Number.isFinite(record.y)) ||
+      (typeof record.minX === 'number' && Number.isFinite(record.minX)) ||
+      (typeof record.maxX === 'number' && Number.isFinite(record.maxX)) ||
+      (typeof record.minY === 'number' && Number.isFinite(record.minY)) ||
+      (typeof record.maxY === 'number' && Number.isFinite(record.maxY));
+    if (!hasTarget) {
+      continue;
+    }
+    guards.push({
+      id: typeof record.id === 'string' && record.id.trim() ? record.id.trim() : undefined,
+      requiresFlag:
+        typeof record.requiresFlag === 'string' && record.requiresFlag.trim() ? record.requiresFlag.trim() : undefined,
+      hideIfFlag:
+        typeof record.hideIfFlag === 'string' && record.hideIfFlag.trim() ? record.hideIfFlag.trim() : undefined,
+      x: typeof record.x === 'number' && Number.isFinite(record.x) ? Math.floor(record.x) : undefined,
+      y: typeof record.y === 'number' && Number.isFinite(record.y) ? Math.floor(record.y) : undefined,
+      minX: typeof record.minX === 'number' && Number.isFinite(record.minX) ? Math.floor(record.minX) : undefined,
+      maxX: typeof record.maxX === 'number' && Number.isFinite(record.maxX) ? Math.floor(record.maxX) : undefined,
+      minY: typeof record.minY === 'number' && Number.isFinite(record.minY) ? Math.floor(record.minY) : undefined,
+      maxY: typeof record.maxY === 'number' && Number.isFinite(record.maxY) ? Math.floor(record.maxY) : undefined,
+      dialogueSpeaker:
+        typeof record.dialogueSpeaker === 'string' && record.dialogueSpeaker.trim()
+          ? record.dialogueSpeaker.trim()
+          : undefined,
+      dialogueLines: Array.isArray(record.dialogueLines)
+        ? record.dialogueLines.filter((line): line is string => typeof line === 'string' && line.trim().length > 0)
+        : undefined,
+      setFlag: typeof record.setFlag === 'string' && record.setFlag.trim() ? record.setFlag.trim() : undefined,
+      defeatedFlag:
+        typeof record.defeatedFlag === 'string' && record.defeatedFlag.trim() ? record.defeatedFlag.trim() : undefined,
+      postDuelDialogueSpeaker:
+        typeof record.postDuelDialogueSpeaker === 'string' && record.postDuelDialogueSpeaker.trim()
+          ? record.postDuelDialogueSpeaker.trim()
+          : undefined,
+      postDuelDialogueLines: Array.isArray(record.postDuelDialogueLines)
+        ? record.postDuelDialogueLines.filter((line): line is string => typeof line === 'string' && line.trim().length > 0)
+        : undefined,
+    });
+  }
+  return guards.length > 0 ? guards : undefined;
 }
 
 function sampleEncounterEntry(
@@ -3212,6 +5447,22 @@ function toDirection(key: string): Direction | null {
   }
 }
 
+function toDirectionFromDelta(deltaX: number, deltaY: number): Direction | null {
+  if (deltaX === 1 && deltaY === 0) {
+    return 'right';
+  }
+  if (deltaX === -1 && deltaY === 0) {
+    return 'left';
+  }
+  if (deltaX === 0 && deltaY === 1) {
+    return 'down';
+  }
+  if (deltaX === 0 && deltaY === -1) {
+    return 'up';
+  }
+  return null;
+}
+
 function isInteractKey(key: string): boolean {
   return key === ' ';
 }
@@ -3268,6 +5519,17 @@ function randomDirection(): Direction {
   return directions[Math.floor(Math.random() * directions.length)];
 }
 
+function shuffleDirections(): Direction[] {
+  const directions: Direction[] = ['up', 'down', 'left', 'right'];
+  for (let index = directions.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    const current = directions[index];
+    directions[index] = directions[swapIndex];
+    directions[swapIndex] = current;
+  }
+  return directions;
+}
+
 function isDirection(value: string): value is Direction {
   return value === 'up' || value === 'down' || value === 'left' || value === 'right';
 }
@@ -3278,11 +5540,16 @@ function clampNpcStepInterval(value: number | undefined): number {
     return fallback;
   }
 
-  return clamp(Math.floor(value as number), 180, 4000);
+  return Math.max(1, Math.floor(value as number));
 }
 
 function randomTurnDelay(): number {
   return 900 + Math.random() * 2200;
+}
+
+function isCoreStoryNpcName(value: string | undefined): boolean {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return normalized === 'uncle hank' || normalized === 'jacob';
 }
 
 function shadeColor(hex: string, percent: number): string {
@@ -3303,4 +5570,13 @@ function shadeColor(hex: string, percent: number): string {
 
 function clampByte(value: number): number {
   return Math.max(0, Math.min(255, value));
+}
+
+function slugify(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+/g, '')
+    .replace(/-+$/g, '');
 }

@@ -131,6 +131,29 @@ interface SaveEncounterLibraryRequestPayload {
   encounterTables?: unknown;
 }
 
+interface SaveSkillsRequestPayload {
+  critterSkills?: unknown;
+}
+
+interface SaveSkillEffectsRequestPayload {
+  skillEffects?: unknown;
+}
+
+interface SaveElementChartRequestPayload {
+  elementChart?: unknown;
+}
+
+interface SaveFlagsRequestPayload {
+  flags?: unknown;
+}
+
+interface FlagCatalogEntryPayload {
+  flagId: string;
+  label: string;
+  notes: string;
+  updatedAt: string;
+}
+
 interface SupabaseStorageListEntry {
   name?: unknown;
   id?: unknown;
@@ -307,6 +330,37 @@ function sanitizeIdentifier(value: string, fallback: string): string {
   }
 
   return trimmed.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
+}
+
+function sanitizeFlagId(raw: unknown): string {
+  if (typeof raw !== 'string') {
+    return '';
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return '';
+  }
+  return trimmed.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-_:.]/g, '');
+}
+
+function sanitizeOptionalText(raw: unknown): string {
+  if (typeof raw !== 'string') {
+    return '';
+  }
+  return raw.trim();
+}
+
+function toDefaultFlagLabel(flagId: string): string {
+  const normalized = flagId
+    .trim()
+    .replace(/[_:.]+/g, '-')
+    .split('-')
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  if (normalized.length === 0) {
+    return flagId;
+  }
+  return normalized.map((token) => token[0].toUpperCase() + token.slice(1)).join(' ');
 }
 
 function parseLayerOrderId(value: unknown): number | null {
@@ -921,7 +975,11 @@ function parseSavedPaintTiles(raw: unknown): SavedPaintTilePayload[] {
 const CRITTER_ELEMENT_OPTIONS = new Set(['bloom', 'ember', 'tide', 'gust', 'stone', 'spark', 'shade']);
 const CRITTER_RARITY_OPTIONS = new Set(['common', 'uncommon', 'rare', 'legendary']);
 const CRITTER_ABILITY_KIND_OPTIONS = new Set(['passive', 'active']);
-const CRITTER_MISSION_TYPE_OPTIONS = new Set(['opposing_knockouts', 'ascension']);
+const CRITTER_MISSION_TYPE_OPTIONS = new Set(['opposing_knockouts', 'ascension', 'story_flag']);
+const BUDDO_NAME = 'buddo';
+const BUDDO_STORY_MISSION_ID = 'select-bloom-partner-critter';
+const BUDDO_STORY_FLAG_ID = 'selected-bloom-starter';
+const BUDDO_STORY_LABEL = 'Select Bloom Partner Critter';
 
 function parseCritterLibrary(
   raw: unknown,
@@ -962,7 +1020,7 @@ function parseCritterLibrary(
     }
     parsed.push(critter);
   }
-  return parsed;
+  return ensureBuddoStarterStoryMission(parsed);
 }
 
 function parseCritterDefinition(raw: unknown, index: number): Record<string, unknown> | null {
@@ -1092,6 +1150,14 @@ function parseCritterLevels(raw: unknown, abilityIdSet: Set<string>): Array<Reco
           .slice(0, 20)
       : [];
 
+    const skillUnlockIds = Array.isArray(record.skillUnlockIds)
+      ? record.skillUnlockIds
+          .filter((entry): entry is string => typeof entry === 'string')
+          .map((entry) => entry.trim())
+          .filter((entry) => entry.length > 0)
+          .slice(0, 30)
+      : [];
+
     parsed.push({
       level,
       missions,
@@ -1103,6 +1169,7 @@ function parseCritterLevels(raw: unknown, abilityIdSet: Set<string>): Array<Reco
         speed: critterClampInt(statDeltaRecord.speed, -999, 999, 0),
       },
       abilityUnlockIds,
+      skillUnlockIds,
     });
   }
 
@@ -1138,6 +1205,18 @@ function parseCritterLevelMissions(raw: unknown, level: number): Array<Record<st
     if (type === 'ascension') {
       mission.ascendsFromCritterId = critterClampInt(record.ascendsFromCritterId, 1, 999999, 1);
     }
+    if (type === 'story_flag') {
+      const storyFlagId = sanitizeStoryFlagId(record.storyFlagId);
+      mission.storyFlagId = storyFlagId;
+      const missionLabel =
+        typeof record.label === 'string' && record.label.trim()
+          ? record.label.trim().slice(0, 120)
+          : undefined;
+      if (missionLabel) {
+        mission.label = missionLabel;
+      }
+      mission.targetValue = 1;
+    }
     if (type === 'opposing_knockouts') {
       const knockoutElements = Array.isArray(record.knockoutElements)
         ? record.knockoutElements
@@ -1161,6 +1240,68 @@ function parseCritterLevelMissions(raw: unknown, level: number): Array<Record<st
     parsed.push(mission);
   }
   return parsed;
+}
+
+function sanitizeStoryFlagId(value: unknown): string {
+  const normalized =
+    typeof value === 'string'
+      ? value
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9-_]+/g, '-')
+          .replace(/-+/g, '-')
+          .replace(/^-+/g, '')
+          .replace(/-+$/g, '')
+      : '';
+  return normalized || 'story-flag';
+}
+
+function ensureBuddoStarterStoryMission(critters: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return critters.map((critter) => {
+    const critterName = typeof critter.name === 'string' ? critter.name.trim().toLowerCase() : '';
+    if (critterName !== BUDDO_NAME) {
+      return critter;
+    }
+
+    const levelsRaw = Array.isArray(critter.levels) ? critter.levels : [];
+    const levels = levelsRaw
+      .filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry))
+      .map((entry) => ({ ...(entry as Record<string, unknown>) }));
+    const levelOneIndex = levels.findIndex((entry) => Number(entry.level) === 1);
+    const levelOneExisting = levelOneIndex >= 0 ? levels[levelOneIndex] : null;
+    const levelOne: Record<string, unknown> = {
+      ...(levelOneExisting ?? {
+        level: 1,
+        statDelta: {
+          hp: 0,
+          attack: 0,
+          defense: 0,
+          speed: 0,
+        },
+        abilityUnlockIds: [],
+        skillUnlockIds: [],
+      }),
+      missions: [
+        {
+          id: BUDDO_STORY_MISSION_ID,
+          type: 'story_flag',
+          targetValue: 1,
+          storyFlagId: BUDDO_STORY_FLAG_ID,
+          label: BUDDO_STORY_LABEL,
+        },
+      ],
+      requiredMissionCount: 1,
+    };
+
+    const nextLevels = levels.filter((entry) => Number(entry.level) !== 1);
+    nextLevels.push(levelOne);
+    nextLevels.sort((left, right) => Number(left.level) - Number(right.level));
+
+    return {
+      ...critter,
+      levels: nextLevels,
+    };
+  });
 }
 
 function critterClampInt(value: unknown, min: number, max: number, fallback: number): number {
@@ -1896,6 +2037,23 @@ const WORLD_MAP_BASELINE_VERSION = 1;
 const SPAWN_MAP_ID = 'spawn';
 const GLOBAL_CATALOG_KEY = 'main';
 const GLOBAL_WORLD_STATE_KEY = 'world';
+const DEFAULT_SYSTEM_FLAGS = [
+  'demo-start',
+  'selected-starter-critter',
+  'starter-selection-done',
+  'demo-done',
+  'jacob-left-house',
+] as const;
+const FLAG_REFERENCE_KEYS = new Set([
+  'requiresFlag',
+  'hideIfFlag',
+  'setFlag',
+  'dialogueSetFlag',
+  'firstInteractionSetFlag',
+  'storyFlagId',
+  'flag',
+  'defeatedFlag',
+]);
 const LEGACY_CATALOG_TABLES = [
   'world_maps',
   'user_world_state',
@@ -2107,6 +2265,186 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
     }
   };
 
+  const collectFlagIdsFromUnknown = (
+    input: unknown,
+    sink: Set<string>,
+    depth = 0,
+  ): void => {
+    if (depth > 24 || input === null || input === undefined) {
+      return;
+    }
+    if (typeof input === 'string') {
+      return;
+    }
+    if (Array.isArray(input)) {
+      for (const entry of input) {
+        collectFlagIdsFromUnknown(entry, sink, depth + 1);
+      }
+      return;
+    }
+    if (typeof input !== 'object') {
+      return;
+    }
+    const record = input as Record<string, unknown>;
+    for (const [key, value] of Object.entries(record)) {
+      if (FLAG_REFERENCE_KEYS.has(key)) {
+        const flagId = sanitizeFlagId(value);
+        if (flagId) {
+          sink.add(flagId);
+        }
+      }
+      if (
+        key === 'flags' &&
+        value &&
+        typeof value === 'object' &&
+        !Array.isArray(value)
+      ) {
+        for (const candidate of Object.keys(value as Record<string, unknown>)) {
+          const flagId = sanitizeFlagId(candidate);
+          if (flagId) {
+            sink.add(flagId);
+          }
+        }
+      }
+      collectFlagIdsFromUnknown(value, sink, depth + 1);
+    }
+  };
+
+  const upsertFlagCatalogRows = async (
+    client: PoolClient,
+    flagEntries: Array<{ flagId: string; label: string; notes: string }>,
+  ): Promise<void> => {
+    for (const entry of flagEntries) {
+      const flagId = sanitizeFlagId(entry.flagId);
+      if (!flagId) {
+        continue;
+      }
+      const label = sanitizeOptionalText(entry.label) || toDefaultFlagLabel(flagId);
+      const notes = sanitizeOptionalText(entry.notes);
+      await client.query(
+        `
+          INSERT INTO flags (flag_id, label, notes, created_at, updated_at)
+          VALUES ($1, $2, $3, NOW(), NOW())
+          ON CONFLICT (flag_id)
+          DO UPDATE
+          SET label = EXCLUDED.label,
+              notes = EXCLUDED.notes,
+              updated_at = NOW()
+        `,
+        [flagId, label, notes],
+      );
+    }
+  };
+
+  const parseFlagCatalogPayload = (raw: unknown): Array<{ flagId: string; label: string; notes: string }> => {
+    if (!Array.isArray(raw)) {
+      return [];
+    }
+    const deduped = new Map<string, { flagId: string; label: string; notes: string }>();
+    for (const entry of raw) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        continue;
+      }
+      const record = entry as Record<string, unknown>;
+      const flagId = sanitizeFlagId(record.flagId);
+      if (!flagId) {
+        continue;
+      }
+      deduped.set(flagId, {
+        flagId,
+        label: sanitizeOptionalText(record.label),
+        notes: sanitizeOptionalText(record.notes),
+      });
+    }
+    return Array.from(deduped.values());
+  };
+
+  const readFlagCatalog = async (): Promise<FlagCatalogEntryPayload[]> => {
+    if (!pool) {
+      return [];
+    }
+    const result = await pool.query<{ flag_id: string; label: string; notes: string; updated_at: Date | string }>(
+      `
+        SELECT flag_id, label, notes, updated_at
+        FROM flags
+        ORDER BY flag_id ASC
+      `,
+    );
+    return result.rows.map((row) => ({
+      flagId: row.flag_id,
+      label: row.label ?? '',
+      notes: row.notes ?? '',
+      updatedAt:
+        row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at ?? ''),
+    }));
+  };
+
+  const syncDiscoveredFlags = async (client: PoolClient): Promise<void> => {
+    const discovered = new Set<string>(DEFAULT_SYSTEM_FLAGS.map((entry) => sanitizeFlagId(entry)));
+
+    const [mapsResult, npcResult, critterResult, encounterResult, savesResult] = await Promise.all([
+      client.query('SELECT map_data FROM game_maps'),
+      client.query('SELECT character_library FROM game_npc_libraries WHERE catalog_key = $1', [GLOBAL_CATALOG_KEY]),
+      client.query('SELECT critter_data FROM game_critter_catalog'),
+      client.query('SELECT table_data FROM game_encounter_catalog'),
+      client.query('SELECT save_data FROM user_saves'),
+    ]);
+
+    for (const row of mapsResult.rows) {
+      collectFlagIdsFromUnknown(row.map_data, discovered);
+    }
+    for (const row of npcResult.rows) {
+      collectFlagIdsFromUnknown(row.character_library, discovered);
+    }
+    for (const row of critterResult.rows) {
+      collectFlagIdsFromUnknown(row.critter_data, discovered);
+    }
+    for (const row of encounterResult.rows) {
+      collectFlagIdsFromUnknown(row.table_data, discovered);
+    }
+    for (const row of savesResult.rows) {
+      collectFlagIdsFromUnknown(row.save_data, discovered);
+    }
+
+    for (const flagId of Array.from(discovered)) {
+      if (!flagId) {
+        continue;
+      }
+      await client.query(
+        `
+          INSERT INTO flags (flag_id, label, notes, created_at, updated_at)
+          VALUES ($1, $2, '', NOW(), NOW())
+          ON CONFLICT (flag_id)
+          DO UPDATE
+          SET label = COALESCE(NULLIF(flags.label, ''), EXCLUDED.label),
+              updated_at = NOW()
+        `,
+        [flagId, toDefaultFlagLabel(flagId)],
+      );
+    }
+  };
+
+  const writeFlagCatalog = async (
+    entries: Array<{ flagId: string; label: string; notes: string }>,
+  ): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM flags');
+      await upsertFlagCatalogRows(client, entries);
+      await syncDiscoveredFlags(client);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
   const ensureSchema = async () => {
     if (!pool) {
       throw new Error('DB_CONNECTION_STRING is missing. Configure it in .env.');
@@ -2194,6 +2532,36 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       CREATE TABLE IF NOT EXISTS game_encounter_catalog (
         table_id TEXT PRIMARY KEY,
         table_data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_skill_catalog (
+        skill_id TEXT PRIMARY KEY,
+        skill_data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_skill_effects_catalog (
+        effect_id TEXT PRIMARY KEY,
+        effect_data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_element_chart (
+        catalog_key TEXT PRIMARY KEY,
+        chart_data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS flags (
+        flag_id TEXT PRIMARY KEY,
+        label TEXT NOT NULL DEFAULT '',
+        notes TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
@@ -2296,6 +2664,8 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         );
       }
 
+      await syncDiscoveredFlags(client);
+
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');
@@ -2384,6 +2754,108 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
     } finally {
       client.release();
     }
+  };
+
+  const readGlobalSkillCatalog = async (): Promise<Array<Record<string, unknown>>> => {
+    if (!pool) {
+      return [];
+    }
+    const result = await pool.query('SELECT skill_data FROM game_skill_catalog ORDER BY skill_id ASC');
+    return (result.rows.map((row) => row.skill_data) as Array<Record<string, unknown>>).filter(Boolean);
+  };
+
+  const writeGlobalSkillCatalog = async (skills: Array<Record<string, unknown>>): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM game_skill_catalog');
+      for (const skill of skills) {
+        const skillId = typeof skill.skill_id === 'string' ? String(skill.skill_id).trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-') : '';
+        if (!skillId) {
+          continue;
+        }
+        await client.query(
+          `
+            INSERT INTO game_skill_catalog (skill_id, skill_data, updated_at)
+            VALUES ($1, $2::jsonb, NOW())
+          `,
+          [skillId, JSON.stringify(skill)],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
+  const readGlobalSkillEffectsCatalog = async (): Promise<Array<Record<string, unknown>>> => {
+    if (!pool) {
+      return [];
+    }
+    const result = await pool.query('SELECT effect_data FROM game_skill_effects_catalog ORDER BY effect_id ASC');
+    return (result.rows.map((row) => row.effect_data) as Array<Record<string, unknown>>).filter(Boolean);
+  };
+
+  const writeGlobalSkillEffectsCatalog = async (effects: Array<Record<string, unknown>>): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM game_skill_effects_catalog');
+      for (const effect of effects) {
+        const effectId = typeof effect.effect_id === 'string' ? String(effect.effect_id).trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-') : '';
+        if (!effectId) {
+          continue;
+        }
+        await client.query(
+          `
+            INSERT INTO game_skill_effects_catalog (effect_id, effect_data, updated_at)
+            VALUES ($1, $2::jsonb, NOW())
+          `,
+          [effectId, JSON.stringify(effect)],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
+  const ELEMENT_CHART_KEY = 'default';
+
+  const readElementChart = async (): Promise<Array<Record<string, unknown>>> => {
+    if (!pool) {
+      return [];
+    }
+    const result = await pool.query('SELECT chart_data FROM game_element_chart WHERE catalog_key = $1', [ELEMENT_CHART_KEY]);
+    const raw = result.rows[0]?.chart_data;
+    return Array.isArray(raw) ? (raw as Array<Record<string, unknown>>) : [];
+  };
+
+  const writeElementChart = async (chart: Array<Record<string, unknown>>): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    await pool.query(
+      `
+        INSERT INTO game_element_chart (catalog_key, chart_data, updated_at)
+        VALUES ($1, $2::jsonb, NOW())
+        ON CONFLICT (catalog_key)
+        DO UPDATE SET chart_data = EXCLUDED.chart_data, updated_at = NOW()
+      `,
+      [ELEMENT_CHART_KEY, JSON.stringify(chart)],
+    );
   };
 
   const requireAuth = async (req: IncomingMessage, res: ServerResponse) => {
@@ -2485,6 +2957,14 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       '/api/admin/critters/list',
       '/api/admin/encounters/save',
       '/api/admin/encounters/list',
+      '/api/admin/skills/list',
+      '/api/admin/skills/save',
+      '/api/admin/skill-effects/list',
+      '/api/admin/skill-effects/save',
+      '/api/admin/element-chart/get',
+      '/api/admin/element-chart/save',
+      '/api/admin/flags/save',
+      '/api/admin/flags/list',
     ]);
     if (!handledRoutes.has(url)) {
       next();
@@ -2710,12 +3190,16 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
           return;
         }
         await ensureGlobalCatalogBaseline();
-        const [mapsResult, tileResult, playerSpriteResult, crittersResult, encounterResult] = await Promise.all([
+        const [mapsResult, tileResult, playerSpriteResult, npcLibraryResult, crittersResult, encounterResult, skills, effects, elementChart] = await Promise.all([
           pool.query('SELECT map_data FROM game_maps ORDER BY updated_at DESC'),
           pool.query('SELECT saved_tiles, tileset_config FROM game_tile_libraries WHERE catalog_key = $1', [GLOBAL_CATALOG_KEY]),
           pool.query('SELECT sprite_config FROM game_player_sprite_configs WHERE catalog_key = $1', [GLOBAL_CATALOG_KEY]),
+          pool.query('SELECT sprite_library, character_library FROM game_npc_libraries WHERE catalog_key = $1', [GLOBAL_CATALOG_KEY]),
           pool.query('SELECT critter_data FROM game_critter_catalog ORDER BY critter_id ASC, name ASC'),
           pool.query('SELECT table_data FROM game_encounter_catalog ORDER BY table_id ASC'),
+          readGlobalSkillCatalog(),
+          readGlobalSkillEffectsCatalog(),
+          readElementChart(),
         ]);
         const savedTiles = parseSavedPaintTiles(tileResult.rows[0]?.saved_tiles);
         const customTileDefinitions = buildCustomTileDefinitions(savedTiles);
@@ -2729,8 +3213,13 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
             customTileDefinitions,
             customTilesetConfig: tileResult.rows[0]?.tileset_config ?? null,
             playerSpriteConfig: sanitizeLoadedPlayerSpriteConfig(playerSpriteResult.rows[0]?.sprite_config),
+            npcSpriteLibrary: npcLibraryResult.rows[0]?.sprite_library ?? [],
+            npcCharacterLibrary: npcLibraryResult.rows[0]?.character_library ?? [],
             critters,
             encounterTables,
+            critterSkills: skills,
+            skillEffects: effects,
+            elementChart,
           },
         });
         return;
@@ -2755,6 +3244,8 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         await ensureGlobalCatalogBaseline();
         const rawBody = (await readJsonBody(req)) as SaveMapRequestPayload;
         const map = parseEditableMapPayload(rawBody);
+        const hasIncomingSavedPaintTiles = Object.prototype.hasOwnProperty.call(rawBody, 'savedPaintTiles');
+        const hasIncomingTilesetConfig = Object.prototype.hasOwnProperty.call(rawBody, 'tileset');
 
         let fileResult: ReturnType<typeof saveMapToProject> | null = null;
         try {
@@ -2773,8 +3264,16 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
           [map.id, JSON.stringify(map)],
         );
 
-        const savedTiles = parseSavedPaintTiles(rawBody.savedPaintTiles);
-        const tilesetConfig = sanitizeTilesetConfig(rawBody.tileset ?? null);
+        const existingTileLibraryResult = await pool.query(
+          'SELECT saved_tiles, tileset_config FROM game_tile_libraries WHERE catalog_key = $1',
+          [GLOBAL_CATALOG_KEY],
+        );
+        const existingSavedTiles = parseSavedPaintTiles(existingTileLibraryResult.rows[0]?.saved_tiles);
+        const existingTilesetConfig = sanitizeTilesetConfig(existingTileLibraryResult.rows[0]?.tileset_config ?? null);
+        const savedTiles = hasIncomingSavedPaintTiles ? parseSavedPaintTiles(rawBody.savedPaintTiles) : existingSavedTiles;
+        const tilesetConfig = hasIncomingTilesetConfig
+          ? sanitizeTilesetConfig(rawBody.tileset ?? null)
+          : existingTilesetConfig;
         await pool.query(
           `
             INSERT INTO game_tile_libraries (catalog_key, saved_tiles, tileset_config, updated_at)
@@ -3012,6 +3511,105 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         });
         await writeGlobalEncounterCatalog(encounterTables);
         sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (url === '/api/admin/skills/list' && req.method === 'GET') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const [critterSkills, skillEffects] = await Promise.all([readGlobalSkillCatalog(), readGlobalSkillEffectsCatalog()]);
+        sendJson(res, 200, { ok: true, critterSkills, skillEffects });
+        return;
+      }
+
+      if (url === '/api/admin/skills/save' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const body = (await readJsonBody(req)) as SaveSkillsRequestPayload;
+        const raw = Array.isArray(body.critterSkills) ? body.critterSkills : [];
+        const skills = raw.filter((s): s is Record<string, unknown> => s != null && typeof s === 'object');
+        await writeGlobalSkillCatalog(skills);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (url === '/api/admin/skill-effects/list' && req.method === 'GET') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const skillEffects = await readGlobalSkillEffectsCatalog();
+        sendJson(res, 200, { ok: true, skillEffects });
+        return;
+      }
+
+      if (url === '/api/admin/skill-effects/save' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const body = (await readJsonBody(req)) as SaveSkillEffectsRequestPayload;
+        const raw = Array.isArray(body.skillEffects) ? body.skillEffects : [];
+        const effects = raw.filter((e): e is Record<string, unknown> => e != null && typeof e === 'object');
+        await writeGlobalSkillEffectsCatalog(effects);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (url === '/api/admin/element-chart/get' && req.method === 'GET') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const elementChart = await readElementChart();
+        sendJson(res, 200, { ok: true, elementChart });
+        return;
+      }
+
+      if (url === '/api/admin/element-chart/save' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const body = (await readJsonBody(req)) as SaveElementChartRequestPayload;
+        const raw = Array.isArray(body.elementChart) ? body.elementChart : [];
+        const elementChart = raw.filter((e): e is Record<string, unknown> => e != null && typeof e === 'object');
+        await writeElementChart(elementChart);
+        sendJson(res, 200, { ok: true, elementChart });
+        return;
+      }
+
+      if (url === '/api/admin/flags/list' && req.method === 'GET') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const flags = await readFlagCatalog();
+        sendJson(res, 200, { ok: true, flags });
+        return;
+      }
+
+      if (url === '/api/admin/flags/save' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const body = (await readJsonBody(req)) as SaveFlagsRequestPayload;
+        const flags = parseFlagCatalogPayload(body.flags);
+        await writeFlagCatalog(flags);
+        sendJson(res, 200, { ok: true, flags: await readFlagCatalog() });
         return;
       }
 

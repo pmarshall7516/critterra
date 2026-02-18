@@ -1,6 +1,7 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
 import { GameRuntime, RuntimeSnapshot } from '@/game/engine/runtime';
 import { TILE_SIZE } from '@/shared/constants';
+import { ELEMENT_SKILL_COLORS } from '@/game/skills/types';
 
 interface GameViewProps {
   mode: 'new' | 'continue';
@@ -38,6 +39,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
   const battleActiveRef = useRef(false);
   const renderSizeRef = useRef<ViewportSize>(DEFAULT_VIEWPORT);
   const manualStepUntilRef = useRef(0);
+  const storyInputLockedRef = useRef(false);
 
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -47,6 +49,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
   const [squadPickerSlotIndex, setSquadPickerSlotIndex] = useState<number | null>(null);
   const [squadSearchInput, setSquadSearchInput] = useState('');
   const [expandedStatsByCritterId, setExpandedStatsByCritterId] = useState<Record<number, boolean>>({});
+  const [hoveredStarterCritterId, setHoveredStarterCritterId] = useState<number | null>(null);
   const [blockedSquadRemovalNotice, setBlockedSquadRemovalNotice] = useState<{ slotIndex: number; attempt: number } | null>(
     null,
   );
@@ -59,6 +62,19 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
   useEffect(() => {
     battleActiveRef.current = Boolean(snapshot?.battle);
   }, [snapshot?.battle]);
+
+  useEffect(() => {
+    storyInputLockedRef.current = Boolean(snapshot?.story.inputLocked || snapshot?.dialogue);
+    if (!snapshot?.story.starterSelection) {
+      setHoveredStarterCritterId(null);
+    }
+  }, [snapshot?.dialogue, snapshot?.story.inputLocked, snapshot?.story.starterSelection]);
+
+  useEffect(() => {
+    if (snapshot?.dialogue && menuOpen) {
+      setMenuOpen(false);
+    }
+  }, [menuOpen, snapshot?.dialogue]);
 
   useEffect(() => {
     if (snapshot?.battle?.id) {
@@ -173,7 +189,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
       renderCurrentFrame();
 
       snapshotTimer += delta;
-      if (snapshotTimer >= 70) {
+      if (snapshotTimer >= 100) {
         setSnapshot(runtime.getSnapshot());
         snapshotTimer = 0;
       }
@@ -244,6 +260,10 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
       }
 
       if (key === 'Escape') {
+        if (storyInputLockedRef.current) {
+          event.preventDefault();
+          return;
+        }
         event.preventDefault();
         setMenuOpen((open) => !open);
         return;
@@ -385,7 +405,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     }));
   };
 
-  const handleBattleAction = (action: 'attack' | 'guard' | 'swap' | 'retreat') => {
+  const handleBattleAction = (action: 'guard' | 'swap' | 'retreat') => {
     const runtime = runtimeRef.current;
     if (!runtime) {
       return;
@@ -394,6 +414,31 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     if (changed) {
       setSnapshot(runtime.getSnapshot());
     }
+  };
+
+  const handleBattleChooseSkill = (skillSlotIndex: number) => {
+    const runtime = runtimeRef.current;
+    if (!runtime) {
+      return;
+    }
+    const changed = runtime.battleChooseSkill(skillSlotIndex);
+    if (changed) {
+      setSnapshot(runtime.getSnapshot());
+    }
+  };
+
+  const handleEquipSkill = (critterId: number, slotIndex: number, skillId: string | null) => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    const changed = runtime.setEquippedSkill(critterId, slotIndex, skillId);
+    if (changed) setSnapshot(runtime.getSnapshot());
+  };
+
+  const handleUnequipSkill = (critterId: number, slotIndex: number) => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    const changed = runtime.setEquippedSkill(critterId, slotIndex, null);
+    if (changed) setSnapshot(runtime.getSnapshot());
   };
 
   const handleBattleSelectSlot = (slotIndex: number) => {
@@ -440,11 +485,45 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     }
   };
 
+  const handleSelectStarterCandidate = (critterId: number) => {
+    const runtime = runtimeRef.current;
+    if (!runtime) {
+      return;
+    }
+    const changed = runtime.selectStarterCandidate(critterId);
+    if (changed) {
+      setSnapshot(runtime.getSnapshot());
+    }
+  };
+
+  const handleCancelStarterCandidate = () => {
+    const runtime = runtimeRef.current;
+    if (!runtime) {
+      return;
+    }
+    const changed = runtime.cancelStarterCandidate();
+    if (changed) {
+      setSnapshot(runtime.getSnapshot());
+    }
+  };
+
+  const handleConfirmStarterCandidate = () => {
+    const runtime = runtimeRef.current;
+    if (!runtime) {
+      return;
+    }
+    const changed = runtime.confirmStarterCandidate();
+    if (changed) {
+      setSnapshot(runtime.getSnapshot());
+    }
+  };
+
   const closeMenu = () => {
     setMenuOpen(false);
   };
 
   const critterState = snapshot?.critters;
+  const starterSelection = snapshot?.story.starterSelection ?? null;
   const squadSlots = critterState?.squadSlots ?? [];
   const collection = critterState?.collection ?? [];
   const collectionById = useMemo(() => {
@@ -463,6 +542,56 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     }
     return null;
   }, [collection]);
+  const iconsBucketRoot = useMemo(() => {
+    const marker = '/storage/v1/object/public/';
+    function buildIconsBucketRootFromSupabaseUrl(supabaseAssetUrl: string): string | null {
+      try {
+        const url = new URL(supabaseAssetUrl);
+        const markerIndex = url.pathname.indexOf(marker);
+        if (markerIndex >= 0) {
+          url.pathname = url.pathname.substring(0, markerIndex) + marker + 'icons';
+          url.search = '';
+          url.hash = '';
+          return url.toString().replace(/\/+$/, '');
+        }
+      } catch {
+        // ignore
+      }
+      return null;
+    }
+    // Try to get icons bucket root from any skill effect icon URL (often already in icons bucket)
+    for (const entry of collection) {
+      for (const slot of entry.equippedSkillSlots ?? []) {
+        if (slot?.effectIconUrls && slot.effectIconUrls.length > 0) {
+          const root = buildIconsBucketRootFromSupabaseUrl(slot.effectIconUrls[0]);
+          if (root) return root;
+        }
+      }
+    }
+    // Derive from sprite URL: same Supabase origin, bucket = 'icons'
+    for (const entry of collection) {
+      if (entry.spriteUrl) {
+        const root = buildIconsBucketRootFromSupabaseUrl(entry.spriteUrl);
+        if (root) return root;
+      }
+    }
+    // Fallback: from element logo bucket root (e.g. critter-sprites -> icons)
+    if (elementLogoBucketRoot) {
+      const root = buildIconsBucketRootFromSupabaseUrl(elementLogoBucketRoot);
+      if (root) return root;
+    }
+    // Env fallback so icons work when no Supabase asset URLs have been loaded yet
+    try {
+      const envUrl = (typeof import.meta !== 'undefined' && (import.meta as { env?: { VITE_SUPABASE_URL?: string } }).env?.VITE_SUPABASE_URL) as string | undefined;
+      const base = typeof envUrl === 'string' && envUrl.trim() ? envUrl.trim().replace(/\/+$/, '') : null;
+      if (base && base.startsWith('http')) {
+        return `${base}/storage/v1/object/public/icons`;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  }, [collection, elementLogoBucketRoot]);
   const squadPickerCollection = useMemo(() => {
     const query = squadSearchInput.trim().toLowerCase();
     return collection
@@ -503,6 +632,8 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     return filtered;
   }, [collection, collectionSearchInput, collectionSort]);
 
+  const inBattle = Boolean(snapshot?.battle);
+
   return (
     <section className="game-screen">
       <div className="game-screen__viewport" ref={viewportRef}>
@@ -523,11 +654,24 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
         {snapshot?.battle && (
           <BattleOverlay
             battle={snapshot.battle}
+            iconsBucketRoot={iconsBucketRoot}
             onAction={handleBattleAction}
+            onChooseSkill={handleBattleChooseSkill}
             onSelectSquadSlot={handleBattleSelectSlot}
             onCancelSwap={handleBattleCancelSwap}
             onContinue={handleBattleContinue}
             onNextNarration={handleBattleNextNarration}
+          />
+        )}
+
+        {starterSelection && (
+          <StarterSelectionOverlay
+            selection={starterSelection}
+            hoveredCritterId={hoveredStarterCritterId}
+            onHoverCritter={setHoveredStarterCritterId}
+            onSelectCritter={handleSelectStarterCandidate}
+            onConfirm={handleConfirmStarterCandidate}
+            onCancel={handleCancelStarterCandidate}
           />
         )}
 
@@ -597,6 +741,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                           key={`squad-pick-${entry.critterId}`}
                           entry={entry}
                           elementLogoBucketRoot={elementLogoBucketRoot}
+                          iconsBucketRoot={iconsBucketRoot}
                           showStatBreakdown={Boolean(expandedStatsByCritterId[entry.critterId])}
                           onToggleStatInfo={() => handleToggleStatInfo(entry.critterId)}
                           onSelectCritter={handleAssignSquadCritter}
@@ -650,6 +795,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                           <CritterCard
                             entry={slottedCritter}
                             elementLogoBucketRoot={elementLogoBucketRoot}
+                            iconsBucketRoot={iconsBucketRoot}
                             showStatBreakdown={Boolean(expandedStatsByCritterId[slottedCritter.critterId])}
                             onToggleStatInfo={() => handleToggleStatInfo(slottedCritter.critterId)}
                             healthProgress={
@@ -717,9 +863,12 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                     key={`collection-${entry.critterId}`}
                     entry={entry}
                     elementLogoBucketRoot={elementLogoBucketRoot}
+                    iconsBucketRoot={iconsBucketRoot}
                     showStatBreakdown={Boolean(expandedStatsByCritterId[entry.critterId])}
                     onToggleStatInfo={() => handleToggleStatInfo(entry.critterId)}
                     onAdvanceCritter={handleAdvanceCritter}
+                    onEquipSkill={handleEquipSkill}
+                    onUnequipSkill={handleUnequipSkill}
                   />
                 ))}
               </div>
@@ -743,7 +892,8 @@ const ELEMENT_ACCENTS: Record<string, string> = {
   gust: '#d9f6ff',
   stone: '#d7b98f',
   spark: '#ffe06c',
-  shade: '#c5b7ff',
+  shade: '#b8a0e0',
+  normal: '#b0b0b0',
 };
 
 function collectionCardStyle(element: string): CSSProperties {
@@ -755,10 +905,13 @@ function collectionCardStyle(element: string): CSSProperties {
 interface CritterCardProps {
   entry: CritterCardEntry;
   elementLogoBucketRoot: string | null;
+  iconsBucketRoot: string | null;
   showStatBreakdown: boolean;
   onToggleStatInfo: () => void;
   onAdvanceCritter?: (critterId: number) => void;
   onSelectCritter?: (critterId: number) => void;
+  onEquipSkill?: (critterId: number, slotIndex: number, skillId: string | null) => void;
+  onUnequipSkill?: (critterId: number, slotIndex: number) => void;
   isSelectionDisabled?: boolean;
   healthProgress?: {
     currentHp: number;
@@ -766,17 +919,88 @@ interface CritterCardProps {
   };
 }
 
+function buildSkillSlotTooltip(slot: {
+  name: string;
+  element?: string;
+  type: string;
+  damage?: number;
+  healPercent?: number;
+  effectDescriptions?: string | null;
+}): string {
+  const lines: string[] = [slot.name];
+  const typeLabel = slot.type === 'damage' ? 'Damage' : 'Support';
+  const elementLabel = slot.element ? ` • ${slot.element.charAt(0).toUpperCase() + slot.element.slice(1)}` : '';
+  lines.push(`${typeLabel}${elementLabel}`);
+  if (slot.type === 'damage' && slot.damage != null) {
+    lines.push(`Power: ${slot.damage}`);
+  }
+  if (slot.type === 'support' && slot.healPercent != null) {
+    lines.push(`Heals: ${Math.round((slot.healPercent ?? 0) * 100)}% HP`);
+  }
+  if (slot.effectDescriptions && slot.effectDescriptions.trim()) {
+    lines.push(`Effect: ${slot.effectDescriptions.trim()}`);
+  }
+  return lines.join('\n');
+}
+
+interface SkillCellContentProps {
+  slot: {
+    name: string;
+    element: string;
+    type: string;
+    damage?: number;
+    healPercent?: number;
+    effectIconUrls?: string[];
+  } | null;
+  iconsBucketRoot: string | null;
+  emptyLabel?: string;
+}
+
+function SkillCellContent({ slot, iconsBucketRoot, emptyLabel = '—' }: SkillCellContentProps) {
+  if (!slot) {
+    return <>{emptyLabel}</>;
+  }
+  const elementLogoUrl = buildElementLogoUrlFromIconsBucket(slot.element, iconsBucketRoot);
+  const typeLabel = slot.type === 'damage' ? 'D' : 'S';
+  const value = slot.type === 'damage' ? slot.damage : slot.healPercent != null ? Math.round(slot.healPercent * 100) : null;
+  return (
+    <>
+      {elementLogoUrl && (
+        <img src={elementLogoUrl} alt={slot.element} className="skill-cell__element-logo" loading="lazy" decoding="async" />
+      )}
+      <span className="skill-cell__name">{slot.name}</span>
+      <span className="skill-cell__spacer"> </span>
+      <span className="skill-cell__type">{typeLabel}</span>
+      {value != null && <span className="skill-cell__value">{value}</span>}
+      {slot.effectIconUrls && slot.effectIconUrls.length > 0 && (
+        <>
+          {slot.effectIconUrls.map((url, i) => (
+            <img key={`${url}-${i}`} src={url} alt="" className="skill-cell__effect-icon" loading="lazy" decoding="async" />
+          ))}
+        </>
+      )}
+    </>
+  );
+}
+
 function CritterCard({
   entry,
   elementLogoBucketRoot,
+  iconsBucketRoot,
   showStatBreakdown,
   onToggleStatInfo,
   onAdvanceCritter,
   onSelectCritter,
+  onEquipSkill,
+  onUnequipSkill,
   isSelectionDisabled = false,
   healthProgress,
 }: CritterCardProps) {
-  const elementLogoUrl = buildElementLogoUrl(entry.element, entry.spriteUrl, elementLogoBucketRoot);
+  const [skillPopup, setSkillPopup] = useState<{ slotIndex: number } | null>(null);
+  const equippedSlots = entry.equippedSkillSlots ?? [null, null, null, null];
+  const unlockedOptions = entry.unlockedSkillOptions ?? [];
+  const equippedCount = equippedSlots.filter((s) => s !== null).length;
+  const elementLogoUrl = buildElementLogoUrlFromIconsBucket(entry.element, iconsBucketRoot) ?? buildElementLogoUrl(entry.element, entry.spriteUrl, elementLogoBucketRoot);
   const safeMaxLevel = Math.max(1, entry.maxLevel);
   const safeLevel = Math.max(0, Math.min(entry.level, safeMaxLevel));
   const levelProgressPercent = entry.unlocked
@@ -821,6 +1045,7 @@ function CritterCard({
       style={cardStyle}
       onClick={onSelectCritter && !isSelectionDisabled ? () => onSelectCritter(entry.critterId) : undefined}
     >
+      <div className="collection-card__body">
       <header className="collection-card__head">
         {elementLogoUrl ? (
           <img
@@ -828,6 +1053,7 @@ function CritterCard({
             alt={`${entry.element} element`}
             className="collection-card__element-logo"
             loading="lazy"
+            decoding="async"
           />
         ) : (
           <span className="collection-card__element-logo collection-card__element-logo--empty">-</span>
@@ -852,6 +1078,7 @@ function CritterCard({
           alt={entry.name}
           className="collection-card__sprite"
           loading="lazy"
+          decoding="async"
         />
       ) : (
         <div className="collection-card__sprite collection-card__sprite--missing">No Sprite</div>
@@ -873,18 +1100,6 @@ function CritterCard({
           </span>
         </div>
       )}
-      {entry.canAdvance && entry.advanceActionLabel && onAdvanceCritter && (
-        <button
-          type="button"
-          className="collection-card__advance"
-          onClick={(event) => {
-            event.stopPropagation();
-            onAdvanceCritter(entry.critterId);
-          }}
-        >
-          {entry.advanceActionLabel}
-        </button>
-      )}
       <section className="collection-card__stats">
         <h3>Stats</h3>
         <dl>
@@ -893,6 +1108,82 @@ function CritterCard({
           <div><dt>DEF</dt><dd>{formatStatValue(entry.baseStats.defense, entry.statBonus.defense, showStatBreakdown)}</dd></div>
           <div><dt>SPD</dt><dd>{formatStatValue(entry.baseStats.speed, entry.statBonus.speed, showStatBreakdown)}</dd></div>
         </dl>
+      </section>
+      <section className="collection-card__skills">
+        <h3>Skills</h3>
+        <div className="collection-card__skill-grid">
+          {entry.unlocked
+            ? equippedSlots.map((slot, index) => {
+                const color = slot && ELEMENT_SKILL_COLORS[slot.element as keyof typeof ELEMENT_SKILL_COLORS] ? ELEMENT_SKILL_COLORS[slot.element as keyof typeof ELEMENT_SKILL_COLORS] : undefined;
+                const tooltip = slot ? buildSkillSlotTooltip(slot) : undefined;
+                return (
+                  <button
+                    key={`skill-${entry.critterId}-${index}`}
+                    type="button"
+                    className="collection-card__skill-slot"
+                    style={color ? { backgroundColor: color, color: '#1a1a1a' } : undefined}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (onEquipSkill) setSkillPopup({ slotIndex: index });
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (onUnequipSkill && slot && equippedCount > 1) {
+                        onUnequipSkill(entry.critterId, index);
+                      }
+                    }}
+                    title={tooltip || (slot ? undefined : 'Empty slot – click to equip')}
+                  >
+                    <SkillCellContent slot={slot} iconsBucketRoot={iconsBucketRoot} />
+                  </button>
+                );
+              })
+            : [0, 1, 2, 3].map((index) => (
+                <div key={`skill-empty-${entry.critterId}-${index}`} className="collection-card__skill-slot collection-card__skill-slot--empty">
+                  <SkillCellContent slot={null} iconsBucketRoot={null} emptyLabel="—" />
+                </div>
+              ))}
+        </div>
+        {entry.unlocked && skillPopup !== null && onEquipSkill && (
+          <div
+            className="collection-card__skill-popup"
+            role="dialog"
+            aria-label="Equip skill"
+          >
+            <p className="collection-card__skill-popup-title">Equip or replace skill (slot {skillPopup.slotIndex + 1})</p>
+            <div className="collection-card__skill-popup-list">
+              {unlockedOptions.map((opt) => (
+                <button
+                  key={opt.skillId}
+                  type="button"
+                  className="secondary collection-card__skill-popup-option"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onEquipSkill(entry.critterId, skillPopup.slotIndex, opt.skillId);
+                    setSkillPopup(null);
+                  }}
+                >
+                  {opt.skillId} – {opt.name}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="secondary collection-card__skill-popup-option"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onEquipSkill(entry.critterId, skillPopup.slotIndex, null);
+                  setSkillPopup(null);
+                }}
+              >
+                Clear slot
+              </button>
+            </div>
+            <button type="button" className="secondary" onClick={() => setSkillPopup(null)}>
+              Cancel
+            </button>
+          </div>
+        )}
       </section>
       {entry.abilities.length > 0 && (
         <section className="collection-card__abilities">
@@ -927,13 +1218,99 @@ function CritterCard({
           <p className="collection-card__mission-summary">{isMaxLevel ? 'MAX LEVEL' : 'No mission requirements configured.'}</p>
         )}
       </section>
+      </div>
+      {entry.canAdvance && entry.advanceActionLabel && onAdvanceCritter && (
+        <button
+          type="button"
+          className={`collection-card__advance ${entry.advanceActionLabel === 'Unlock' ? 'collection-card__advance--unlock' : ''}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onAdvanceCritter(entry.critterId);
+          }}
+        >
+          {entry.advanceActionLabel}
+        </button>
+      )}
     </article>
+  );
+}
+
+interface StarterSelectionOverlayProps {
+  selection: NonNullable<RuntimeSnapshot['story']['starterSelection']>;
+  hoveredCritterId: number | null;
+  onHoverCritter: (critterId: number | null) => void;
+  onSelectCritter: (critterId: number) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+function StarterSelectionOverlay({
+  selection,
+  hoveredCritterId,
+  onHoverCritter,
+  onSelectCritter,
+  onConfirm,
+  onCancel,
+}: StarterSelectionOverlayProps) {
+  const hoveredCritter = selection.options.find((entry) => entry.critterId === hoveredCritterId) ?? null;
+  const confirmCritter =
+    selection.confirmCritterId !== null
+      ? selection.options.find((entry) => entry.critterId === selection.confirmCritterId) ?? null
+      : null;
+
+  return (
+    <div className="starter-overlay">
+      <section className="starter-overlay__panel">
+        <p className="starter-overlay__speaker">Uncle Hank</p>
+        <h3>Starter Critter Pickup</h3>
+        {hoveredCritter && (
+          <p className="starter-overlay__hover-prompt">
+            Would you like to select {hoveredCritter.name}?
+          </p>
+        )}
+        <div className="starter-overlay__cards">
+          {selection.options.map((entry) => {
+            const hovered = hoveredCritterId === entry.critterId;
+            return (
+              <button
+                key={`starter-option-${entry.critterId}`}
+                type="button"
+                className={`starter-overlay__card ${hovered ? 'is-hovered' : ''}`}
+                onMouseEnter={() => onHoverCritter(entry.critterId)}
+                onMouseLeave={() => onHoverCritter(null)}
+                onClick={() => onSelectCritter(entry.critterId)}
+              >
+                {entry.spriteUrl ? (
+                  <img src={entry.spriteUrl} alt={entry.name} loading="lazy" decoding="async" />
+                ) : (
+                  <div className="starter-overlay__card-missing">No Sprite</div>
+                )}
+                <span>#{entry.critterId} {entry.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      {confirmCritter && (
+        <section className="starter-overlay__confirm">
+          <p className="starter-overlay__speaker">Uncle Hank</p>
+          <p>Are you sure you want to choose {confirmCritter.name}?</p>
+          <div className="starter-overlay__confirm-actions">
+            <button type="button" className="primary" onClick={onConfirm}>Yes</button>
+            <button type="button" className="secondary" onClick={onCancel}>No</button>
+          </div>
+        </section>
+      )}
+    </div>
   );
 }
 
 interface BattleOverlayProps {
   battle: BattleSnapshot;
-  onAction: (action: 'attack' | 'guard' | 'swap' | 'retreat') => void;
+  iconsBucketRoot: string | null;
+  onAction: (action: 'guard' | 'swap' | 'retreat') => void;
+  onChooseSkill: (skillSlotIndex: number) => void;
   onSelectSquadSlot: (slotIndex: number) => void;
   onCancelSwap: () => void;
   onContinue: () => void;
@@ -942,12 +1319,20 @@ interface BattleOverlayProps {
 
 function BattleOverlay({
   battle,
+  iconsBucketRoot,
   onAction,
+  onChooseSkill,
   onSelectSquadSlot,
   onCancelSwap,
   onContinue,
   onNextNarration,
 }: BattleOverlayProps) {
+  const [showSkillPicker, setShowSkillPicker] = useState(false);
+  useEffect(() => {
+    if (battle.canAdvanceNarration || battle.phase !== 'player-turn') {
+      setShowSkillPicker(false);
+    }
+  }, [battle.canAdvanceNarration, battle.phase]);
   const activePlayer =
     battle.playerActiveIndex !== null ? battle.playerTeam[battle.playerActiveIndex] ?? null : null;
   const activeOpponent =
@@ -972,6 +1357,8 @@ function BattleOverlay({
     );
   }
 
+  const canSelectSquad = !battle.canAdvanceNarration && (battle.requiresStarterSelection || battle.requiresSwapSelection);
+
   return (
     <div className="battle-overlay">
       <section className="battle-screen">
@@ -986,6 +1373,10 @@ function BattleOverlay({
             critter={activePlayer}
             isAttacking={battle.activeAnimation?.attacker === 'player'}
             attackToken={battle.activeAnimation?.attacker === 'player' ? battle.activeAnimation.token : null}
+            squadEntries={battle.playerTeam}
+            playerActiveIndex={battle.playerActiveIndex}
+            canSelectSquad={canSelectSquad}
+            onSelectSquadSlot={onSelectSquadSlot}
           />
           <BattleActivePanel
             title="Opponent"
@@ -996,89 +1387,120 @@ function BattleOverlay({
           />
         </div>
         <div className="battle-screen__console">
-          <p className="battle-screen__log">{battle.logLine}</p>
-
-          {battle.canAdvanceNarration && (
-            <button type="button" className="primary battle-screen__continue-button" onClick={onNextNarration}>
-              Next
-            </button>
-          )}
-
-          {!battle.canAdvanceNarration && (battle.requiresStarterSelection || battle.requiresSwapSelection) && (
-            <>
-              <p className="battle-screen__hint">
-                {battle.requiresStarterSelection
-                  ? 'Pick a critter from your squad to open the battle.'
-                  : 'Swap to another squad critter.'}
-              </p>
-              <div className="battle-squad-picker">
-                {battle.playerTeam.map((entry, index) => {
-                  const isActive = battle.playerActiveIndex === index;
-                  const disabled = entry.fainted || entry.currentHp <= 0 || isActive;
-                  return (
-                    <button
-                      key={`battle-slot-${entry.slotIndex ?? index}`}
-                      type="button"
-                      className={`battle-squad-picker__slot ${isActive ? 'is-active' : ''} ${
-                        entry.fainted ? 'is-fainted' : ''
-                      }`}
-                      disabled={disabled}
-                      onClick={() => {
-                        if (entry.slotIndex === null) {
-                          return;
-                        }
-                        onSelectSquadSlot(entry.slotIndex);
-                      }}
-                    >
-                      <span className="battle-squad-picker__name">
-                        {entry.slotIndex !== null ? `Slot ${entry.slotIndex + 1}` : 'Bench'} · {entry.name}
-                      </span>
-                      <span className="battle-squad-picker__hp">
-                        HP {Math.max(0, entry.currentHp)}/{Math.max(1, entry.maxHp)}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-              {battle.canCancelSwap && (
-                <button type="button" className="secondary battle-screen__back-button" onClick={onCancelSwap}>
-                  Back
-                </button>
-              )}
-            </>
-          )}
-
-          {!battle.canAdvanceNarration && battle.phase === 'player-turn' && (
-            <div className="battle-actions">
-              <button type="button" className="primary" disabled={!battle.canAttack} onClick={() => onAction('attack')}>
-                Attack
-              </button>
-              <button type="button" className="secondary" disabled={!battle.canGuard} onClick={() => onAction('guard')}>
-                Guard
-              </button>
-              <button type="button" className="secondary" disabled={!battle.canSwap} onClick={() => onAction('swap')}>
-                Swap
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                disabled={!battle.canRetreat}
-                onClick={() => onAction('retreat')}
+          <div className="battle-screen__log-wrap">
+            <p className="battle-screen__log">{battle.logLine}</p>
+            {!battle.canAdvanceNarration && battle.phase === 'player-turn' && showSkillPicker && (
+              <a
+                href="#"
+                className="battle-screen__back-link"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setShowSkillPicker(false);
+                }}
               >
-                Retreat
-              </button>
-            </div>
-          )}
+                ← Back
+              </a>
+            )}
+          </div>
 
-          {!battle.canAdvanceNarration && battle.phase === 'result' && (
-            <button type="button" className="primary battle-screen__continue-button" onClick={onContinue}>
-              {battle.result === 'won'
-                ? 'Continue After Victory'
-                : battle.result === 'escaped'
-                  ? 'Continue After Escape'
-                  : 'Continue'}
-            </button>
-          )}
+          <div className="battle-actions">
+            {battle.canAdvanceNarration && (
+              <button type="button" className="primary battle-screen__continue-button" onClick={onNextNarration}>
+                Next
+              </button>
+            )}
+
+            {!battle.canAdvanceNarration && battle.phase === 'player-turn' && (
+              <>
+                {!showSkillPicker ? (
+                  <>
+                    <button
+                      key="action-0"
+                      type="button"
+                      className="primary"
+                      disabled={!battle.canAttack}
+                      onClick={() => setShowSkillPicker(true)}
+                    >
+                      Attack
+                    </button>
+                    <button key="action-1" type="button" className="secondary" disabled={!battle.canGuard} onClick={() => onAction('guard')}>
+                      Guard
+                    </button>
+                    <button key="action-2" type="button" className="secondary" disabled={!battle.canSwap} onClick={() => onAction('swap')}>
+                      Swap
+                    </button>
+                    <button
+                      key="action-3"
+                      type="button"
+                      className="secondary"
+                      disabled={!battle.canRetreat}
+                      onClick={() => onAction('retreat')}
+                    >
+                      Retreat
+                    </button>
+                  </>
+                ) : (
+                  (() => {
+                    const battleIconsRoot =
+                      iconsBucketRoot ??
+                      (() => {
+                        for (const s of battle.playerActiveSkillSlots ?? []) {
+                          if (s?.effectIconUrls && s.effectIconUrls.length > 0) {
+                            try {
+                              const u = new URL(s.effectIconUrls[0]);
+                              const marker = '/storage/v1/object/public/';
+                              const i = u.pathname.indexOf(marker);
+                              if (i >= 0) {
+                                u.pathname = u.pathname.substring(0, i) + marker + 'icons';
+                                return u.toString().replace(/\/+$/, '');
+                              }
+                            } catch {
+                              // ignore
+                            }
+                          }
+                        }
+                        return null;
+                      })();
+                    return (
+                  <>
+                    {(battle.playerActiveSkillSlots ?? [null, null, null, null]).map((slot, index) => {
+                      const color = slot && ELEMENT_SKILL_COLORS[slot.element as keyof typeof ELEMENT_SKILL_COLORS] ? ELEMENT_SKILL_COLORS[slot.element as keyof typeof ELEMENT_SKILL_COLORS] : undefined;
+                      const tooltip = slot ? buildSkillSlotTooltip(slot) : undefined;
+                      return (
+                        <button
+                          key={`skill-${index}`}
+                          type="button"
+                          className={`battle-skill-button ${color ? 'battle-skill-button--colored' : ''}`}
+                          style={color ? { ['--battle-skill-bg' as string]: color } : undefined}
+                          disabled={!slot}
+                          onClick={() => {
+                            if (slot) {
+                              onChooseSkill(index);
+                              setShowSkillPicker(false);
+                            }
+                          }}
+                      title={tooltip || undefined}
+                    >
+                      <SkillCellContent slot={slot} iconsBucketRoot={battleIconsRoot} />
+                    </button>
+                      );
+                    })}
+                  </>
+                    );
+                  })() )}
+              </>
+            )}
+
+            {!battle.canAdvanceNarration && battle.phase === 'result' && (
+              <button type="button" className="primary battle-screen__continue-button" onClick={onContinue}>
+                {battle.result === 'won'
+                  ? 'Continue After Victory'
+                  : battle.result === 'escaped'
+                    ? 'Continue After Escape'
+                    : 'Continue'}
+              </button>
+            )}
+          </div>
         </div>
       </section>
     </div>
@@ -1091,18 +1513,47 @@ interface BattleActivePanelProps {
   critter: BattleSnapshot['playerTeam'][number] | null;
   isAttacking: boolean;
   attackToken: number | null;
+  squadEntries?: BattleSnapshot['playerTeam'];
+  playerActiveIndex?: number | null;
+  canSelectSquad?: boolean;
+  onSelectSquadSlot?: (slotIndex: number) => void;
 }
 
-function BattleActivePanel({ title, position, critter, isAttacking, attackToken }: BattleActivePanelProps) {
+function BattleActivePanel({
+  title,
+  position,
+  critter,
+  isAttacking,
+  attackToken,
+  squadEntries = [],
+  playerActiveIndex = null,
+  canSelectSquad = false,
+  onSelectSquadSlot,
+}: BattleActivePanelProps) {
   const hpPercent = critter
     ? Math.max(0, Math.min(100, Math.round((Math.max(0, critter.currentHp) / Math.max(1, critter.maxHp)) * 100)))
     : 0;
   const attackStyle = {
     animationDelay: isAttacking && attackToken !== null ? `${attackToken % 2}ms` : undefined,
   } as CSSProperties;
+
+  const showSquadGrid = position === 'player' && squadEntries.length > 0 && canSelectSquad;
+
+  const effectIcons = critter?.activeEffectIconUrls ?? [];
+  const effectDescriptions = critter?.activeEffectDescriptions ?? [];
+
   return (
     <article className={`battle-critter battle-critter--${position}`}>
       <p className="battle-critter__title">{title}</p>
+      {effectIcons.length > 0 && (
+        <div className="battle-critter__effect-bubbles" aria-label="Active effects">
+          {effectIcons.map((url, i) => (
+            <span key={`${url}-${i}`} className="battle-critter__effect-bubble" title={effectDescriptions[i]?.trim() || undefined}>
+              <img src={url} alt="" className="battle-critter__effect-icon" loading="lazy" decoding="async" />
+            </span>
+          ))}
+        </div>
+      )}
       {critter ? (
         <>
           <div className="battle-critter__head">
@@ -1116,6 +1567,7 @@ function BattleActivePanel({ title, position, critter, isAttacking, attackToken 
               className={`battle-critter__sprite ${isAttacking ? 'is-attacking' : ''}`}
               style={attackStyle}
               loading="lazy"
+              decoding="async"
             />
           ) : (
             <div className={`battle-critter__sprite battle-critter__sprite--missing ${isAttacking ? 'is-attacking' : ''}`}>
@@ -1136,8 +1588,43 @@ function BattleActivePanel({ title, position, critter, isAttacking, attackToken 
             <span>SPD {critter.speed}</span>
           </div>
         </>
-      ) : (
-        <p className="battle-critter__empty">Waiting for active critter...</p>
+      ) : null}
+      {showSquadGrid && (
+        <div className="battle-critter__squad-grid-wrap">
+          <div className="battle-squad-grid" aria-label="Squad">
+            {squadEntries.map((entry, index) => {
+              const isActive = playerActiveIndex === index;
+              const disabled = !canSelectSquad || entry.fainted || entry.currentHp <= 0 || isActive;
+              const slotIndex = entry.slotIndex ?? index;
+              return (
+                <button
+                  key={`squad-cell-${slotIndex}`}
+                  type="button"
+                  className={`battle-squad-grid__cell ${isActive ? 'is-active' : ''} ${entry.fainted ? 'is-fainted' : ''}`}
+                  disabled={disabled}
+                  onClick={() => {
+                    if (entry.slotIndex !== null && onSelectSquadSlot) {
+                      onSelectSquadSlot(entry.slotIndex);
+                    }
+                  }}
+                  title={entry.name}
+                >
+                  {entry.spriteUrl ? (
+                    <img
+                      src={entry.spriteUrl}
+                      alt={entry.name}
+                      className="battle-squad-grid__sprite"
+                      loading="lazy"
+                      decoding="async"
+                    />
+                  ) : (
+                    <span className="battle-squad-grid__empty">?</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       )}
     </article>
   );
@@ -1151,6 +1638,8 @@ function formatMissionTypeLabel(mission: {
   knockoutElements?: string[];
   knockoutCritterIds?: number[];
   knockoutCritterNames?: string[];
+  storyFlagId?: string;
+  label?: string;
 }): string {
   if (mission.type === 'opposing_knockouts') {
     const knockoutCritterNames = Array.isArray(mission.knockoutCritterNames) ? mission.knockoutCritterNames : [];
@@ -1170,6 +1659,15 @@ function formatMissionTypeLabel(mission: {
         ? `Critter #${mission.ascendsFromCritterId}`
         : 'Critter';
     return `Ascends from ${sourceLabel} at Level ${mission.targetValue}`;
+  }
+  if (mission.type === 'story_flag') {
+    if (mission.label && mission.label.trim()) {
+      return mission.label.trim();
+    }
+    if (mission.storyFlagId && mission.storyFlagId.trim()) {
+      return `Story Flag: ${mission.storyFlagId.trim()}`;
+    }
+    return 'Story Flag';
   }
   return mission.type.replace(/_/g, ' ');
 }
@@ -1220,6 +1718,13 @@ function buildElementLogoUrl(element: string, spriteUrl: string, fallbackBucketR
     return null;
   }
   return `${bucketRoot}/${encodeURIComponent(`${element}-element.png`)}`;
+}
+
+function buildElementLogoUrlFromIconsBucket(element: string, iconsBucketRoot: string | null): string | null {
+  if (!iconsBucketRoot) {
+    return null;
+  }
+  return `${iconsBucketRoot}/${encodeURIComponent(`${element}-element.png`)}`;
 }
 
 async function toggleFullscreen(viewport: HTMLElement): Promise<void> {

@@ -33,16 +33,93 @@ export interface NpcSpriteConfig {
 }
 
 export interface NpcMovementDefinition {
-  type: 'static' | 'loop' | 'random';
+  // `loop` and `random` remain for legacy compatibility with older saved data.
+  type: 'static' | 'static-turning' | 'wander' | 'path' | 'loop' | 'random';
   pattern?: Direction[];
   stepIntervalMs?: number;
+  pathMode?: 'loop' | 'pingpong';
+  leashRadius?: number;
+}
+
+export interface NpcMovementGuardDefinition {
+  id?: string;
+  requiresFlag?: string;
+  hideIfFlag?: string;
+  x?: number;
+  y?: number;
+  minX?: number;
+  maxX?: number;
+  minY?: number;
+  maxY?: number;
+  dialogueSpeaker?: string;
+  dialogueLines?: string[];
+  setFlag?: string;
+  /** Set when player wins the guard battle; guard becomes inactive. Battle uses the NPC instance's battle team. */
+  defeatedFlag?: string;
+  /** After defeat, show this dialogue on interact instead of instance dialogue. */
+  postDuelDialogueSpeaker?: string;
+  postDuelDialogueLines?: string[];
+}
+
+export type NpcInteractionActionDefinition =
+  | {
+      type: 'dialogue';
+      speaker?: string;
+      lines: string[];
+      setFlag?: string;
+    }
+  | {
+      type: 'set_flag';
+      flag: string;
+    }
+  | {
+      type: 'move_to_player';
+    }
+  | {
+      type: 'move_path';
+      directions: Direction[];
+    }
+  | {
+      type: 'face_player';
+    }
+  | {
+      type: 'wait';
+      durationMs: number;
+    };
+
+export interface NpcStoryStateDefinition {
+  id?: string;
+  requiresFlag?: string;
+  firstInteractionSetFlag?: string;
+  firstInteractBattle?: boolean;
+  healer?: boolean;
+  mapId?: string;
+  position?: Vector2;
+  facing?: Direction;
+  dialogueId?: string;
+  dialogueLines?: string[];
+  dialogueSpeaker?: string;
+  dialogueSetFlag?: string;
+  battleTeamIds?: string[];
+  movement?: NpcMovementDefinition;
+  idleAnimation?: string;
+  moveAnimation?: string;
+  sprite?: NpcSpriteConfig;
+  movementGuards?: NpcMovementGuardDefinition[];
+  interactionScript?: NpcInteractionActionDefinition[];
 }
 
 export interface NpcDefinition {
   id: string;
   name: string;
   position: Vector2;
+  facing?: Direction;
   color: string;
+  requiresFlag?: string;
+  hideIfFlag?: string;
+  firstInteractionSetFlag?: string;
+  firstInteractBattle?: boolean;
+  healer?: boolean;
   dialogueId: string;
   dialogueLines?: string[];
   dialogueSpeaker?: string;
@@ -52,6 +129,9 @@ export interface NpcDefinition {
   idleAnimation?: string;
   moveAnimation?: string;
   sprite?: NpcSpriteConfig;
+  movementGuards?: NpcMovementGuardDefinition[];
+  storyStates?: NpcStoryStateDefinition[];
+  interactionScript?: NpcInteractionActionDefinition[];
 }
 
 export interface WarpDefinition {

@@ -598,6 +598,7 @@ function cloneNpc(npc: NpcDefinition): NpcDefinition {
   return {
     ...npc,
     position: { ...npc.position },
+    facing: npc.facing,
     dialogueLines: npc.dialogueLines ? [...npc.dialogueLines] : undefined,
     battleTeamIds: npc.battleTeamIds ? [...npc.battleTeamIds] : undefined,
     movement: npc.movement
@@ -606,8 +607,67 @@ function cloneNpc(npc: NpcDefinition): NpcDefinition {
           pattern: npc.movement.pattern ? [...npc.movement.pattern] : undefined,
         }
       : undefined,
+    movementGuards: npc.movementGuards
+      ? npc.movementGuards.map((guard) => ({
+          ...guard,
+          dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+          postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+        }))
+      : undefined,
+    interactionScript: npc.interactionScript ? npc.interactionScript.map((step) => ({ ...step })) : undefined,
     idleAnimation: npc.idleAnimation,
     moveAnimation: npc.moveAnimation,
+    storyStates: npc.storyStates
+      ? npc.storyStates.map((state) => ({
+          ...state,
+          position: state.position ? { ...state.position } : undefined,
+          dialogueLines: state.dialogueLines ? [...state.dialogueLines] : undefined,
+          battleTeamIds: state.battleTeamIds ? [...state.battleTeamIds] : undefined,
+          movement: state.movement
+            ? {
+                ...state.movement,
+                pattern: state.movement.pattern ? [...state.movement.pattern] : undefined,
+              }
+            : undefined,
+          movementGuards: state.movementGuards
+            ? state.movementGuards.map((guard) => ({
+                ...guard,
+                dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+                postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+              }))
+            : undefined,
+          interactionScript: state.interactionScript ? state.interactionScript.map((step) => ({ ...step })) : undefined,
+          sprite: state.sprite
+            ? {
+                ...state.sprite,
+                animationSets: state.sprite.animationSets
+                  ? Object.fromEntries(
+                      Object.entries(state.sprite.animationSets).map(([name, directions]) => [
+                        name,
+                        {
+                          up: directions?.up ? [...directions.up] : undefined,
+                          down: directions?.down ? [...directions.down] : undefined,
+                          left: directions?.left ? [...directions.left] : undefined,
+                          right: directions?.right ? [...directions.right] : undefined,
+                        },
+                      ]),
+                    )
+                  : undefined,
+                defaultIdleAnimation: state.sprite.defaultIdleAnimation,
+                defaultMoveAnimation: state.sprite.defaultMoveAnimation,
+                facingFrames: { ...state.sprite.facingFrames },
+                walkFrames: state.sprite.walkFrames
+                  ? {
+                      up: state.sprite.walkFrames.up ? [...state.sprite.walkFrames.up] : undefined,
+                      down: state.sprite.walkFrames.down ? [...state.sprite.walkFrames.down] : undefined,
+                      left: state.sprite.walkFrames.left ? [...state.sprite.walkFrames.left] : undefined,
+                      right: state.sprite.walkFrames.right ? [...state.sprite.walkFrames.right] : undefined,
+                    }
+                  : undefined,
+              }
+            : undefined,
+        }))
+      : undefined,
     sprite: npc.sprite
       ? {
         ...npc.sprite,
