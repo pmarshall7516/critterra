@@ -583,6 +583,116 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     atlasIndex: 6,
     ySortWithActors: false
   },
+  '': {
+    code: '',
+    label: 'Forest Tree Base ',
+    walkable: true,
+    color: '#3b9b7d',
+    accentColor: '#64b1c4',
+    height: 0,
+    atlasIndex: 1249,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'Forest Tree Base ',
+    walkable: true,
+    color: '#3b9b7e',
+    accentColor: '#64afc4',
+    height: 0,
+    atlasIndex: 1250,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'Forest Tree Middle ',
+    walkable: true,
+    color: '#3b9b80',
+    accentColor: '#64aec4',
+    height: 0,
+    atlasIndex: 1197,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'Forest Tree Middle ',
+    walkable: true,
+    color: '#3b9b82',
+    accentColor: '#64acc4',
+    height: 0,
+    atlasIndex: 1198,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'Forest Tree Top ',
+    walkable: true,
+    color: '#3b9b83',
+    accentColor: '#64aac4',
+    height: 0,
+    atlasIndex: 1145,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'Forest Tree Top ',
+    walkable: true,
+    color: '#3b9b85',
+    accentColor: '#64a9c4',
+    height: 0,
+    atlasIndex: 1146,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'Forest Tree Top Left ',
+    walkable: true,
+    color: '#3b9b86',
+    accentColor: '#64a7c4',
+    height: 0,
+    atlasIndex: 1145,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'Forest Tree Top Right ',
+    walkable: true,
+    color: '#3b9b88',
+    accentColor: '#64a6c4',
+    height: 0,
+    atlasIndex: 1146,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'Forest Tree Middle Left ',
+    walkable: true,
+    color: '#3b9b8a',
+    accentColor: '#64a4c4',
+    height: 0,
+    atlasIndex: 1197,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'Forest Tree Middle Right ',
+    walkable: true,
+    color: '#3b9b8b',
+    accentColor: '#64a2c4',
+    height: 0,
+    atlasIndex: 1198,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'Forest Tree Base Right ',
+    walkable: true,
+    color: '#3b9b8d',
+    accentColor: '#64a1c4',
+    height: 0,
+    atlasIndex: 1250,
+    ySortWithActors: true
+  },
   '': {
     code: '',
     label: 'grass ',
@@ -662,6 +772,16 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     height: 0,
     atlasIndex: 158,
     ySortWithActors: false
+  },
+  '': {
+    code: '',
+    label: 'Forest Tree Base Left ',
+    walkable: true,
+    color: '#3b9b9b',
+    accentColor: '#6492c4',
+    height: 0,
+    atlasIndex: 1249,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -5202,6 +5322,168 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
       {
         code: '',
         atlasIndex: 6,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-base-1',
+    name: 'Forest Tree Base',
+    primaryCode: '',
+    width: 2,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1249,
+        dx: 0,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 1250,
+        dx: 1,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-middle-1',
+    name: 'Forest Tree Middle',
+    primaryCode: '',
+    width: 2,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1197,
+        dx: 0,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 1198,
+        dx: 1,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-top-1',
+    name: 'Forest Tree Top',
+    primaryCode: '',
+    width: 2,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1145,
+        dx: 0,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 1146,
+        dx: 1,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-top-left-1',
+    name: 'Forest Tree Top Left',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1145,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-top-right-1',
+    name: 'Forest Tree Top Right',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1146,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-middle-left-1',
+    name: 'Forest Tree Middle Left',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1197,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-middle-right-1',
+    name: 'Forest Tree Middle Right',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1198,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-base-right-1',
+    name: 'Forest Tree Base Right',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1250,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-base-left-1',
+    name: 'Forest Tree Base Left',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1249,
         dx: 0,
         dy: 0
       }

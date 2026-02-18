@@ -1,5 +1,6 @@
 import { BLANK_TILE_CODE, FALLBACK_TILE_CODE, TILE_DEFINITIONS } from '@/game/world/tiles';
 import { sanitizeMapEncounterGroups } from '@/game/encounters/schema';
+import { NPC_LAYER_ORDER_ID } from '@/game/world/types';
 import type {
   TileCode,
   TileDefinition,
@@ -39,6 +40,9 @@ export function createMap(input: WorldMapInput, options?: CreateMapOptions): Wor
     .sort((left, right) => left.orderId - right.orderId);
   const compositeTiles = composeVisibleTiles(layers, width, height);
 
+  const cameraSize = sanitizeCameraSize(input.cameraSize);
+  const cameraPoint = sanitizeCameraPoint(input.cameraPoint, width, height);
+
   return {
     id: input.id,
     name: input.name,
@@ -50,7 +54,31 @@ export function createMap(input: WorldMapInput, options?: CreateMapOptions): Wor
     warps: input.warps ?? [],
     interactions: input.interactions ?? [],
     encounterGroups: sanitizeMapEncounterGroups(input.encounterGroups, width, height),
+    cameraSize,
+    cameraPoint,
   };
+}
+
+function sanitizeCameraSize(raw: WorldMapInput['cameraSize']): { widthTiles: number; heightTiles: number } {
+  if (raw && typeof raw.widthTiles === 'number' && typeof raw.heightTiles === 'number') {
+    const w = Math.max(1, Math.min(64, Math.floor(raw.widthTiles)));
+    const h = Math.max(1, Math.min(64, Math.floor(raw.heightTiles)));
+    return { widthTiles: w, heightTiles: h };
+  }
+  return { widthTiles: 19, heightTiles: 15 };
+}
+
+function sanitizeCameraPoint(
+  raw: WorldMapInput['cameraPoint'],
+  mapWidth: number,
+  mapHeight: number,
+): { x: number; y: number } | null {
+  if (!raw || typeof raw !== 'object' || typeof raw.x !== 'number' || typeof raw.y !== 'number') {
+    return null;
+  }
+  const x = Math.max(0, Math.min(mapWidth - 1, Math.floor(raw.x)));
+  const y = Math.max(0, Math.min(mapHeight - 1, Math.floor(raw.y)));
+  return { x, y };
 }
 
 function normalizeLayerInputs(input: WorldMapInput): WorldMapLayerInput[] {
@@ -62,6 +90,9 @@ function normalizeLayerInputs(input: WorldMapInput): WorldMapLayerInput[] {
     return [];
   }
 
+  const width = input.tiles[0].length;
+  const height = input.tiles.length;
+  const blankRow = BLANK_TILE_CODE.repeat(width);
   return [
     {
       id: 1,
@@ -69,6 +100,13 @@ function normalizeLayerInputs(input: WorldMapInput): WorldMapLayerInput[] {
       tiles: input.tiles,
       visible: true,
       collision: true,
+    },
+    {
+      id: NPC_LAYER_ORDER_ID,
+      name: 'NPC',
+      tiles: Array.from({ length: height }, () => blankRow),
+      visible: true,
+      collision: false,
     },
   ];
 }
@@ -334,6 +372,9 @@ function parseLayerOrderId(value: string | number | null | undefined): number | 
   }
   if (trimmed.toLowerCase() === 'base') {
     return 1;
+  }
+  if (trimmed.toLowerCase() === 'npc') {
+    return NPC_LAYER_ORDER_ID;
   }
   if (!/^\d+$/.test(trimmed)) {
     return null;

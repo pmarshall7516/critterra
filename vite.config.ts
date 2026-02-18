@@ -9,6 +9,16 @@ import { fileURLToPath, URL } from 'node:url';
 import bcrypt from 'bcryptjs';
 import { Pool, type PoolClient } from 'pg';
 
+interface CameraSizePayload {
+  widthTiles: number;
+  heightTiles: number;
+}
+
+interface CameraPointPayload {
+  x: number;
+  y: number;
+}
+
 interface EditableMapPayload {
   id: string;
   name: string;
@@ -18,6 +28,8 @@ interface EditableMapPayload {
   warps: unknown[];
   interactions: unknown[];
   encounterGroups: unknown[];
+  cameraSize?: CameraSizePayload;
+  cameraPoint?: CameraPointPayload | null;
 }
 
 interface EditableMapLayerPayload {
@@ -382,6 +394,9 @@ function parseLayerOrderId(value: unknown): number | null {
   if (trimmed.toLowerCase() === 'base') {
     return 1;
   }
+  if (trimmed.toLowerCase() === 'npc') {
+    return 2;
+  }
   if (!/^\d+$/.test(trimmed)) {
     return null;
   }
@@ -501,6 +516,19 @@ function parseEditableMapPayload(raw: SaveMapRequestPayload): EditableMapPayload
     }
   }
 
+  const cameraSize =
+    map.cameraSize &&
+    typeof map.cameraSize.widthTiles === 'number' &&
+    typeof map.cameraSize.heightTiles === 'number'
+      ? { widthTiles: map.cameraSize.widthTiles, heightTiles: map.cameraSize.heightTiles }
+      : undefined;
+  const cameraPoint =
+    map.cameraPoint &&
+    typeof map.cameraPoint.x === 'number' &&
+    typeof map.cameraPoint.y === 'number'
+      ? { x: map.cameraPoint.x, y: map.cameraPoint.y }
+      : undefined;
+
   return {
     id,
     name,
@@ -510,6 +538,8 @@ function parseEditableMapPayload(raw: SaveMapRequestPayload): EditableMapPayload
     warps: Array.isArray(map.warps) ? map.warps : [],
     interactions: Array.isArray(map.interactions) ? map.interactions : [],
     encounterGroups: parseMapEncounterGroups(map.encounterGroups, width, height),
+    cameraSize,
+    cameraPoint,
   };
 }
 
@@ -554,7 +584,14 @@ function parseMapLayers(rawLayers: unknown): EditableMapLayerPayload[] | null {
     const requestedLayerId = parsedLayerId ?? fallbackLayerId;
     const id = nextAvailableLayerOrderId(requestedLayerId, usedLayerIds);
     usedLayerIds.add(id);
-    const name = typeof layer.name === 'string' && layer.name.trim() ? layer.name : id === 1 ? 'Base' : `Layer ${id}`;
+    const name =
+      typeof layer.name === 'string' && layer.name.trim()
+        ? layer.name
+        : id === 1
+          ? 'Base'
+          : id === 2
+            ? 'NPC'
+            : `Layer ${id}`;
     const tiles = parseMapTiles(layer.tiles);
     if (!tiles) {
       throw new Error(`Layer "${id}" must include non-empty tiles.`);
@@ -2082,6 +2119,15 @@ function createSpawnMapPayload(): EditableMapPayload {
         collisionEdges: Array.from({ length: height }, () => emptyCollisionRow),
         visible: true,
         collision: true,
+      },
+      {
+        id: 2,
+        name: 'NPC',
+        tiles: Array.from({ length: height }, () => blankRow),
+        rotations: Array.from({ length: height }, () => emptyCollisionRow),
+        collisionEdges: Array.from({ length: height }, () => emptyCollisionRow),
+        visible: true,
+        collision: false,
       },
     ],
     npcs: [],

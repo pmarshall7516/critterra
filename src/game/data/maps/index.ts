@@ -8,8 +8,9 @@ import { portlockMap } from '@/game/data/maps/portlock';
 import { userHouseMap } from '@/game/data/maps/userHouse';
 import { uncleSHouseMap } from '@/game/data/maps/uncleSHouse';
 import { portlockTrailMap } from '@/game/data/maps/portlockTrail';
+import { darkForestMap } from '@/game/data/maps/darkForest';
 
-export const WORLD_MAPS: WorldMap[] = [playerHouseMap, starterTownMap, rivalHouseMap, portlockPondMap, spawnMap, portlockMap, userHouseMap, uncleSHouseMap, portlockTrailMap];
+export const WORLD_MAPS: WorldMap[] = [playerHouseMap, starterTownMap, rivalHouseMap, portlockPondMap, spawnMap, portlockMap, userHouseMap, uncleSHouseMap, portlockTrailMap, darkForestMap];
 
 export const WORLD_MAP_REGISTRY = WORLD_MAPS.reduce<Record<string, WorldMap>>(
   (registry, map) => {

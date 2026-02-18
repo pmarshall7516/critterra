@@ -189,14 +189,14 @@ export function EncounterTool() {
         ...current.entries,
         {
           critterId,
-          weightInput: '0.00',
+          weightInput: '0',
           minLevelInput: '1',
           maxLevelInput: String(maxLevel),
         },
       ],
     }));
     setError('');
-    setStatus(`Added critter #${critterId} with default weight 0.00 and level range 1-${maxLevel}.`);
+    setStatus(`Added critter #${critterId} with default weight 0 and level range 1-${maxLevel}.`);
   };
 
   const removeDraftEntry = (critterId: number) => {
@@ -498,7 +498,7 @@ function tableToDraft(table: EncounterTableDefinition): EncounterTableDraft {
     id: table.id,
     entries: table.entries.map((entry) => ({
       critterId: entry.critterId,
-      weightInput: entry.weight.toFixed(2),
+      weightInput: String(entry.weight),
       minLevelInput: typeof entry.minLevel === 'number' ? String(entry.minLevel) : '',
       maxLevelInput: typeof entry.maxLevel === 'number' ? String(entry.maxLevel) : '',
     })),
@@ -531,7 +531,7 @@ function parseDraft(draft: EncounterTableDraft): EncounterTableDefinition | null
       minLevel !== null && maxLevel !== null && minLevel > maxLevel ? maxLevel : minLevel;
     const normalizedMax =
       minLevel !== null && maxLevel !== null && minLevel > maxLevel ? minLevel : maxLevel;
-    const weight = Math.round(Math.max(0, Math.min(1, parsedWeight)) * 1000000) / 1000000;
+    const weight = Math.max(0, Math.min(1, parsedWeight));
     entries.push({
       critterId: entry.critterId,
       weight,

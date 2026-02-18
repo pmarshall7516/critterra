@@ -152,8 +152,9 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
 
     const resizeCanvas = () => {
       const rect = viewport.getBoundingClientRect();
-      const cameraWidth = DEFAULT_VIEWPORT.width;
-      const cameraHeight = DEFAULT_VIEWPORT.height;
+      const size = runtime.getViewportSize();
+      const cameraWidth = size.width;
+      const cameraHeight = size.height;
       const viewportScale = Math.min(rect.width / cameraWidth, rect.height / cameraHeight);
       const displayScale =
         viewportScale >= 1 ? Math.max(1, Math.floor(viewportScale)) : Math.max(0.5, viewportScale);
@@ -184,6 +185,14 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
       const shouldAutoAdvance = !menuOpenRef.current && currentTime >= manualStepUntilRef.current;
       if (shouldAutoAdvance) {
         runtime.update(delta);
+      }
+
+      const viewportSize = runtime.getViewportSize();
+      if (
+        renderSizeRef.current.width !== viewportSize.width ||
+        renderSizeRef.current.height !== viewportSize.height
+      ) {
+        resizeCanvas();
       }
 
       renderCurrentFrame();

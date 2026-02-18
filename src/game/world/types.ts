@@ -1,6 +1,11 @@
 import type { Direction, Vector2 } from '@/shared/types';
 import type { MapEncounterGroupDefinition } from '@/game/encounters/types';
 
+/** Layer order id for the Base (floor) layer. */
+export const BASE_LAYER_ORDER_ID = 1;
+/** Layer order id for the NPC layer; layers below this are floor (no y-sort). Layers at or above participate in y-ordered rendering with actors. */
+export const NPC_LAYER_ORDER_ID = 2;
+
 export type TileCode =
   string;
 
@@ -167,6 +172,18 @@ export interface WorldMapLayerInput {
   collision?: boolean;
 }
 
+/** Camera size in tile units (width/height of the viewport the player sees). */
+export interface CameraSize {
+  widthTiles: number;
+  heightTiles: number;
+}
+
+/** Optional point (tile coords) to center the camera on when no player (e.g. initial view / editor preview). */
+export interface CameraPoint {
+  x: number;
+  y: number;
+}
+
 export interface WorldMapInput {
   id: string;
   name: string;
@@ -176,6 +193,10 @@ export interface WorldMapInput {
   warps?: WarpDefinition[];
   interactions?: InteractionDefinition[];
   encounterGroups?: MapEncounterGroupDefinition[];
+  /** Viewport size in tiles. Defaults to 19×15 if omitted. */
+  cameraSize?: CameraSize;
+  /** Optional center point for camera (e.g. initial view before player moves). */
+  cameraPoint?: CameraPoint;
 }
 
 export interface WorldMapLayer {
@@ -200,4 +221,6 @@ export interface WorldMap {
   warps: WarpDefinition[];
   interactions: InteractionDefinition[];
   encounterGroups: MapEncounterGroupDefinition[];
+  cameraSize: CameraSize;
+  cameraPoint: CameraPoint | null;
 }

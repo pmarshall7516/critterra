@@ -2054,3 +2054,57 @@ Runtime movement gate
 
 Validation
 - `npm run build` passed.
+
+## 2026-02-18 (Camera implementation: per-map viewport, editor tools, boundary clamping, small-camera buffer)
+
+Per-map camera size and optional camera point; map editor tools to visualize and set them; runtime camera clamped to map bounds; when the camera is smaller than the reference viewport, canvas stays at reference size with a buffer around the game view.
+
+Data model
+- `src/game/world/types.ts`: Added `CameraSize` and `CameraPoint`; `WorldMapInput` and `WorldMap` now have `cameraSize` (default 19×15 tiles) and `cameraPoint` (optional center for initial/editor view).
+- `src/game/world/mapBuilder.ts`: `createMap` normalizes and defaults `cameraSize` / `cameraPoint`; `sanitizeCameraSize` and `sanitizeCameraPoint` ensure valid ranges.
+- `src/admin/mapEditorUtils.ts`: `EditableMap` includes `cameraSize` and `cameraPoint`; `createBlankEditableMap` and legacy parsing default to 19×15 and null; `toWorldMapInput` and `parseEditableMapJson` read/write camera fields.
+- Static map files under `src/game/data/maps/` and `scripts/migrate-game-maps-npc-layer.js` were updated earlier for the NPC layer; camera fields are applied via mapBuilder defaults when omitted.
+
+Map editor (admin/maps)
+- **Show camera** tool: Toggles a blue viewport rectangle (4px border) on the map canvas representing the player’s camera size; centered on Camera Point if set, else map center.
+- **Select Camera Point** tool: Click a cell to set the map’s camera point and center the blue rectangle there; other paint tools are deselected while this is active.
+- **Camera Size (tiles)**: Per-map width×height inputs (1–64); default 19×15. Stored on the map and used at runtime for canvas/viewport size.
+- **Camera Point**: Optional x,y tile coordinates plus Clear; used to center the camera view (e.g. initial view or editor preview).
+- Camera overlay is clamped so it never draws off the map: when the chosen camera point would push the view off an edge, the blue square is clamped against the map boundary (same behavior as in-game camera).
+
+Runtime (game)
+- **Camera clamping**: Camera position is clamped so the view never shows space outside the map. For maps larger than the view: `cameraX` in `[0, map.width - viewTilesX]`, `cameraY` in `[0, map.height - viewTilesY]`. Player can still move when the camera is at the edge; camera moves again when the player moves away from the border.
+- **Viewport size**: `GameRuntime.getViewportSize()` returns pixel dimensions from the current map’s `cameraSize`. `GameView` uses this to size the canvas (on init and when the map changes).
+- **Small-camera buffer**: When the map’s camera is smaller than the reference viewport (19×15 tiles), the canvas stays at the reference size. The game view is drawn centered with background `#101419` filling the rest (no zoom; tile size remains `TILE_SIZE`). Implemented via `REFERENCE_VIEWPORT_TILES` in runtime, `getViewportSize()` returning `max(reference, mapCameraSize)` per axis, and `render()` using `map.cameraSize` for logical viewport with translate + clip so the smaller view is centered.
+
+Vite / admin payload
+- `vite.config.ts`: `EditableMapPayload` and `parseEditableMapPayload` include `cameraSize` and `cameraPoint` so save/load and DB payloads preserve them.
+
+Validation
+- `npm run build` passed.
+
+## 2026-02-18 (Combat system: turn-based battle, skills, elements, guard, swap)
+
+Turn-based battle flow with phases, skill-based damage/support, element chart, guard action, squad swap (including forced swap on knockout), and narration-driven UI.
+
+Battle flow and phases
+- **Phases** (`BattlePhase`): `transition` (entry effect), `choose-starter` (pick first critter), `player-turn` (attack/guard/swap/retreat), `choose-swap` (swap after knockout or voluntarily), `result` (won/lost/escaped).
+- **Results** (`BattleResult`): `ongoing`, `won`, `lost`, `escaped`. Escape is available during player-turn and ends the battle.
+- **Turn order**: Player chooses action (skill, guard, swap, retreat). Opponent turn is resolved with skill selection and damage/heal; narration queue drives message and damage application so HP bars update in attack order. Knockouts trigger forced swap when applicable.
+
+Skills and damage
+- **Skill types**: Damage (power-based) and support (e.g. heal percent of max HP). Skills have element, optional effect IDs, and are defined in the skill catalog.
+- **Damage formula** (in `executeBattleSkillWithSkill`): Level term, attacker attack, defender defense (with modifiers), base power, element chart multiplier, same-type attack bonus (STAB 1.2), critical (2×, ~1.55% chance), guard multiplier (successful guard heavily reduces damage), and 0.85–1.15 variance. Final damage is floored and at least 1.
+- **Element chart**: `getElementChartMultiplier(attackerElement, defenderElement)` returns multipliers (e.g. super effective, not very effective, no effect). Narration includes “It’s super effective!”, “It’s not very effective…”, “It had no effect.”, and “Critical hit!” as appropriate.
+- **Skill effects**: Applied to attacker/defender via `applySkillEffectsToAttacker`; battle snapshot exposes `activeEffectIds`, `activeEffectIconUrls`, `activeEffectDescriptions` for UI.
+
+Guard and swap
+- **Guard**: Player can choose Guard during player-turn; success reduces incoming damage (guard multiplier 0.02 when successful). Consecutive successful guards can be tracked; guard state is part of battle critter state.
+- **Swap**: During player-turn the player can open the squad and choose another critter (or cancel). When the active critter faints, phase moves to `choose-swap` with `pendingForcedSwap` if the squad has another living critter; player must select a replacement. `canSwap`, `canCancelSwap`, and `requiresSwapSelection` drive the battle overlay UI.
+
+Battle UI and snapshot
+- **RuntimeBattleSnapshot**: Exposes phase, result, transition state, turn number, log line, player/opponent teams (with slot, stats, HP, fainted, active effects), active indices, and flags: `canAttack`, `canGuard`, `canSwap`, `canRetreat`, `canCancelSwap`, `canAdvanceNarration`, `playerActiveSkillSlots` (for Attack sub-menu), `requiresStarterSelection`, `requiresSwapSelection`.
+- **BattleOverlay** (GameView): Renders transition, battle field (player/opponent active panels with attack animation token), console log, and action buttons (Attack, Guard, Swap, Retreat) or skill list and swap/continue flows as dictated by phase and snapshot.
+
+Validation
+- Combat is exercised in-game via wild encounters and story/guard battles; build and runtime behavior verified.

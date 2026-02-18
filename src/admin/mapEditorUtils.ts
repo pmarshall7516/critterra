@@ -1,6 +1,7 @@
 import { BLANK_TILE_CODE, TILE_DEFINITIONS } from '@/game/world/tiles';
 import { sanitizeMapEncounterGroups } from '@/game/encounters/schema';
 import type { MapEncounterGroupDefinition } from '@/game/encounters/types';
+import { NPC_LAYER_ORDER_ID } from '@/game/world/types';
 import type {
   InteractionDefinition,
   NpcDefinition,
@@ -21,6 +22,10 @@ export interface EditableMapLayer {
   collision: boolean;
 }
 
+/** Default camera size in tiles (matches game default viewport). */
+const DEFAULT_CAMERA_WIDTH_TILES = 19;
+const DEFAULT_CAMERA_HEIGHT_TILES = 15;
+
 export interface EditableMap {
   id: string;
   name: string;
@@ -29,6 +34,10 @@ export interface EditableMap {
   warps: WarpDefinition[];
   interactions: InteractionDefinition[];
   encounterGroups: MapEncounterGroupDefinition[];
+  /** Viewport size in tiles. */
+  cameraSize: { widthTiles: number; heightTiles: number };
+  /** Optional center point for camera (editor preview / initial view). */
+  cameraPoint: { x: number; y: number } | null;
 }
 
 const KNOWN_TILE_CODE_SET = new Set(Object.keys(TILE_DEFINITIONS));
@@ -37,18 +46,42 @@ export type EditorTileCode = string;
 export function worldMapToEditable(map: WorldMap): EditableMap {
   const layers = map.layers?.length
     ? map.layers.map(worldLayerToEditable)
-    : [
-        {
-          id: '1',
-          name: 'Base',
-          tiles: map.tiles.map((row) => row.join('')),
-          rotations: map.tiles.map((row) => '0'.repeat(row.length)),
-          collisionEdges: map.tiles.map((row) => '0'.repeat(row.length)),
-          visible: true,
-          collision: true,
-        },
-      ];
+    : (() => {
+        const w = map.tiles[0]?.length ?? 0;
+        const h = map.tiles.length;
+        const blankRow = BLANK_TILE_CODE.repeat(w);
+        const blankRotationRow = '0'.repeat(w);
+        return [
+          {
+            id: '1',
+            name: 'Base',
+            tiles: map.tiles.map((row) => row.join('')),
+            rotations: map.tiles.map((row) => '0'.repeat(row.length)),
+            collisionEdges: map.tiles.map((row) => '0'.repeat(row.length)),
+            visible: true,
+            collision: true,
+          },
+          {
+            id: String(NPC_LAYER_ORDER_ID),
+            name: 'NPC',
+            tiles: Array.from({ length: h }, () => blankRow),
+            rotations: Array.from({ length: h }, () => blankRotationRow),
+            collisionEdges: Array.from({ length: h }, () => blankRotationRow),
+            visible: true,
+            collision: false,
+          },
+        ];
+      })();
   const normalizedLayers = normalizeEditableLayerIds(layers);
+
+  const cameraSize =
+    map.cameraSize && typeof map.cameraSize.widthTiles === 'number' && typeof map.cameraSize.heightTiles === 'number'
+      ? { widthTiles: map.cameraSize.widthTiles, heightTiles: map.cameraSize.heightTiles }
+      : { widthTiles: DEFAULT_CAMERA_WIDTH_TILES, heightTiles: DEFAULT_CAMERA_HEIGHT_TILES };
+  const cameraPoint =
+    map.cameraPoint && typeof map.cameraPoint.x === 'number' && typeof map.cameraPoint.y === 'number'
+      ? { x: map.cameraPoint.x, y: map.cameraPoint.y }
+      : null;
 
   return {
     id: map.id,
@@ -62,6 +95,8 @@ export function worldMapToEditable(map: WorldMap): EditableMap {
       lines: [...interaction.lines],
     })),
     encounterGroups: map.encounterGroups.map(cloneEncounterGroup),
+    cameraSize,
+    cameraPoint,
   };
 }
 
@@ -83,6 +118,8 @@ export function cloneEditableMap(map: EditableMap): EditableMap {
       lines: [...interaction.lines],
     })),
     encounterGroups: map.encounterGroups.map(cloneEncounterGroup),
+    cameraSize: map.cameraSize ? { ...map.cameraSize } : { widthTiles: DEFAULT_CAMERA_WIDTH_TILES, heightTiles: DEFAULT_CAMERA_HEIGHT_TILES },
+    cameraPoint: map.cameraPoint ? { ...map.cameraPoint } : null,
   };
 }
 
@@ -107,11 +144,20 @@ export function createBlankEditableMap(
         visible: true,
         collision: true,
       }),
+      createBlankLayer(safeWidth, safeHeight, {
+        id: String(NPC_LAYER_ORDER_ID),
+        name: 'NPC',
+        fillCode: BLANK_TILE_CODE,
+        visible: true,
+        collision: false,
+      }),
     ],
     npcs: [],
     warps: [],
     interactions: [],
     encounterGroups: [],
+    cameraSize: { widthTiles: DEFAULT_CAMERA_WIDTH_TILES, heightTiles: DEFAULT_CAMERA_HEIGHT_TILES },
+    cameraPoint: null,
   };
 }
 
@@ -419,6 +465,15 @@ export function parseEditableMapJson(raw: string): EditableMap {
     throw new Error('Map JSON must include "tiles" or non-empty "layers".');
   }
 
+  const cameraSize =
+    parsed.cameraSize && typeof parsed.cameraSize.widthTiles === 'number' && typeof parsed.cameraSize.heightTiles === 'number'
+      ? { widthTiles: parsed.cameraSize.widthTiles, heightTiles: parsed.cameraSize.heightTiles }
+      : { widthTiles: DEFAULT_CAMERA_WIDTH_TILES, heightTiles: DEFAULT_CAMERA_HEIGHT_TILES };
+  const cameraPoint =
+    parsed.cameraPoint && typeof parsed.cameraPoint.x === 'number' && typeof parsed.cameraPoint.y === 'number'
+      ? { x: parsed.cameraPoint.x, y: parsed.cameraPoint.y }
+      : null;
+
   return {
     id: parsed.id,
     name: parsed.name,
@@ -437,6 +492,8 @@ export function parseEditableMapJson(raw: string): EditableMap {
       layers[0]?.tiles[0]?.length ?? 0,
       layers[0]?.tiles.length ?? 0,
     ),
+    cameraSize,
+    cameraPoint,
   };
 }
 
@@ -494,6 +551,9 @@ export function parseLayerOrderId(value: string | number | null | undefined): nu
   }
   if (trimmed.toLowerCase() === 'base') {
     return 1;
+  }
+  if (trimmed.toLowerCase() === 'npc') {
+    return NPC_LAYER_ORDER_ID;
   }
   if (!/^\d+$/.test(trimmed)) {
     return null;
@@ -583,7 +643,9 @@ function worldLayerToEditable(layer: WorldMapLayer): EditableMapLayer {
   const layerOrderId = Number.isFinite(layer.orderId) ? Math.max(1, Math.floor(layer.orderId)) : 1;
   return {
     id: String(layerOrderId),
-    name: layer.name?.trim() || (layerOrderId === 1 ? 'Base' : `Layer ${layerOrderId}`),
+    name:
+      layer.name?.trim() ||
+      (layerOrderId === 1 ? 'Base' : layerOrderId === NPC_LAYER_ORDER_ID ? 'NPC' : `Layer ${layerOrderId}`),
     tiles: layer.tiles.map((row) => row.join('')),
     rotations: layer.rotations.map((row) => row.map((value) => String(sanitizeRotationQuarter(value))).join('')),
     collisionEdges: layer.collisionEdges.map((row) =>
@@ -742,6 +804,9 @@ function parseMapLayersFromInput(input: Partial<WorldMapInput>): EditableMapLaye
       }
     }
 
+    const height = input.tiles.length;
+    const blankRow = BLANK_TILE_CODE.repeat(width);
+    const blankRotationRow = '0'.repeat(width);
     return [
       {
         id: '1',
@@ -751,6 +816,15 @@ function parseMapLayersFromInput(input: Partial<WorldMapInput>): EditableMapLaye
         collisionEdges: input.tiles.map((row) => '0'.repeat(row.length)),
         visible: true,
         collision: true,
+      },
+      {
+        id: String(NPC_LAYER_ORDER_ID),
+        name: 'NPC',
+        tiles: Array.from({ length: height }, () => blankRow),
+        rotations: Array.from({ length: height }, () => blankRotationRow),
+        collisionEdges: Array.from({ length: height }, () => blankRotationRow),
+        visible: true,
+        collision: false,
       },
     ];
   }
@@ -799,7 +873,9 @@ function parseLayerInput(rawLayer: WorldMapLayerInput, index: number): EditableM
 
   return {
     id: layerId,
-    name: rawLayer.name?.trim() || (layerOrderId === 1 ? 'Base' : `Layer ${layerOrderId}`),
+    name:
+      rawLayer.name?.trim() ||
+      (layerOrderId === 1 ? 'Base' : layerOrderId === NPC_LAYER_ORDER_ID ? 'NPC' : `Layer ${layerOrderId}`),
     tiles,
     rotations,
     collisionEdges,
@@ -877,6 +953,13 @@ function toWorldMapInput(map: EditableMap): WorldMapInput {
     id: map.id,
     name: map.name,
   };
+
+  if (map.cameraSize) {
+    payload.cameraSize = { widthTiles: map.cameraSize.widthTiles, heightTiles: map.cameraSize.heightTiles };
+  }
+  if (map.cameraPoint) {
+    payload.cameraPoint = { x: map.cameraPoint.x, y: map.cameraPoint.y };
+  }
 
   if (map.npcs.length > 0) {
     payload.npcs = map.npcs;

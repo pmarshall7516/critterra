@@ -34,6 +34,7 @@ import {
   type NpcCharacterTemplateEntry,
   type NpcSpriteLibraryEntry,
 } from '@/game/world/npcCatalog';
+import { NPC_LAYER_ORDER_ID } from '@/game/world/types';
 import type {
   InteractionDefinition,
   NpcInteractionActionDefinition,
@@ -708,25 +709,57 @@ export class GameRuntime {
     this.maybeShowCritterAdvanceNotice();
   }
 
+  /** Reference viewport size in tiles; canvas never shrinks below this when map camera is smaller. */
+  private static readonly REFERENCE_VIEWPORT_TILES = { width: 19, height: 15 };
+
+  /** Viewport size in pixels for the current map (used by GameView to size the canvas). */
+  public getViewportSize(): { width: number; height: number } {
+    const map = this.getCurrentMap();
+    const mapW = map.cameraSize.widthTiles * TILE_SIZE;
+    const mapH = map.cameraSize.heightTiles * TILE_SIZE;
+    const refW = GameRuntime.REFERENCE_VIEWPORT_TILES.width * TILE_SIZE;
+    const refH = GameRuntime.REFERENCE_VIEWPORT_TILES.height * TILE_SIZE;
+    return {
+      width: Math.max(refW, mapW),
+      height: Math.max(refH, mapH),
+    };
+  }
+
   public render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
     const map = this.getCurrentMap();
     const mapNpcs = this.getNpcsForMap(map.id);
     const playerRenderPos = this.getPlayerRenderPosition();
 
-    const viewTilesX = width / TILE_SIZE;
-    const viewTilesY = height / TILE_SIZE;
+    const viewTilesX = map.cameraSize.widthTiles;
+    const viewTilesY = map.cameraSize.heightTiles;
+    const viewPixelW = viewTilesX * TILE_SIZE;
+    const viewPixelH = viewTilesY * TILE_SIZE;
 
-    const cameraX =
-      map.width <= viewTilesX
-        ? -(viewTilesX - map.width) / 2
-        : playerRenderPos.x - viewTilesX / 2;
-    const cameraY =
-      map.height <= viewTilesY
-        ? -(viewTilesY - map.height) / 2
-        : playerRenderPos.y - viewTilesY / 2;
+    let cameraX: number;
+    let cameraY: number;
+    if (map.width <= viewTilesX) {
+      cameraX = -(viewTilesX - map.width) / 2;
+    } else {
+      cameraX = playerRenderPos.x - viewTilesX / 2;
+      cameraX = Math.max(0, Math.min(map.width - viewTilesX, cameraX));
+    }
+    if (map.height <= viewTilesY) {
+      cameraY = -(viewTilesY - map.height) / 2;
+    } else {
+      cameraY = playerRenderPos.y - viewTilesY / 2;
+      cameraY = Math.max(0, Math.min(map.height - viewTilesY, cameraY));
+    }
 
     ctx.fillStyle = '#101419';
     ctx.fillRect(0, 0, width, height);
+
+    const offsetX = (width - viewPixelW) / 2;
+    const offsetY = (height - viewPixelH) / 2;
+    ctx.save();
+    ctx.translate(offsetX, offsetY);
+    ctx.beginPath();
+    ctx.rect(0, 0, viewPixelW, viewPixelH);
+    ctx.clip();
 
     const startX = Math.floor(cameraX) - 1;
     const endX = Math.ceil(cameraX + viewTilesX) + 1;
@@ -830,6 +863,8 @@ export class GameRuntime {
     for (const entry of depthDraws) {
       entry.draw();
     }
+
+    ctx.restore();
 
     if (this.transientMessage) {
       const messageText = this.transientMessage.text;
@@ -1664,13 +1699,17 @@ export class GameRuntime {
   }
 
   private shouldDepthSortTile(layerOrderId: number, tile: TileDefinition): boolean {
+    // Layers strictly below the NPC layer (Base and any other floor layers) never participate in y-ordered rendering.
+    if (layerOrderId < NPC_LAYER_ORDER_ID) {
+      return false;
+    }
     if (typeof tile.ySortWithActors === 'boolean') {
       return tile.ySortWithActors;
     }
-    if (layerOrderId > 1 && tile.height <= 0 && this.isFlatCoverTile(tile.label)) {
+    if (layerOrderId > NPC_LAYER_ORDER_ID && tile.height <= 0 && this.isFlatCoverTile(tile.label)) {
       return false;
     }
-    return layerOrderId > 1 || tile.height > 0;
+    return layerOrderId >= NPC_LAYER_ORDER_ID || tile.height > 0;
   }
 
   private isFlatCoverTile(label: string): boolean {

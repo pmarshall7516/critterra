@@ -66,7 +66,9 @@ type PaintTool =
   | 'mirror-horizontal'
   | 'mirror-vertical'
   | 'warp-from'
-  | 'warp-to';
+  | 'warp-to'
+  | 'camera-preview'
+  | 'camera-point';
 type EditorNpcMovementType = 'static' | 'static-turning' | 'wander' | 'path';
 type EdgeSide = 'top' | 'right' | 'bottom' | 'left';
 type CollisionPaintMode = 'add' | 'remove';
@@ -234,6 +236,7 @@ const DEFAULT_TILESET_INDEX: Record<BaseTileCode, number> = {
 };
 
 const MAX_EDITOR_DIMENSION = 128;
+const DEFAULT_CAMERA_TILES = { widthTiles: 19, heightTiles: 15 };
 const EMPTY_EDITABLE_MAP: EditableMap = {
   id: '',
   name: '',
@@ -242,6 +245,8 @@ const EMPTY_EDITABLE_MAP: EditableMap = {
   warps: [],
   interactions: [],
   encounterGroups: [],
+  cameraSize: DEFAULT_CAMERA_TILES,
+  cameraPoint: null,
 };
 
 export type MapEditorSection = 'full' | 'map' | 'tiles' | 'npcs' | 'npc-sprites' | 'npc-characters';
@@ -1702,6 +1707,15 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     options?: { appendSelection?: boolean; removeSelection?: boolean },
   ) => {
     if (!hasMapLoaded) {
+      return;
+    }
+
+    if (tool === 'camera-point') {
+      setEditableMap((current) => ({ ...cloneEditableMap(current), cameraPoint: { x, y } }));
+      setStatus(`Camera point set to (${x}, ${y}).`);
+      return;
+    }
+    if (tool === 'camera-preview') {
       return;
     }
 
@@ -4153,6 +4167,91 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                 />
               </label>
               <label>
+                Camera Size (tiles)
+                <span className="admin-inline-inputs">
+                  <input
+                    type="number"
+                    min={1}
+                    max={64}
+                    value={editableMap.cameraSize?.widthTiles ?? 19}
+                    disabled={!hasMapLoaded}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10);
+                      if (!Number.isFinite(n) || n < 1) return;
+                      setEditableMap((c) => ({
+                        ...cloneEditableMap(c),
+                        cameraSize: { widthTiles: Math.min(64, n), heightTiles: c.cameraSize?.heightTiles ?? 15 },
+                      }));
+                    }}
+                    title="Viewport width in tiles"
+                  />
+                  <span>×</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={64}
+                    value={editableMap.cameraSize?.heightTiles ?? 15}
+                    disabled={!hasMapLoaded}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10);
+                      if (!Number.isFinite(n) || n < 1) return;
+                      setEditableMap((c) => ({
+                        ...cloneEditableMap(c),
+                        cameraSize: { widthTiles: c.cameraSize?.widthTiles ?? 19, heightTiles: Math.min(64, n) },
+                      }));
+                    }}
+                    title="Viewport height in tiles"
+                  />
+                </span>
+              </label>
+              <label>
+                Camera Point
+                <span className="admin-inline-inputs">
+                  <input
+                    type="number"
+                    min={0}
+                    value={editableMap.cameraPoint != null ? editableMap.cameraPoint.x : ''}
+                    disabled={!hasMapLoaded}
+                    placeholder="x"
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10);
+                      setEditableMap((c) => ({
+                        ...cloneEditableMap(c),
+                        cameraPoint: c.cameraPoint
+                          ? { ...c.cameraPoint, x: Number.isFinite(n) ? Math.max(0, n) : 0 }
+                          : Number.isFinite(n) ? { x: Math.max(0, n), y: 0 } : null,
+                      }));
+                    }}
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    value={editableMap.cameraPoint != null ? editableMap.cameraPoint.y : ''}
+                    disabled={!hasMapLoaded}
+                    placeholder="y"
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10);
+                      setEditableMap((c) => ({
+                        ...cloneEditableMap(c),
+                        cameraPoint: c.cameraPoint
+                          ? { ...c.cameraPoint, y: Number.isFinite(n) ? Math.max(0, n) : 0 }
+                          : Number.isFinite(n) ? { x: 0, y: Math.max(0, n) } : null,
+                      }));
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={!hasMapLoaded || editableMap.cameraPoint == null}
+                    onClick={() =>
+                      setEditableMap((c) => ({ ...cloneEditableMap(c), cameraPoint: null }))
+                    }
+                  >
+                    Clear
+                  </button>
+                </span>
+              </label>
+              <label>
                 Active Layer
                 <select
                   value={activeLayer?.id ?? ''}
@@ -5863,6 +5962,28 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
             </div>
 
             <div className="admin-tool-group">
+              <h4>Camera</h4>
+              <div className="admin-row">
+                <button
+                  type="button"
+                  className={`secondary ${tool === 'camera-preview' ? 'is-selected' : ''}`}
+                  onClick={() => toggleTool('camera-preview')}
+                  title="Show red viewport rectangle"
+                >
+                  Show camera
+                </button>
+                <button
+                  type="button"
+                  className={`secondary ${tool === 'camera-point' ? 'is-selected' : ''}`}
+                  onClick={() => toggleTool('camera-point')}
+                  title="Click a cell to center the camera view there"
+                >
+                  Select Camera Point
+                </button>
+              </div>
+            </div>
+
+            <div className="admin-tool-group">
               <h4>Stamp Orientation</h4>
               <div className="admin-row">
                 <button type="button" className="secondary" onClick={removeSelectedPaintTile} disabled={!selectedPaintTile}>
@@ -6105,6 +6226,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                         </span>
                       ))}
                     </div>
+                    <div className="map-grid-with-overlay" style={{ position: 'relative' }}>
                     <div
                       className="map-grid"
                       style={{
@@ -6284,9 +6406,48 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                         }),
                       )}
                     </div>
+                    {(tool === 'camera-preview' || tool === 'camera-point') && (() => {
+                      const cam = editableMap.cameraSize ?? { widthTiles: 19, heightTiles: 15 };
+                      const cx = editableMap.cameraPoint != null
+                        ? editableMap.cameraPoint.x + 0.5
+                        : mapSize.width / 2;
+                      const cy = editableMap.cameraPoint != null
+                        ? editableMap.cameraPoint.y + 0.5
+                        : mapSize.height / 2;
+                      // Clamp so the camera box stays within map bounds (same as in-game: pushes against edges).
+                      const boxLeftTiles = Math.max(
+                        0,
+                        Math.min(mapSize.width - cam.widthTiles, cx - cam.widthTiles / 2),
+                      );
+                      const boxTopTiles = Math.max(
+                        0,
+                        Math.min(mapSize.height - cam.heightTiles, cy - cam.heightTiles / 2),
+                      );
+                      const left = boxLeftTiles * cellSize;
+                      const top = boxTopTiles * cellSize;
+                      const w = cam.widthTiles * cellSize;
+                      const h = cam.heightTiles * cellSize;
+                      return (
+                        <div
+                          className="map-camera-overlay"
+                          style={{
+                            position: 'absolute',
+                            left,
+                            top,
+                            width: w,
+                            height: h,
+                            border: '4px solid #2563eb',
+                            boxSizing: 'border-box',
+                            pointerEvents: 'none',
+                          }}
+                          aria-hidden
+                        />
+                      );
+                    })()}
                   </div>
                 </div>
               </div>
+            </div>
             ) : (
               <div className="tileset-grid__empty">No map loaded yet. Create, load, or import a map first.</div>
             )}
