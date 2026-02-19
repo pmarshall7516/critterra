@@ -7,9 +7,9 @@ export interface CustomTilesetConfig {
 }
 
 export const CUSTOM_TILESET_CONFIG: CustomTilesetConfig | null = {
-  url: '/example_assets/tileset/tileset.png',
-  tileWidth: 16,
-  tileHeight: 16
+  url: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+  tileWidth: 112,
+  tileHeight: 112
 };
 
 export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
@@ -493,16 +493,6 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     atlasIndex: 668,
     ySortWithActors: true
   },
-  '': {
-    code: '',
-    label: 'wall_bottom_left ',
-    walkable: true,
-    color: '#3b9b6e',
-    accentColor: '#64bfc4',
-    height: 0,
-    atlasIndex: 666,
-    ySortWithActors: true
-  },
   '': {
     code: '',
     label: 'wall_bottom ',
@@ -783,6 +773,16 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     atlasIndex: 1249,
     ySortWithActors: true
   },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#3b9a9b',
+    accentColor: '#6491c4',
+    height: 0,
+    atlasIndex: 0,
+    ySortWithActors: true
+  },
   '': {
     code: '',
     label: 'grass_path_bottom ',
@@ -802,6 +802,86 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     height: 0,
     atlasIndex: 156,
     ySortWithActors: false
+  },
+  '': {
+    code: '',
+    label: 'path ',
+    walkable: true,
+    color: '#3b959b',
+    accentColor: '#648cc4',
+    height: 0,
+    atlasIndex: 1,
+    ySortWithActors: false
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#3b939b',
+    accentColor: '#648ac4',
+    height: 0,
+    atlasIndex: 1,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#3b929b',
+    accentColor: '#6489c4',
+    height: 0,
+    atlasIndex: 2,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#3b909b',
+    accentColor: '#6487c4',
+    height: 0,
+    atlasIndex: 3,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#3b8e9b',
+    accentColor: '#6485c4',
+    height: 0,
+    atlasIndex: 4,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#3b8d9b',
+    accentColor: '#6484c4',
+    height: 0,
+    atlasIndex: 5,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#3b8b9b',
+    accentColor: '#6482c4',
+    height: 0,
+    atlasIndex: 6,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#3b8a9b',
+    accentColor: '#6481c4',
+    height: 0,
+    atlasIndex: 7,
+    ySortWithActors: true
   },
   '': {
     code: '',
@@ -1793,496 +1873,6 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     atlasIndex: 1081,
     ySortWithActors: true
   },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#8d3b9b',
-    accentColor: '#c464a1',
-    height: 0,
-    atlasIndex: 399,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#8e3b9b',
-    accentColor: '#c4649f',
-    height: 0,
-    atlasIndex: 400,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#903b9b',
-    accentColor: '#c4649e',
-    height: 0,
-    atlasIndex: 401,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#923b9b',
-    accentColor: '#c4649c',
-    height: 0,
-    atlasIndex: 402,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#933b9b',
-    accentColor: '#c4649a',
-    height: 0,
-    atlasIndex: 403,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#953b9b',
-    accentColor: '#c46499',
-    height: 0,
-    atlasIndex: 404,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#963b9b',
-    accentColor: '#c46497',
-    height: 0,
-    atlasIndex: 405,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#983b9b',
-    accentColor: '#c46496',
-    height: 0,
-    atlasIndex: 451,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9a3b9b',
-    accentColor: '#c46494',
-    height: 0,
-    atlasIndex: 452,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b9b',
-    accentColor: '#c46492',
-    height: 0,
-    atlasIndex: 453,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b9a',
-    accentColor: '#c46491',
-    height: 0,
-    atlasIndex: 454,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b98',
-    accentColor: '#c4648f',
-    height: 0,
-    atlasIndex: 455,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b96',
-    accentColor: '#c4648d',
-    height: 0,
-    atlasIndex: 456,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b95',
-    accentColor: '#c4648c',
-    height: 0,
-    atlasIndex: 457,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b93',
-    accentColor: '#c4648a',
-    height: 0,
-    atlasIndex: 503,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b92',
-    accentColor: '#c46489',
-    height: 0,
-    atlasIndex: 504,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b90',
-    accentColor: '#c46487',
-    height: 0,
-    atlasIndex: 505,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b8e',
-    accentColor: '#c46485',
-    height: 0,
-    atlasIndex: 506,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b8d',
-    accentColor: '#c46484',
-    height: 0,
-    atlasIndex: 507,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b8b',
-    accentColor: '#c46482',
-    height: 0,
-    atlasIndex: 508,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b8a',
-    accentColor: '#c46481',
-    height: 0,
-    atlasIndex: 509,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b88',
-    accentColor: '#c4647f',
-    height: 0,
-    atlasIndex: 555,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b86',
-    accentColor: '#c4647d',
-    height: 0,
-    atlasIndex: 556,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b85',
-    accentColor: '#c4647c',
-    height: 0,
-    atlasIndex: 557,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b83',
-    accentColor: '#c4647a',
-    height: 0,
-    atlasIndex: 558,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b82',
-    accentColor: '#c46479',
-    height: 0,
-    atlasIndex: 559,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b80',
-    accentColor: '#c46477',
-    height: 0,
-    atlasIndex: 560,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b7e',
-    accentColor: '#c46475',
-    height: 0,
-    atlasIndex: 561,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b7d',
-    accentColor: '#c46474',
-    height: 0,
-    atlasIndex: 607,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b7b',
-    accentColor: '#c46472',
-    height: 0,
-    atlasIndex: 608,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b7a',
-    accentColor: '#c46471',
-    height: 0,
-    atlasIndex: 609,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b78',
-    accentColor: '#c4646f',
-    height: 0,
-    atlasIndex: 610,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b76',
-    accentColor: '#c4646d',
-    height: 0,
-    atlasIndex: 611,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b75',
-    accentColor: '#c4646c',
-    height: 0,
-    atlasIndex: 612,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b73',
-    accentColor: '#c4646a',
-    height: 0,
-    atlasIndex: 613,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b72',
-    accentColor: '#c46469',
-    height: 0,
-    atlasIndex: 659,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b70',
-    accentColor: '#c46467',
-    height: 0,
-    atlasIndex: 660,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b6e',
-    accentColor: '#c46465',
-    height: 0,
-    atlasIndex: 661,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b6d',
-    accentColor: '#c46464',
-    height: 0,
-    atlasIndex: 662,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b6b',
-    accentColor: '#c46564',
-    height: 0,
-    atlasIndex: 663,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b69',
-    accentColor: '#c46764',
-    height: 0,
-    atlasIndex: 664,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b68',
-    accentColor: '#c46964',
-    height: 0,
-    atlasIndex: 665,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b66',
-    accentColor: '#c46a64',
-    height: 0,
-    atlasIndex: 711,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b65',
-    accentColor: '#c46c64',
-    height: 0,
-    atlasIndex: 712,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b63',
-    accentColor: '#c46d64',
-    height: 0,
-    atlasIndex: 713,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b61',
-    accentColor: '#c46f64',
-    height: 0,
-    atlasIndex: 714,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b60',
-    accentColor: '#c47164',
-    height: 0,
-    atlasIndex: 715,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b5e',
-    accentColor: '#c47264',
-    height: 0,
-    atlasIndex: 716,
-    ySortWithActors: true
-  },
-  '': {
-    code: '',
-    label: 'large_purple_house ',
-    walkable: true,
-    color: '#9b3b5d',
-    accentColor: '#c47464',
-    height: 0,
-    atlasIndex: 717,
-    ySortWithActors: true
-  },
   '': {
     code: '',
     label: 'small_shop ',
@@ -2922,6 +2512,296 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     height: 0,
     atlasIndex: 1253,
     ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#9b823b',
+    accentColor: '#acc464',
+    height: 0,
+    atlasIndex: 8,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#9b833b',
+    accentColor: '#aac464',
+    height: 0,
+    atlasIndex: 9,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#9b853b',
+    accentColor: '#a9c464',
+    height: 0,
+    atlasIndex: 10,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#9b863b',
+    accentColor: '#a7c464',
+    height: 0,
+    atlasIndex: 11,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#9b883b',
+    accentColor: '#a6c464',
+    height: 0,
+    atlasIndex: 12,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#9b8a3b',
+    accentColor: '#a4c464',
+    height: 0,
+    atlasIndex: 13,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#9b8b3b',
+    accentColor: '#a2c464',
+    height: 0,
+    atlasIndex: 14,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#9b8d3b',
+    accentColor: '#a1c464',
+    height: 0,
+    atlasIndex: 15,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#9b8e3b',
+    accentColor: '#9fc464',
+    height: 0,
+    atlasIndex: 16,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#9b903b',
+    accentColor: '#9ec464',
+    height: 0,
+    atlasIndex: 17,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#9b923b',
+    accentColor: '#9cc464',
+    height: 0,
+    atlasIndex: 18,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#9b933b',
+    accentColor: '#9ac464',
+    height: 0,
+    atlasIndex: 19,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#9b953b',
+    accentColor: '#99c464',
+    height: 0,
+    atlasIndex: 20,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#9b963b',
+    accentColor: '#97c464',
+    height: 0,
+    atlasIndex: 21,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'water4 ',
+    walkable: true,
+    color: '#9b983b',
+    accentColor: '#96c464',
+    height: 0,
+    atlasIndex: 10,
+    ySortWithActors: false
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#9b9a3b',
+    accentColor: '#94c464',
+    height: 0,
+    atlasIndex: 22,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#9b9b3b',
+    accentColor: '#92c464',
+    height: 0,
+    atlasIndex: 23,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#9a9b3b',
+    accentColor: '#91c464',
+    height: 0,
+    atlasIndex: 24,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#989b3b',
+    accentColor: '#8fc464',
+    height: 0,
+    atlasIndex: 25,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#969b3b',
+    accentColor: '#8dc464',
+    height: 0,
+    atlasIndex: 26,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#959b3b',
+    accentColor: '#8cc464',
+    height: 0,
+    atlasIndex: 27,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#939b3b',
+    accentColor: '#8ac464',
+    height: 0,
+    atlasIndex: 28,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#929b3b',
+    accentColor: '#89c464',
+    height: 0,
+    atlasIndex: 29,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#909b3b',
+    accentColor: '#87c464',
+    height: 0,
+    atlasIndex: 30,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#8e9b3b',
+    accentColor: '#85c464',
+    height: 0,
+    atlasIndex: 31,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#8d9b3b',
+    accentColor: '#84c464',
+    height: 0,
+    atlasIndex: 32,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#8b9b3b',
+    accentColor: '#82c464',
+    height: 0,
+    atlasIndex: 33,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#8a9b3b',
+    accentColor: '#81c464',
+    height: 0,
+    atlasIndex: 34,
+    ySortWithActors: true
+  },
+  '': {
+    code: '',
+    label: 'lodge ',
+    walkable: true,
+    color: '#889b3b',
+    accentColor: '#7fc464',
+    height: 0,
+    atlasIndex: 35,
+    ySortWithActors: true
   }
 };
 
@@ -2944,112 +2824,274 @@ export interface SavedPaintTileDatabaseEntry {
 
 export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
   {
-    id: 'grass-1',
-    name: 'grass',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
+    id: 'lodge-1',
+    name: 'lodge',
+    primaryCode: '',
+    width: 6,
+    height: 6,
+    ySortWithActors: true,
     cells: [
       {
-        code: '',
+        code: '',
         atlasIndex: 0,
         dx: 0,
         dy: 0
-      }
-    ]
-  },
-  {
-    id: 'sand-1',
-    name: 'sand',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
+      },
       {
-        code: '',
+        code: '',
         atlasIndex: 1,
-        dx: 0,
+        dx: 1,
         dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 2,
+        dx: 2,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 3,
+        dx: 3,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 4,
+        dx: 4,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 5,
+        dx: 5,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 6,
+        dx: 0,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 7,
+        dx: 1,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 8,
+        dx: 2,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 9,
+        dx: 3,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 10,
+        dx: 4,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 11,
+        dx: 5,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 12,
+        dx: 0,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 13,
+        dx: 1,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 14,
+        dx: 2,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 15,
+        dx: 3,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 16,
+        dx: 4,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 17,
+        dx: 5,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 18,
+        dx: 0,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 19,
+        dx: 1,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 20,
+        dx: 2,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 21,
+        dx: 3,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 22,
+        dx: 4,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 23,
+        dx: 5,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 24,
+        dx: 0,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 25,
+        dx: 1,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 26,
+        dx: 2,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 27,
+        dx: 3,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 28,
+        dx: 4,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 29,
+        dx: 5,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 30,
+        dx: 0,
+        dy: 5
+      },
+      {
+        code: '',
+        atlasIndex: 31,
+        dx: 1,
+        dy: 5
+      },
+      {
+        code: '',
+        atlasIndex: 32,
+        dx: 2,
+        dy: 5
+      },
+      {
+        code: '',
+        atlasIndex: 33,
+        dx: 3,
+        dy: 5
+      },
+      {
+        code: '',
+        atlasIndex: 34,
+        dx: 4,
+        dy: 5
+      },
+      {
+        code: '',
+        atlasIndex: 35,
+        dx: 5,
+        dy: 5
       }
     ]
   },
   {
-    id: 'snow-1',
-    name: 'snow',
-    primaryCode: '',
+    id: 'wall-bottom-1',
+    name: 'wall_bottom',
+    primaryCode: '',
     width: 1,
     height: 1,
     ySortWithActors: true,
     cells: [
       {
-        code: '',
-        atlasIndex: 2,
+        code: '',
+        atlasIndex: 667,
         dx: 0,
         dy: 0
       }
     ]
   },
   {
-    id: 'grass-path-top-left-1',
-    name: 'grass_path_top_left',
-    primaryCode: '',
+    id: 'wall-top-1',
+    name: 'wall_top',
+    primaryCode: '',
     width: 1,
     height: 1,
-    ySortWithActors: false,
+    ySortWithActors: true,
     cells: [
       {
-        code: '',
-        atlasIndex: 52,
+        code: '',
+        atlasIndex: 407,
         dx: 0,
         dy: 0
       }
     ]
   },
   {
-    id: 'grass-path-top-1',
-    name: 'grass_path_top',
-    primaryCode: '',
+    id: 'water4-1',
+    name: 'water4',
+    primaryCode: '',
     width: 1,
     height: 1,
     ySortWithActors: false,
     cells: [
       {
-        code: '',
-        atlasIndex: 53,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'grass-path-top-right-1',
-    name: 'grass_path_top_right',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 54,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'grass-path-right-1',
-    name: 'grass_path_right',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 106,
+        code: '',
+        atlasIndex: 10,
         dx: 0,
         dy: 0
       }
@@ -3072,22 +3114,6 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
-    id: 'grass-path-bottom-1',
-    name: 'grass_path_bottom',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 157,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
     id: 'grass-path-bottom-left-1',
     name: 'grass_path_bottom_left',
     primaryCode: '',
@@ -3104,16 +3130,110 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
-    id: 'grass-path-left-1',
-    name: 'grass_path_left',
-    primaryCode: '',
+    id: 'large-fern-1',
+    name: 'large_fern',
+    primaryCode: '',
+    width: 2,
+    height: 3,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 988,
+        dx: 0,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 989,
+        dx: 1,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 1040,
+        dx: 0,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 1041,
+        dx: 1,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 1092,
+        dx: 0,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 1093,
+        dx: 1,
+        dy: 2
+      }
+    ]
+  },
+  {
+    id: 'right-wall-1',
+    name: 'right_wall',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 616,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'chair-1',
+    name: 'chair',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 721,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'teal-tall-grass-1',
+    name: 'teal_tall_grass',
+    primaryCode: '',
     width: 1,
     height: 1,
     ySortWithActors: false,
     cells: [
       {
-        code: '',
-        atlasIndex: 104,
+        code: '',
+        atlasIndex: 5,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'grass-path-bottom-1',
+    name: 'grass_path_bottom',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 157,
         dx: 0,
         dy: 0
       }
@@ -3280,162 +3400,878 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
-    id: 'small-purple-house-1',
-    name: 'small_purple_house',
-    primaryCode: '',
-    width: 5,
-    height: 5,
+    id: 'beach-water-top-1',
+    name: 'beach_water_top',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 683,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'wood-floor-back-1',
+    name: 'wood_floor_back',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 563,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'left-wall-back-1',
+    name: 'left_wall_back',
+    primaryCode: '',
+    width: 1,
+    height: 1,
     ySortWithActors: true,
     cells: [
       {
-        code: '',
-        atlasIndex: 862,
+        code: '',
+        atlasIndex: 562,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'blue-wall-window-1',
+    name: 'blue_wall_window',
+    primaryCode: '',
+    width: 2,
+    height: 2,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 722,
         dx: 0,
         dy: 0
       },
       {
-        code: '',
-        atlasIndex: 863,
+        code: '',
+        atlasIndex: 723,
         dx: 1,
         dy: 0
       },
       {
-        code: '',
-        atlasIndex: 864,
-        dx: 2,
+        code: '',
+        atlasIndex: 774,
+        dx: 0,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 775,
+        dx: 1,
+        dy: 1
+      }
+    ]
+  },
+  {
+    id: 'water2-1',
+    name: 'water2',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 8,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'grass-yellow-flowers-1',
+    name: 'grass_yellow_flowers',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 999,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'large-forest-tree-1',
+    name: 'large_forest_tree',
+    primaryCode: '',
+    width: 2,
+    height: 3,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1145,
+        dx: 0,
         dy: 0
       },
       {
-        code: '',
-        atlasIndex: 865,
-        dx: 3,
+        code: '',
+        atlasIndex: 1146,
+        dx: 1,
         dy: 0
       },
       {
-        code: '',
-        atlasIndex: 866,
-        dx: 4,
+        code: '',
+        atlasIndex: 1197,
+        dx: 0,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 1198,
+        dx: 1,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 1249,
+        dx: 0,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 1250,
+        dx: 1,
+        dy: 2
+      }
+    ]
+  },
+  {
+    id: 'grass-3-blue-flower-1',
+    name: 'grass_3_blue_flower',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1102,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'beach-water-left-1',
+    name: 'beach_water_left',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 734,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'grass-blue-flowers-1',
+    name: 'grass_blue_flowers',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 998,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'small-fern-1',
+    name: 'small_fern',
+    primaryCode: '',
+    width: 1,
+    height: 2,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1144,
+        dx: 0,
         dy: 0
       },
       {
-        code: '',
-        atlasIndex: 914,
+        code: '',
+        atlasIndex: 1196,
+        dx: 0,
+        dy: 1
+      }
+    ]
+  },
+  {
+    id: 'large-teal-fern-1',
+    name: 'large_teal_fern',
+    primaryCode: '',
+    width: 2,
+    height: 3,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 990,
+        dx: 0,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 991,
+        dx: 1,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 1042,
         dx: 0,
         dy: 1
       },
       {
-        code: '',
-        atlasIndex: 915,
+        code: '',
+        atlasIndex: 1043,
         dx: 1,
         dy: 1
       },
       {
-        code: '',
-        atlasIndex: 916,
-        dx: 2,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 917,
-        dx: 3,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 918,
-        dx: 4,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 966,
+        code: '',
+        atlasIndex: 1094,
         dx: 0,
         dy: 2
       },
       {
-        code: '',
-        atlasIndex: 967,
+        code: '',
+        atlasIndex: 1095,
         dx: 1,
         dy: 2
-      },
+      }
+    ]
+  },
+  {
+    id: 'small-teal-fern-1',
+    name: 'small_teal_fern',
+    primaryCode: '',
+    width: 1,
+    height: 2,
+    ySortWithActors: true,
+    cells: [
       {
-        code: '',
-        atlasIndex: 968,
-        dx: 2,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 969,
-        dx: 3,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 970,
-        dx: 4,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 1018,
+        code: '',
+        atlasIndex: 1147,
         dx: 0,
-        dy: 3
+        dy: 0
       },
       {
-        code: '',
-        atlasIndex: 1019,
-        dx: 1,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 1020,
-        dx: 2,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 1021,
-        dx: 3,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 1022,
-        dx: 4,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 1070,
+        code: '',
+        atlasIndex: 1199,
         dx: 0,
-        dy: 4
+        dy: 1
+      }
+    ]
+  },
+  {
+    id: 'beach-water-right-1',
+    name: 'beach_water_right',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 736,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'beach-water-bottom-right-1',
+    name: 'beach_water_bottom_right',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 788,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'wood-floor-1',
+    name: 'wood_floor',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 615,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'back-wall-top-1',
+    name: 'back_wall_top',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 459,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'tall-grass-1',
+    name: 'tall_grass',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 3,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'rock3-1',
+    name: 'rock3',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 15,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'rock4-1',
+    name: 'rock4',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 17,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'grass-3-yellow-flower-1',
+    name: 'grass_3_yellow_flower',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1103,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'beach-water-top-left-1',
+    name: 'beach_water_top_left',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 682,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'beach-water-bottom-left-1',
+    name: 'beach_water_bottom_left',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 786,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'beach-corner-1',
+    name: 'beach_corner',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 635,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'left-wall-1',
+    name: 'left_wall',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 614,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'back-wall-bottom-1',
+    name: 'back_wall_bottom',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 511,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'water1-1',
+    name: 'water1',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 7,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'water3-1',
+    name: 'water3',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 9,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'ice-1',
+    name: 'ice',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 11,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'rock1-1',
+    name: 'rock1',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 12,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'rock2-1',
+    name: 'rock2',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 13,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'grass-red-flowers-1',
+    name: 'grass_red_flowers',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 997,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'beach-water-top-right-1',
+    name: 'beach_water_top_right',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 684,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'beach-water-bottom-1',
+    name: 'beach_water_bottom',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 787,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'grass-path-top-right-1',
+    name: 'grass_path_top_right',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 54,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'right-wall-back-1',
+    name: 'right_wall_back',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 564,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'white-chair-1',
+    name: 'white_chair',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 825,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-middle-left-1',
+    name: 'Forest Tree Middle Left',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1197,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-middle-right-1',
+    name: 'Forest Tree Middle Right',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1198,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-middle-1',
+    name: 'Forest Tree Middle',
+    primaryCode: '',
+    width: 2,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1197,
+        dx: 0,
+        dy: 0
       },
       {
-        code: '',
-        atlasIndex: 1071,
+        code: '',
+        atlasIndex: 1198,
         dx: 1,
-        dy: 4
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-top-1',
+    name: 'Forest Tree Top',
+    primaryCode: '',
+    width: 2,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1145,
+        dx: 0,
+        dy: 0
       },
       {
-        code: '',
-        atlasIndex: 1072,
-        dx: 2,
-        dy: 4
+        code: '',
+        atlasIndex: 1146,
+        dx: 1,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-top-left-1',
+    name: 'Forest Tree Top Left',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1145,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-top-right-1',
+    name: 'Forest Tree Top Right',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1146,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-base-right-1',
+    name: 'Forest Tree Base Right',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1250,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-base-left-1',
+    name: 'Forest Tree Base Left',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1249,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'sand-tall-grass-1',
+    name: 'sand_tall_grass',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 4,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'tall-grass2-1',
+    name: 'tall_grass2',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 6,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-base-1',
+    name: 'Forest Tree Base',
+    primaryCode: '',
+    width: 2,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1249,
+        dx: 0,
+        dy: 0
       },
       {
-        code: '',
-        atlasIndex: 1073,
-        dx: 3,
-        dy: 4
-      },
-      {
-        code: '',
-        atlasIndex: 1074,
-        dx: 4,
-        dy: 4
+        code: '',
+        atlasIndex: 1250,
+        dx: 1,
+        dy: 0
       }
     ]
   },
@@ -3744,306 +4580,392 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
-    id: 'large-purple-house-1',
-    name: 'large_purple_house',
-    primaryCode: '',
-    width: 7,
-    height: 7,
+    id: 'grass-path-left-1',
+    name: 'grass_path_left',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 104,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'small-purple-house-1',
+    name: 'small_purple_house',
+    primaryCode: '',
+    width: 5,
+    height: 5,
     ySortWithActors: true,
     cells: [
       {
-        code: '',
-        atlasIndex: 399,
+        code: '',
+        atlasIndex: 862,
         dx: 0,
         dy: 0
       },
       {
-        code: '',
-        atlasIndex: 400,
+        code: '',
+        atlasIndex: 863,
         dx: 1,
         dy: 0
       },
       {
-        code: '',
-        atlasIndex: 401,
+        code: '',
+        atlasIndex: 864,
         dx: 2,
         dy: 0
       },
       {
-        code: '',
-        atlasIndex: 402,
+        code: '',
+        atlasIndex: 865,
         dx: 3,
         dy: 0
       },
       {
-        code: '',
-        atlasIndex: 403,
+        code: '',
+        atlasIndex: 866,
         dx: 4,
         dy: 0
       },
       {
-        code: '',
-        atlasIndex: 404,
-        dx: 5,
+        code: '',
+        atlasIndex: 914,
+        dx: 0,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 915,
+        dx: 1,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 916,
+        dx: 2,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 917,
+        dx: 3,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 918,
+        dx: 4,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 966,
+        dx: 0,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 967,
+        dx: 1,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 968,
+        dx: 2,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 969,
+        dx: 3,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 970,
+        dx: 4,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 1018,
+        dx: 0,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 1019,
+        dx: 1,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 1020,
+        dx: 2,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 1021,
+        dx: 3,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 1022,
+        dx: 4,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 1070,
+        dx: 0,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 1071,
+        dx: 1,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 1072,
+        dx: 2,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 1073,
+        dx: 3,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 1074,
+        dx: 4,
+        dy: 4
+      }
+    ]
+  },
+  {
+    id: 'palm-tree1-1',
+    name: 'palm_tree1',
+    primaryCode: '',
+    width: 2,
+    height: 3,
+    ySortWithActors: true,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 994,
+        dx: 0,
         dy: 0
       },
       {
-        code: '',
-        atlasIndex: 405,
-        dx: 6,
+        code: '',
+        atlasIndex: 995,
+        dx: 1,
         dy: 0
       },
       {
-        code: '',
-        atlasIndex: 451,
+        code: '',
+        atlasIndex: 1046,
         dx: 0,
         dy: 1
       },
       {
-        code: '',
-        atlasIndex: 452,
+        code: '',
+        atlasIndex: 1047,
         dx: 1,
         dy: 1
       },
       {
-        code: '',
-        atlasIndex: 453,
-        dx: 2,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 454,
-        dx: 3,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 455,
-        dx: 4,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 456,
-        dx: 5,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 457,
-        dx: 6,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 503,
+        code: '',
+        atlasIndex: 1098,
         dx: 0,
         dy: 2
       },
       {
-        code: '',
-        atlasIndex: 504,
+        code: '',
+        atlasIndex: 1099,
         dx: 1,
         dy: 2
-      },
+      }
+    ]
+  },
+  {
+    id: 'table-1',
+    name: 'table',
+    primaryCode: '',
+    width: 2,
+    height: 2,
+    ySortWithActors: true,
+    cells: [
       {
-        code: '',
-        atlasIndex: 505,
-        dx: 2,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 506,
-        dx: 3,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 507,
-        dx: 4,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 508,
-        dx: 5,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 509,
-        dx: 6,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 555,
+        code: '',
+        atlasIndex: 718,
         dx: 0,
-        dy: 3
+        dy: 0
       },
       {
-        code: '',
-        atlasIndex: 556,
+        code: '',
+        atlasIndex: 719,
         dx: 1,
-        dy: 3
+        dy: 0
       },
       {
-        code: '',
-        atlasIndex: 557,
-        dx: 2,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 558,
-        dx: 3,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 559,
-        dx: 4,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 560,
-        dx: 5,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 561,
-        dx: 6,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 607,
+        code: '',
+        atlasIndex: 770,
         dx: 0,
-        dy: 4
+        dy: 1
       },
       {
-        code: '',
-        atlasIndex: 608,
+        code: '',
+        atlasIndex: 771,
         dx: 1,
-        dy: 4
-      },
+        dy: 1
+      }
+    ]
+  },
+  {
+    id: 'houseplant-1',
+    name: 'houseplant',
+    primaryCode: '',
+    width: 1,
+    height: 2,
+    ySortWithActors: true,
+    cells: [
       {
-        code: '',
-        atlasIndex: 609,
-        dx: 2,
-        dy: 4
-      },
-      {
-        code: '',
-        atlasIndex: 610,
-        dx: 3,
-        dy: 4
-      },
-      {
-        code: '',
-        atlasIndex: 611,
-        dx: 4,
-        dy: 4
-      },
-      {
-        code: '',
-        atlasIndex: 612,
-        dx: 5,
-        dy: 4
-      },
-      {
-        code: '',
-        atlasIndex: 613,
-        dx: 6,
-        dy: 4
-      },
-      {
-        code: '',
-        atlasIndex: 659,
+        code: '',
+        atlasIndex: 720,
         dx: 0,
-        dy: 5
+        dy: 0
       },
       {
-        code: '',
-        atlasIndex: 660,
-        dx: 1,
-        dy: 5
-      },
-      {
-        code: '',
-        atlasIndex: 661,
-        dx: 2,
-        dy: 5
-      },
-      {
-        code: '',
-        atlasIndex: 662,
-        dx: 3,
-        dy: 5
-      },
-      {
-        code: '',
-        atlasIndex: 663,
-        dx: 4,
-        dy: 5
-      },
-      {
-        code: '',
-        atlasIndex: 664,
-        dx: 5,
-        dy: 5
-      },
-      {
-        code: '',
-        atlasIndex: 665,
-        dx: 6,
-        dy: 5
-      },
-      {
-        code: '',
-        atlasIndex: 711,
+        code: '',
+        atlasIndex: 772,
         dx: 0,
-        dy: 6
-      },
+        dy: 1
+      }
+    ]
+  },
+  {
+    id: 'wall-top-left-1',
+    name: 'wall_top_left',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
       {
-        code: '',
-        atlasIndex: 712,
-        dx: 1,
-        dy: 6
-      },
+        code: '',
+        atlasIndex: 406,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'wall-top-right-1',
+    name: 'wall_top_right',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
       {
-        code: '',
-        atlasIndex: 713,
-        dx: 2,
-        dy: 6
-      },
+        code: '',
+        atlasIndex: 408,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'path-1',
+    name: 'path',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
       {
-        code: '',
-        atlasIndex: 714,
-        dx: 3,
-        dy: 6
-      },
+        code: '',
+        atlasIndex: 1,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'snow-1',
+    name: 'snow',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    cells: [
       {
-        code: '',
-        atlasIndex: 715,
-        dx: 4,
-        dy: 6
-      },
+        code: '',
+        atlasIndex: 2,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'grass-path-top-left-1',
+    name: 'grass_path_top_left',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
       {
-        code: '',
-        atlasIndex: 716,
-        dx: 5,
-        dy: 6
-      },
+        code: '',
+        atlasIndex: 52,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'grass-path-top-1',
+    name: 'grass_path_top',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
       {
-        code: '',
-        atlasIndex: 717,
-        dx: 6,
-        dy: 6
+        code: '',
+        atlasIndex: 53,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'grass-path-right-1',
+    name: 'grass_path_right',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 106,
+        dx: 0,
+        dy: 0
       }
     ]
   },
@@ -4208,456 +5130,6 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
-    id: 'water1-1',
-    name: 'water1',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 7,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'water2-1',
-    name: 'water2',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 8,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'water3-1',
-    name: 'water3',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 9,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'ice-1',
-    name: 'ice',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 11,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'rock1-1',
-    name: 'rock1',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 12,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'rock2-1',
-    name: 'rock2',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 13,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'rock3-1',
-    name: 'rock3',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 15,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'rock4-1',
-    name: 'rock4',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 17,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'grass-red-flowers-1',
-    name: 'grass_red_flowers',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 997,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'grass-blue-flowers-1',
-    name: 'grass_blue_flowers',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 998,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'grass-yellow-flowers-1',
-    name: 'grass_yellow_flowers',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 999,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'large-fern-1',
-    name: 'large_fern',
-    primaryCode: '',
-    width: 2,
-    height: 3,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 988,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 989,
-        dx: 1,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 1040,
-        dx: 0,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 1041,
-        dx: 1,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 1092,
-        dx: 0,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 1093,
-        dx: 1,
-        dy: 2
-      }
-    ]
-  },
-  {
-    id: 'small-fern-1',
-    name: 'small_fern',
-    primaryCode: '',
-    width: 1,
-    height: 2,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 1144,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 1196,
-        dx: 0,
-        dy: 1
-      }
-    ]
-  },
-  {
-    id: 'large-teal-fern-1',
-    name: 'large_teal_fern',
-    primaryCode: '',
-    width: 2,
-    height: 3,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 990,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 991,
-        dx: 1,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 1042,
-        dx: 0,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 1043,
-        dx: 1,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 1094,
-        dx: 0,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 1095,
-        dx: 1,
-        dy: 2
-      }
-    ]
-  },
-  {
-    id: 'small-teal-fern-1',
-    name: 'small_teal_fern',
-    primaryCode: '',
-    width: 1,
-    height: 2,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 1147,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 1199,
-        dx: 0,
-        dy: 1
-      }
-    ]
-  },
-  {
-    id: 'large-forest-tree-1',
-    name: 'large_forest_tree',
-    primaryCode: '',
-    width: 2,
-    height: 3,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 1145,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 1146,
-        dx: 1,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 1197,
-        dx: 0,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 1198,
-        dx: 1,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 1249,
-        dx: 0,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 1250,
-        dx: 1,
-        dy: 2
-      }
-    ]
-  },
-  {
-    id: 'large-teal-forest-tree-1',
-    name: 'large_teal_forest_tree',
-    primaryCode: '',
-    width: 2,
-    height: 3,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 1148,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 1149,
-        dx: 1,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 1200,
-        dx: 0,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 1201,
-        dx: 1,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 1252,
-        dx: 0,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 1253,
-        dx: 1,
-        dy: 2
-      }
-    ]
-  },
-  {
-    id: 'palm-tree1-1',
-    name: 'palm_tree1',
-    primaryCode: '',
-    width: 2,
-    height: 3,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 994,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 995,
-        dx: 1,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 1046,
-        dx: 0,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 1047,
-        dx: 1,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 1098,
-        dx: 0,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 1099,
-        dx: 1,
-        dy: 2
-      }
-    ]
-  },
-  {
     id: 'palm-tree2-1',
     name: 'palm_tree2',
     primaryCode: '',
@@ -4742,426 +5214,32 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
-    id: 'grass-3-blue-flower-1',
-    name: 'grass_3_blue_flower',
-    primaryCode: '',
+    id: 'grass-1',
+    name: 'grass',
+    primaryCode: '',
     width: 1,
     height: 1,
     ySortWithActors: false,
     cells: [
       {
-        code: '',
-        atlasIndex: 1102,
+        code: '',
+        atlasIndex: 0,
         dx: 0,
         dy: 0
       }
     ]
   },
   {
-    id: 'grass-3-yellow-flower-1',
-    name: 'grass_3_yellow_flower',
-    primaryCode: '',
+    id: 'sand-1',
+    name: 'sand',
+    primaryCode: '',
     width: 1,
     height: 1,
     ySortWithActors: false,
     cells: [
       {
-        code: '',
-        atlasIndex: 1103,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'beach-water-top-left-1',
-    name: 'beach_water_top_left',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 682,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'beach-water-top-1',
-    name: 'beach_water_top',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 683,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'beach-water-top-right-1',
-    name: 'beach_water_top_right',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 684,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'beach-water-right-1',
-    name: 'beach_water_right',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 736,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'beach-water-bottom-right-1',
-    name: 'beach_water_bottom_right',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 788,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'beach-water-bottom-1',
-    name: 'beach_water_bottom',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 787,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'beach-water-bottom-left-1',
-    name: 'beach_water_bottom_left',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 786,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'beach-water-left-1',
-    name: 'beach_water_left',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 734,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'beach-corner-1',
-    name: 'beach_corner',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 635,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'wood-floor-1',
-    name: 'wood_floor',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 615,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'wood-floor-back-1',
-    name: 'wood_floor_back',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 563,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'right-wall-1',
-    name: 'right_wall',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 616,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'right-wall-back-1',
-    name: 'right_wall_back',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 564,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'left-wall-1',
-    name: 'left_wall',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 614,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'left-wall-back-1',
-    name: 'left_wall_back',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 562,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'back-wall-bottom-1',
-    name: 'back_wall_bottom',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 511,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'back-wall-top-1',
-    name: 'back_wall_top',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 459,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'blue-wall-window-1',
-    name: 'blue_wall_window',
-    primaryCode: '',
-    width: 2,
-    height: 2,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 722,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 723,
-        dx: 1,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 774,
-        dx: 0,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 775,
-        dx: 1,
-        dy: 1
-      }
-    ]
-  },
-  {
-    id: 'table-1',
-    name: 'table',
-    primaryCode: '',
-    width: 2,
-    height: 2,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 718,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 719,
-        dx: 1,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 770,
-        dx: 0,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 771,
-        dx: 1,
-        dy: 1
-      }
-    ]
-  },
-  {
-    id: 'chair-1',
-    name: 'chair',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 721,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'houseplant-1',
-    name: 'houseplant',
-    primaryCode: '',
-    width: 1,
-    height: 2,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 720,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 772,
-        dx: 0,
-        dy: 1
-      }
-    ]
-  },
-  {
-    id: 'white-chair-1',
-    name: 'white_chair',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 825,
+        code: '',
+        atlasIndex: 1,
         dx: 0,
         dy: 0
       }
@@ -5184,308 +5262,48 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
-    id: 'wall-bottom-left-1',
-    name: 'wall_bottom_left',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 666,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'wall-bottom-1',
-    name: 'wall_bottom',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 667,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'wall-top-1',
-    name: 'wall_top',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 407,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'wall-top-left-1',
-    name: 'wall_top_left',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 406,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'wall-top-right-1',
-    name: 'wall_top_right',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 408,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'tall-grass-1',
-    name: 'tall_grass',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 3,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'sand-tall-grass-1',
-    name: 'sand_tall_grass',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 4,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'teal-tall-grass-1',
-    name: 'teal_tall_grass',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 5,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'tall-grass2-1',
-    name: 'tall_grass2',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 6,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'forest-tree-base-1',
-    name: 'Forest Tree Base',
-    primaryCode: '',
+    id: 'large-teal-forest-tree-1',
+    name: 'large_teal_forest_tree',
+    primaryCode: '',
     width: 2,
-    height: 1,
+    height: 3,
     ySortWithActors: true,
     cells: [
       {
-        code: '',
-        atlasIndex: 1249,
+        code: '',
+        atlasIndex: 1148,
         dx: 0,
         dy: 0
       },
       {
-        code: '',
-        atlasIndex: 1250,
+        code: '',
+        atlasIndex: 1149,
         dx: 1,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'forest-tree-middle-1',
-    name: 'Forest Tree Middle',
-    primaryCode: '',
-    width: 2,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 1197,
-        dx: 0,
         dy: 0
       },
       {
-        code: '',
-        atlasIndex: 1198,
-        dx: 1,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'forest-tree-top-1',
-    name: 'Forest Tree Top',
-    primaryCode: '',
-    width: 2,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 1145,
+        code: '',
+        atlasIndex: 1200,
         dx: 0,
-        dy: 0
+        dy: 1
       },
       {
-        code: '',
-        atlasIndex: 1146,
+        code: '',
+        atlasIndex: 1201,
         dx: 1,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'forest-tree-top-left-1',
-    name: 'Forest Tree Top Left',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
+        dy: 1
+      },
       {
-        code: '',
-        atlasIndex: 1145,
+        code: '',
+        atlasIndex: 1252,
         dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'forest-tree-top-right-1',
-    name: 'Forest Tree Top Right',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
+        dy: 2
+      },
       {
-        code: '',
-        atlasIndex: 1146,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'forest-tree-middle-left-1',
-    name: 'Forest Tree Middle Left',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 1197,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'forest-tree-middle-right-1',
-    name: 'Forest Tree Middle Right',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 1198,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'forest-tree-base-right-1',
-    name: 'Forest Tree Base Right',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 1250,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'forest-tree-base-left-1',
-    name: 'Forest Tree Base Left',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 1249,
-        dx: 0,
-        dy: 0
+        code: '',
+        atlasIndex: 1253,
+        dx: 1,
+        dy: 2
       }
     ]
   }

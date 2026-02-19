@@ -111,6 +111,14 @@ interface SavedPaintTileCell {
   dy: number;
 }
 
+interface TileRenderSource {
+  atlasIndex: number;
+  hasOwnTileset: boolean;
+  tilesetUrl: string | null;
+  columns: number;
+  rows: number;
+}
+
 interface SaveMapResponse {
   ok: boolean;
   error?: string;
@@ -708,15 +716,40 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     [selectedAtlasEndIndex, selectedAtlasStartIndex, atlasMeta.columns, atlasMeta.rows],
   );
 
-  const atlasIndexByCode = useMemo(() => {
-    const lookup = new Map<string, number>();
+  const tileRenderSourceByCode = useMemo(() => {
+    const lookup = new Map<EditorTileCode, TileRenderSource>();
     for (const tile of savedPaintTiles) {
+      const rawUrl = tile.tilesetUrl?.trim() ?? '';
+      const tilePixelWidth = tile.tilePixelWidth ?? 0;
+      const tilePixelHeight = tile.tilePixelHeight ?? 0;
+      const hasOwnTileset = rawUrl.length > 0 && tilePixelWidth > 0 && tilePixelHeight > 0;
+      let resolvedTilesetUrl: string | null = null;
+      let columns = 0;
+      let rows = 0;
+
+      if (hasOwnTileset) {
+        const dims = tilesetPreviewCacheRef.current[rawUrl];
+        if (dims && dims.width > 0 && dims.height > 0) {
+          columns = Math.floor(dims.width / tilePixelWidth);
+          rows = Math.floor(dims.height / tilePixelHeight);
+          if (columns > 0 && rows > 0) {
+            resolvedTilesetUrl = rawUrl;
+          }
+        }
+      }
+
       for (const cell of tile.cells) {
-        lookup.set(cell.code, cell.atlasIndex);
+        lookup.set(cell.code, {
+          atlasIndex: cell.atlasIndex,
+          hasOwnTileset,
+          tilesetUrl: resolvedTilesetUrl,
+          columns,
+          rows,
+        });
       }
     }
     return lookup;
-  }, [savedPaintTiles]);
+  }, [savedPaintTiles, tilesetPreviewCacheVersion]);
 
   const warpMarkersByCell = useMemo(() => {
     const markers = new Map<string, string[]>();
@@ -3931,11 +3964,37 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       return style;
     };
 
+    const tileRenderSource = tileRenderSourceByCode.get(code);
+    if (tileRenderSource?.hasOwnTileset) {
+      if (
+        tileRenderSource.tilesetUrl &&
+        tileRenderSource.columns > 0 &&
+        tileRenderSource.rows > 0
+      ) {
+        const safeIndex = clampInt(
+          tileRenderSource.atlasIndex,
+          0,
+          Math.max(0, tileRenderSource.columns * tileRenderSource.rows - 1),
+        );
+        const column = safeIndex % tileRenderSource.columns;
+        const row = Math.floor(safeIndex / tileRenderSource.columns);
+        return withRotation({
+          ...fallback,
+          backgroundImage: `url(${tileRenderSource.tilesetUrl})`,
+          backgroundRepeat: 'no-repeat',
+          backgroundSize: `${tileRenderSource.columns * size}px ${tileRenderSource.rows * size}px`,
+          backgroundPosition: `-${column * size}px -${row * size}px`,
+          imageRendering: 'pixelated',
+        });
+      }
+      return withRotation(fallback);
+    }
+
     if (!tilesetUrl || !atlasMeta.loaded || atlasMeta.columns <= 0 || atlasMeta.rows <= 0) {
       return withRotation(fallback);
     }
 
-    const tileIndex = atlasIndexByCode.get(code);
+    const tileIndex = tileRenderSource?.atlasIndex;
     if (tileIndex === undefined || !Number.isFinite(tileIndex) || tileIndex < 0) {
       return withRotation(fallback);
     }

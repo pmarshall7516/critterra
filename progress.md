@@ -2248,3 +2248,31 @@ User-reported regression reproduced after prior work:
 - Saving Tile Library now persists exactly the tiles present in the editor payload (replace behavior).
 - Loading tiles in admin now reads from database (with IndexedDB-only fallback on server failure), not project constants.
 - Tiles saved without explicit per-tile tileset metadata are assigned a valid persistent tileset config through fallback resolution, so map canvas and runtime can resolve the correct image + coordinates.
+
+## 2026-02-19 (Follow-up fix: maps canvas per-tile tileset rendering)
+
+User report:
+- In Admin `Tiles`, loading a different sheet (e.g. `throwaway.png`) then switching to Admin `Maps` caused map canvas tiles to render from the last loaded global tileset instead of each tile's saved `tile_url`/`tilesetUrl` metadata.
+
+Root cause:
+- `src/admin/MapEditorTool.tsx` map-cell style path (`tileCellStyle`) resolved tile art via global editor atlas state (`tilesetUrl` + `atlasMeta`) and `code -> atlasIndex` only.
+- It did not resolve `code -> owning saved tile -> owning tileset URL/dimensions` first.
+
+Fixes applied:
+- Added per-code render-source resolution in `src/admin/MapEditorTool.tsx`:
+  - New `TileRenderSource` model.
+  - New `tileRenderSourceByCode` memo keyed by tile code, carrying:
+    - `atlasIndex`
+    - `hasOwnTileset`
+    - resolved per-tile `tilesetUrl`
+    - computed per-tile atlas `columns/rows`.
+- Updated `tileCellStyle` draw priority:
+  1. If tile code belongs to a saved tile with its own tileset, render from that tileset atlas.
+  2. If that per-tile tileset is not yet resolvable, use color fallback (never wrong-sheet global atlas).
+  3. Only use global editor atlas fallback for tiles without per-tile tileset metadata.
+
+Validation:
+- `npm run build` passed.
+- Ran `node scripts/test-admin-tiles-playwright.js` while local dev server was running.
+  - Script completed and captured screenshots.
+  - Environment showed 401 unauthorized responses, so end-to-end authenticated visual confirmation on `/admin/maps` remains pending in a logged-in run.
