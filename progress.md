@@ -2108,3 +2108,143 @@ Battle UI and snapshot
 
 Validation
 - Combat is exercised in-game via wild encounters and story/guard battles; build and runtime behavior verified.
+## 2026-02-19 (Tile system corruption deep-dive, DB cleanup, server/client safeguards)
+
+Original prompt continuation: investigate and clean tile system corruption (focus `game_tiles`), fix tile atlas regressions, re-audit changed systems, and document everything thoroughly.
+
+### Full-system re-familiarization summary (tiles path)
+- Reviewed end-to-end tile data flow:
+  - Admin UI tile source merge / persistence: `src/admin/MapEditorTool.tsx`.
+  - Server admin tile endpoints and DB writes: `vite.config.ts` (`/api/admin/tiles/list`, `/api/admin/tiles/save`, `/api/admin/maps/save`).
+  - Runtime tile rendering (global + per-tile tilesets): `src/game/engine/runtime.ts`.
+  - Client bootstrap/storage for tile payloads: `src/game/content/worldContentStore.ts`.
+  - Project tile seed/source constants: `src/game/world/customTiles.ts`.
+  - Existing migration/verification scripts under `scripts/`.
+- Confirmed prior partial fixes already existed in `MapEditorTool.tsx` for atlas clamping and merge behavior, but server-side save path still had a regression that could keep `tileset_url` NULL on newly saved rows.
+
+### DB corruption findings (pre-fix)
+- Added and ran a read-only audit script:
+  - New file: `scripts/audit-game-tiles.mjs`.
+- Pre-fix audit results from live DB (`game_tiles`):
+  - 112 tile rows total.
+  - 358 total tile cells.
+  - 241 cells had `atlasIndex = 35`.
+  - 38 tile IDs contained atlas 35; several large stamps were fully flattened (e.g. 25/36/49-cell structures all set to 35).
+  - Legacy `tile_libraries` table no longer exists in DB (no legacy recovery source).
+  - Atlas-35 tiles had map usage count 0 in current `game_maps` payloads.
+
+### Code fixes applied
+- `src/admin/MapEditorTool.tsx`
+  - Improved server/local tile merge behavior to preserve local cells only when server cells are missing or look collapsed (multi-cell uniform atlas collapse), instead of always preserving based on tileset metadata.
+  - Added per-tile save-time atlas normalization for tiles with their own tileset metadata when image dimensions are known in preview cache, preventing invalid per-tileset atlas writes during persistence.
+- `vite.config.ts`
+  - Fixed `/api/admin/tiles/save` so tiles saved without explicit per-tile tileset now inherit incoming global tileset payload immediately on upsert.
+  - Removed faulty `id NOT IN savedTileIds` exclusion behavior that could leave just-saved rows with `tileset_url IS NULL`.
+  - Kept post-upsert backfill for any remaining legacy NULL tileset rows.
+- `scripts/test-admin-tiles-playwright.js`
+  - Added `STORY_MODE_HEADLESS` toggle (defaults headless true unless explicitly set false).
+  - Registered console error listener before workflow execution.
+  - Added additional saved-list screenshots after tileset switch and after reload.
+
+### Migration script rewrite + live cleanup
+- Replaced destructive cursor migration with a safe reconciliation workflow:
+  - Rewritten file: `scripts/migrate-game-tiles-clean.mjs`.
+  - Supports `--dry-run`, `--apply`, `--prune`, `--purge-unrecoverable`.
+  - Always creates timestamped backups in `docs/`.
+  - Loads project catalog from `src/game/world/customTiles.ts` (transpiled in-script).
+  - Reconciles recoverable IDs from project catalog and enforces Supabase tileset metadata.
+  - Computes unrecoverable rows not present in project and optionally purges only those with all-atlas-35 cells and zero map usage.
+
+Executed cleanup:
+- Ran dry-run with purge analysis:
+  - `node scripts/migrate-game-tiles-clean.mjs --dry-run --purge-unrecoverable`
+- Ran apply with purge:
+  - `node scripts/migrate-game-tiles-clean.mjs --apply --purge-unrecoverable`
+- Transaction result:
+  - Updated 17 recoverable corrupted IDs from project source.
+  - Purged 30 unrecoverable atlas-35 IDs that were unused by all current maps.
+  - Left non-project/non-corrupt DB rows intact.
+- Backup and clean snapshots generated under `docs/` (latest run timestamp `1771495303314`).
+
+### Post-migration DB verification
+- Re-ran audit summary after apply:
+  - `totalTiles: 82`
+  - `total_cells: 293`
+  - `atlas_35_cells: 0`
+  - `tilesContainingAtlas35: 0`
+  - `usedAtlas35Tiles: 0`
+- Conclusion: active atlas-35 corruption in `game_tiles` is fully removed.
+
+### Playwright verification
+- Dev server run + admin tile verification executed.
+- Script run:
+  - `STORY_MODE_URL=http://127.0.0.1:5173 STORY_MODE_HEADLESS=true node scripts/test-admin-tiles-playwright.js`
+- Produced screenshots:
+  - `output/admin-tiles-before-save.png`
+  - `output/admin-tiles-after-save.png`
+  - `output/admin-tiles-after-switch.png`
+  - `output/admin-tiles-saved-list-after-switch.png`
+  - `output/admin-tiles-after-reload.png`
+  - `output/admin-tiles-saved-list-after-reload.png`
+- Observed no console errors during script run.
+- Saved list reloaded successfully with `Loaded 82 saved paint tile(s) from tile database`.
+
+### Remaining caveat for next agent
+- The current preview-signature check in `scripts/test-admin-tiles-playwright.js` reported `Distinct preview sprite signatures: 0` because the selector used for computed-background extraction does not currently match the rendered preview node shape reliably. This is a test instrumentation issue, not a DB corruption signal (DB audit is authoritative and clean).
+
+## 2026-02-19 (Follow-up fix: DB-authoritative tile library save/load)
+
+User-reported regression reproduced after prior work:
+- `game_tiles` was back at 112 rows.
+- `atlasIndex=35` corruption still present (65 cells).
+- Removing tiles in Admin and clicking `Save Tile Library` did not persist as expected after refresh; rows reappeared.
+
+### Root causes identified
+1. **Client load path repopulated from project constants**
+   - `src/admin/MapEditorTool.tsx` merged `SAVED_PAINT_TILE_DATABASE` + IndexedDB + server rows.
+   - If merged set exceeded server set, it auto-called `persistSavedPaintTiles(loaded)`, re-inserting rows into DB.
+2. **Server save endpoint used upsert-only behavior**
+   - `/api/admin/tiles/save` in `vite.config.ts` upserted incoming rows but did not delete stale rows not in payload.
+   - Result: Save Tile Library could not reduce row count.
+
+### Fixes applied
+- `src/admin/MapEditorTool.tsx`
+  - `loadSavedPaintTilesFromDatabase` now treats DB payload as authoritative when server is reachable.
+  - Removed project-constant merge/auto-repersist path.
+  - Fallback path now uses IndexedDB only when server call fails.
+- `vite.config.ts`
+  - `/api/admin/tiles/save` now runs in a transaction.
+  - After upserts, it deletes DB rows not present in the incoming payload (`Save Tile Library` becomes replace semantics).
+  - Added fallback tileset resolution order for linking tiles to image metadata:
+    1) incoming `tileset` payload,
+    2) latest existing `game_tiles` tileset metadata,
+    3) env default (`CRITTERRA_DEFAULT_TILESET_*`) if present.
+  - Keeps post-save backfill for any remaining NULL `tileset_url` rows.
+- Added verification script:
+  - `scripts/test-tile-save-replace-playwright.mjs`
+  - Validates remove -> save -> refresh retains reduced DB count.
+
+### Database cleanup rerun
+- Re-ran:
+  - `node scripts/migrate-game-tiles-clean.mjs --dry-run --purge-unrecoverable`
+  - `node scripts/migrate-game-tiles-clean.mjs --apply --purge-unrecoverable`
+- Latest artifacts:
+  - backup: `docs/game-tiles-backup-1771496453882.json`
+  - clean snapshot: `docs/game-tiles-clean-state-1771496453882.json`
+
+### Verification evidence
+- End-to-end save/refresh behavior check:
+  - `node scripts/test-tile-save-replace-playwright.mjs`
+  - result: `{ "before": 81, "afterSave": 80, "afterReload": 80 }`
+  - Confirms rows do not bounce back after refresh.
+- Post-fix DB audit:
+  - `node scripts/audit-game-tiles.mjs`
+  - result highlights:
+    - `totalTiles: 80`
+    - `atlas_35_cells: 0`
+    - all rows include tileset metadata (`tileset_url`, `tile_pixel_width`, `tile_pixel_height`).
+
+### Current behavior guarantee
+- Saving Tile Library now persists exactly the tiles present in the editor payload (replace behavior).
+- Loading tiles in admin now reads from database (with IndexedDB-only fallback on server failure), not project constants.
+- Tiles saved without explicit per-tile tileset metadata are assigned a valid persistent tileset config through fallback resolution, so map canvas and runtime can resolve the correct image + coordinates.

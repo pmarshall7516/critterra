@@ -1,5 +1,4 @@
 import { CSSProperties, ChangeEvent, MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { SAVED_PAINT_TILE_DATABASE } from '@/game/world/customTiles';
 import {
   normalizeCoreStoryNpcCharacters,
   type NpcCharacterTemplateEntry,
@@ -99,6 +98,10 @@ interface SavedPaintTile {
   height: number;
   ySortWithActors: boolean;
   cells: SavedPaintTileCell[];
+  /** When set, this tile's preview and game rendering use this tileset image (e.g. Supabase URL). */
+  tilesetUrl?: string;
+  tilePixelWidth?: number;
+  tilePixelHeight?: number;
 }
 
 interface SavedPaintTileCell {
@@ -311,6 +314,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   const [selectedNpcCharacterId, setSelectedNpcCharacterId] = useState('');
   const [selectedMapNpcId, setSelectedMapNpcId] = useState('');
   const [selectedCharacterInstanceKey, setSelectedCharacterInstanceKey] = useState('');
+  const [showClearTilesConfirm, setShowClearTilesConfirm] = useState(false);
   const [npcCharacterLabelInput, setNpcCharacterLabelInput] = useState('');
   const [npcCharacterNameInput, setNpcCharacterNameInput] = useState('');
   const [npcCharacterColorInput, setNpcCharacterColorInput] = useState('#9b73b8');
@@ -434,6 +438,8 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
 
   const uploadedObjectUrlRef = useRef<string | null>(null);
   const hasAutoLoadedLibrariesRef = useRef(false);
+  const tilesetPreviewCacheRef = useRef<Record<string, { width: number; height: number }>>({});
+  const [tilesetPreviewCacheVersion, setTilesetPreviewCacheVersion] = useState(0);
 
   const isMapSection = section === 'map';
   const isTilesSection = section === 'tiles';
@@ -512,6 +518,14 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
 
     return ids;
   }, [editableMap.id, editableMap.warps, selectedWarp?.toMapId, sourceMapIds]);
+
+  const sortedSavedPaintTiles = useMemo(() => {
+    return [...savedPaintTiles].sort((a, b) => {
+      const nameA = (a.name || '').toLowerCase();
+      const nameB = (b.name || '').toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+  }, [savedPaintTiles]);
 
   const selectedPaintTile = useMemo(
     () => savedPaintTiles.find((tile) => tile.id === selectedPaintTileId) ?? null,
@@ -1091,14 +1105,16 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     const tilePixelWidth = parseInteger(tilePixelWidthInput);
     const tilePixelHeight = parseInteger(tilePixelHeightInput);
 
-    if (!tilesetUrl) {
+    if (!tilesetUrl || tilesetUrl.startsWith('blob:') || tilesetUrl.startsWith('http://localhost')) {
       setAtlasMeta({
         loaded: false,
         width: 0,
         height: 0,
         columns: 0,
         rows: 0,
-        error: null,
+        error: tilesetUrl && (tilesetUrl.startsWith('blob:') || tilesetUrl.startsWith('http://localhost'))
+          ? 'Use a Supabase tileset URL. Select an image from Supabase Tilesets below.'
+          : null,
       });
       return () => {
         cancelled = true;
@@ -1166,6 +1182,37 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       cancelled = true;
     };
   }, [tilePixelHeightInput, tilePixelWidthInput, tilesetUrl]);
+
+  useEffect(() => {
+    const urls = new Set<string>();
+    for (const tile of savedPaintTiles) {
+      if (
+        tile.tilesetUrl &&
+        tile.tilesetUrl.trim() &&
+        !tile.tilesetUrl.startsWith('blob:') &&
+        !tile.tilesetUrl.startsWith('http://localhost')
+      ) {
+        urls.add(tile.tilesetUrl.trim());
+      }
+    }
+    let pending = urls.size;
+    if (pending === 0) return;
+    const cache = tilesetPreviewCacheRef.current;
+    for (const url of urls) {
+      if (cache[url]) continue;
+      const img = new Image();
+      img.onload = () => {
+        cache[url] = { width: img.width, height: img.height };
+        pending -= 1;
+        if (pending <= 0) setTilesetPreviewCacheVersion((v) => v + 1);
+      };
+      img.onerror = () => {
+        pending -= 1;
+        if (pending <= 0) setTilesetPreviewCacheVersion((v) => v + 1);
+      };
+      img.src = url;
+    }
+  }, [savedPaintTiles]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1258,6 +1305,13 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     setSavedPaintTiles((current) => {
       let changed = false;
       const next = current.map((tile) => {
+        // CRITICAL: Don't clamp atlasIndex for tiles with their own tileset
+        // These tiles use a different tileset and their atlasIndex values are valid for that tileset
+        if (tile.tilesetUrl && tile.tilePixelWidth && tile.tilePixelHeight) {
+          return tile; // Keep original cells unchanged
+        }
+
+        // Only clamp tiles that use the global editor tileset
         const nextCells = tile.cells.map((cell) => ({
           ...cell,
           atlasIndex: clampInt(cell.atlasIndex, 0, atlasCellCount - 1),
@@ -1340,10 +1394,45 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
 
   const persistSavedPaintTiles = async (nextTiles: SavedPaintTile[]) => {
     try {
-      await setAdminDbValue(SAVED_PAINT_TILES_DB_KEY, nextTiles);
+      const normalizedTiles = nextTiles.map((tile) => {
+        const url = tile.tilesetUrl?.trim();
+        const tilePxW = tile.tilePixelWidth ?? 0;
+        const tilePxH = tile.tilePixelHeight ?? 0;
+        if (!url || tilePxW <= 0 || tilePxH <= 0) {
+          return tile;
+        }
+
+        const dims = tilesetPreviewCacheRef.current[url];
+        if (!dims) {
+          return tile;
+        }
+        const columns = Math.floor(dims.width / tilePxW);
+        const rows = Math.floor(dims.height / tilePxH);
+        if (columns <= 0 || rows <= 0) {
+          return tile;
+        }
+        const maxIndex = columns * rows - 1;
+        const nextCells = tile.cells.map((cell) => ({
+          ...cell,
+          atlasIndex: clampInt(cell.atlasIndex, 0, maxIndex),
+        }));
+        const changed = nextCells.some((cell, index) => cell.atlasIndex !== tile.cells[index].atlasIndex);
+        return changed
+          ? {
+              ...tile,
+              cells: nextCells,
+            }
+          : tile;
+      });
+
+      await setAdminDbValue(SAVED_PAINT_TILES_DB_KEY, normalizedTiles);
       const tilePixelWidth = parseInteger(tilePixelWidthInput);
       const tilePixelHeight = parseInteger(tilePixelHeightInput);
 
+      const useTilesetUrl =
+        tilesetUrl &&
+        !tilesetUrl.startsWith('blob:') &&
+        !tilesetUrl.startsWith('http://localhost');
       const result = await apiFetchJson<SaveTileDatabaseResponse>('/api/admin/tiles/save', {
         method: 'POST',
         headers: {
@@ -1351,9 +1440,9 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
         },
         body: JSON.stringify({
           map: editableMap,
-          savedPaintTiles: nextTiles,
+          savedPaintTiles: normalizedTiles,
           tileset:
-            tilesetUrl && tilePixelWidth && tilePixelHeight
+            useTilesetUrl && tilePixelWidth && tilePixelHeight
               ? {
                   url: tilesetUrl,
                   tilePixelWidth,
@@ -1433,32 +1522,32 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   };
 
   const loadSavedPaintTilesFromDatabase = async () => {
+    setErrorMessage(null);
+    let loadedFromIndexedDb: SavedPaintTile[] = [];
     try {
-      const raw = await getAdminDbValue<unknown>(SAVED_PAINT_TILES_DB_KEY);
-      const loadedFromIndexedDb = sanitizeSavedPaintTiles(raw);
-      const loadedFromProjectDb = sanitizeSavedPaintTiles(SAVED_PAINT_TILE_DATABASE as unknown);
+      try {
+        const raw = await getAdminDbValue<unknown>(SAVED_PAINT_TILES_DB_KEY);
+        loadedFromIndexedDb = sanitizeSavedPaintTiles(raw);
+      } catch {
+        loadedFromIndexedDb = [];
+      }
       const tilesResponse = await apiFetchJson<LoadTileLibraryResponse>('/api/admin/tiles/list');
       const loadedFromServer = sanitizeSavedPaintTiles(tilesResponse.data?.savedPaintTiles as unknown);
-      const mergedById = new Map<string, SavedPaintTile>();
-      for (const tile of loadedFromProjectDb) {
-        mergedById.set(tile.id, tile);
-      }
-      for (const tile of loadedFromServer) {
-        mergedById.set(tile.id, tile);
-      }
-      for (const tile of loadedFromIndexedDb) {
-        mergedById.set(tile.id, tile);
-      }
-      const loaded = Array.from(mergedById.values());
+      const loaded = loadedFromServer;
       setSavedPaintTiles(loaded);
-      await setAdminDbValue(SAVED_PAINT_TILES_DB_KEY, loaded);
+      try {
+        await setAdminDbValue(SAVED_PAINT_TILES_DB_KEY, loaded);
+      } catch {
+        // Non-fatal: tiles are already in state
+      }
       const first = loaded[0];
       setSelectedPaintTileId(first?.id ?? '');
       setSelectedTileCode(first?.primaryCode ?? '');
       const serverTileset = tilesResponse.data?.tileset;
-      if (serverTileset?.url && typeof serverTileset.url === 'string') {
-        setTilesetUrlInput(serverTileset.url);
-        setTilesetUrl(serverTileset.url);
+      const serverUrl = serverTileset?.url && typeof serverTileset.url === 'string' ? serverTileset.url.trim() : '';
+      if (serverUrl && !serverUrl.startsWith('blob:') && !serverUrl.startsWith('http://localhost')) {
+        setTilesetUrlInput(serverUrl);
+        setTilesetUrl(serverUrl);
       }
       if (typeof serverTileset?.tilePixelWidth === 'number' && serverTileset.tilePixelWidth > 0) {
         setTilePixelWidthInput(String(serverTileset.tilePixelWidth));
@@ -1466,16 +1555,24 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       if (typeof serverTileset?.tilePixelHeight === 'number' && serverTileset.tilePixelHeight > 0) {
         setTilePixelHeightInput(String(serverTileset.tilePixelHeight));
       }
-      if (loaded.length > loadedFromServer.length) {
-        void persistSavedPaintTiles(loaded);
-      }
       setStatus(
         loaded.length > 0
           ? `Loaded ${loaded.length} saved paint tile(s) from tile database.`
           : 'No saved paint tiles found in tile database.',
       );
     } catch {
-      setError('Unable to load saved paint tiles from tile database.');
+      const fallback = loadedFromIndexedDb;
+      setSavedPaintTiles(fallback);
+      if (fallback.length > 0) {
+        const first = fallback[0];
+        setSelectedPaintTileId(first?.id ?? '');
+        setSelectedTileCode(first?.primaryCode ?? '');
+        setStatus(`Loaded ${fallback.length} tile(s) from IndexedDB (server unavailable).`);
+      } else {
+        setSelectedPaintTileId('');
+        setSelectedTileCode('');
+      }
+      setError('Unable to load saved paint tiles from database.');
     }
   };
 
@@ -2467,8 +2564,13 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   };
 
   const applyTilesetUrl = () => {
-    if (!tilesetUrlInput.trim()) {
+    const url = tilesetUrlInput.trim();
+    if (!url) {
       setError('Tileset URL cannot be empty.');
+      return;
+    }
+    if (url.startsWith('blob:') || url.startsWith('http://localhost')) {
+      setError('Use a persistent URL (e.g. Supabase bucket). Select an image from Supabase Tilesets below.');
       return;
     }
     if (!parseInteger(tilePixelWidthInput) || !parseInteger(tilePixelHeightInput)) {
@@ -2476,33 +2578,12 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       return;
     }
 
-    setTilesetUrl(tilesetUrlInput.trim());
+    setTilesetUrl(url);
     setStatus('Tileset URL applied.');
   };
 
   const loadExampleTileset = () => {
-    setError('No bundled example tileset is available. Upload a tileset file instead.');
-  };
-
-  const onTilesetFileSelected = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) {
-      return;
-    }
-    void (async () => {
-      try {
-        const dataUrl = await fileToDataUrl(file);
-        if (uploadedObjectUrlRef.current) {
-          URL.revokeObjectURL(uploadedObjectUrlRef.current);
-          uploadedObjectUrlRef.current = null;
-        }
-        setTilesetUrlInput(dataUrl);
-        setTilesetUrl(dataUrl);
-        setStatus(`Loaded and applied tileset file ${file.name} (persisted URL).`);
-      } catch {
-        setError(`Unable to load tileset file ${file.name}.`);
-      }
-    })();
+    setError('Use Supabase Tilesets below to select a tileset image from your bucket.');
   };
 
   const autoGeneratePaintTiles = () => {
@@ -2512,7 +2593,13 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     }
 
     const maxIndex = Math.max(0, atlasCellCount - 1);
-    const generated = createAutoPaintTiles(maxIndex);
+    const base = createAutoPaintTiles(maxIndex);
+    const tilePxW = parseInteger(tilePixelWidthInput);
+    const tilePxH = parseInteger(tilePixelHeightInput);
+    const generated =
+      tilesetUrl && tilePxW && tilePxH
+        ? base.map((t) => ({ ...t, tilesetUrl, tilePixelWidth: tilePxW, tilePixelHeight: tilePxH }))
+        : base;
     setSavedPaintTiles(generated);
     void persistSavedPaintTiles(generated);
 
@@ -2576,6 +2663,8 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
 
     const safeName =
       manualPaintTileName.trim() || `Custom Tile ${selectedAtlasRect.width}x${selectedAtlasRect.height}`;
+    const tilePxW = parseInteger(tilePixelWidthInput);
+    const tilePxH = parseInteger(tilePixelHeightInput);
     const next: SavedPaintTile = {
       id: makeSavedPaintTileId(safeName, savedPaintTiles),
       name: safeName,
@@ -2584,6 +2673,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       height: selectedAtlasRect.height,
       ySortWithActors: inferTileYSortWithActors(safeName, selectedAtlasRect.width, selectedAtlasRect.height),
       cells,
+      ...(tilesetUrl && tilePxW && tilePxH && { tilesetUrl, tilePixelWidth: tilePxW, tilePixelHeight: tilePxH }),
     };
 
     const updatedSavedTiles = [...savedPaintTiles, next];
@@ -3756,6 +3846,39 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     };
   };
 
+  /** Preview style for one cell of a saved tile. Always uses the tile's own tileset when present; never the editor's current atlas. */
+  const getTileCellPreviewStyle = (tile: SavedPaintTile, cell: SavedPaintTileCell, size: number): CSSProperties => {
+    const url = tile.tilesetUrl?.trim();
+    const tw = tile.tilePixelWidth ?? 0;
+    const th = tile.tilePixelHeight ?? 0;
+    if (url && tw > 0 && th > 0) {
+      const dims = tilesetPreviewCacheRef.current[url];
+      if (dims && dims.width > 0 && dims.height > 0) {
+        const columns = Math.floor(dims.width / tw);
+        const rows = Math.floor(dims.height / th);
+        if (columns > 0 && rows > 0) {
+          const safeIndex = clampInt(cell.atlasIndex, 0, columns * rows - 1);
+          const column = safeIndex % columns;
+          const row = Math.floor(safeIndex / columns);
+          return {
+            backgroundImage: `url(${url})`,
+            backgroundRepeat: 'no-repeat',
+            backgroundSize: `${columns * size}px ${rows * size}px`,
+            backgroundPosition: `-${column * size}px -${row * size}px`,
+            imageRendering: 'pixelated',
+          };
+        }
+      }
+      // Tile has its own tileset but cache not ready yet: show placeholder so we never use the wrong atlas
+      return {
+        backgroundColor: '#1d2731',
+        boxShadow: 'inset 0 0 0 1px rgba(255, 255, 255, 0.1)',
+      };
+    }
+    // Only use editor's current atlas when this tile has no saved tileset (e.g. legacy or new from current atlas)
+    return atlasCellStyle(cell.atlasIndex, size);
+  };
+
   const npcAtlasCellStyle = (atlasIndex: number, size: number): CSSProperties => {
     if (!npcSpriteUrl || !npcSpriteMeta.loaded || npcSpriteMeta.columns <= 0 || npcSpriteMeta.rows <= 0) {
       return {
@@ -4427,10 +4550,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                   onChange={(event) => setTilePixelHeightInput(event.target.value)}
                 />
               </label>
-              <label>
-                Load from File
-                <input type="file" accept="image/*" onChange={onTilesetFileSelected} />
-              </label>
+              <p className="admin-note">Use Supabase Tilesets below to select a tileset image (no local file or blob URLs).</p>
             </div>
             <h4>Supabase Tilesets</h4>
             <div className="admin-grid-2">
@@ -4506,8 +4626,23 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
               <button type="button" className="secondary" onClick={loadSavedPaintTilesFromDatabase}>
                 Load Saved Tiles
               </button>
+              <button
+                type="button"
+                className="primary"
+                onClick={() => persistSavedPaintTiles(savedPaintTiles)}
+                disabled={savedPaintTiles.length === 0}
+              >
+                Save Tile Library
+              </button>
               <button type="button" className="secondary" onClick={clearSavedPaintTiles} disabled={savedPaintTiles.length === 0}>
                 Clear Saved Tiles
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setShowClearTilesConfirm(true)}
+              >
+                Clear Database Tiles
               </button>
             </div>
             <p className="admin-note">
@@ -4587,55 +4722,181 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
             <h4>Saved Paint Tiles</h4>
             <p className="admin-note">Rename, select, or remove saved tiles. New tiles persist to IndexedDB.</p>
             <div className="saved-paint-list">
-              {savedPaintTiles.length === 0 && <p className="admin-note">No saved paint tiles yet.</p>}
-              {savedPaintTiles.map((tile) => (
-                <div key={tile.id} className={`saved-paint-row ${selectedPaintTileId === tile.id ? 'is-selected' : ''}`}>
-                  <button type="button" className="secondary" onClick={() => selectPaintTile(tile.id)}>
-                    Use
-                  </button>
-                  <div
-                    className="saved-paint-row__preview-grid"
-                    style={{ gridTemplateColumns: `repeat(${tile.width}, 18px)` }}
-                  >
-                    {tile.cells.map((cell) => (
-                      <span
-                        key={`${tile.id}-${cell.dx}-${cell.dy}`}
-                        className="saved-paint-row__preview"
-                        style={atlasCellStyle(cell.atlasIndex, 18)}
-                      />
-                    ))}
-                  </div>
-                  <input
-                    value={tile.name}
-                    onChange={(event) =>
-                      updateSavedPaintTile(tile.id, (current) => ({
-                        ...current,
-                        name: event.target.value,
+              {sortedSavedPaintTiles.length === 0 && <p className="admin-note">No saved paint tiles yet.</p>}
+              {sortedSavedPaintTiles.map((tile) => {
+                const currentTilesetUrl = tile.tilesetUrl?.trim() || '';
+                const availableTilesets = [
+                  ...(tilesetSupabaseAssets.length > 0
+                    ? tilesetSupabaseAssets.map((asset) => ({
+                        url: asset.publicUrl,
+                        label: asset.path,
+                        isCurrent: asset.publicUrl === currentTilesetUrl,
                       }))
-                    }
-                  />
-                  <label>
-                    Y-Sort With Actors
+                    : currentTilesetUrl
+                      ? [{ url: currentTilesetUrl, label: currentTilesetUrl, isCurrent: true }]
+                      : []),
+                  ...(tilesetUrl && tilesetUrl.trim() && !tilesetUrl.startsWith('blob:') && tilesetUrl !== currentTilesetUrl
+                    ? [{ url: tilesetUrl, label: 'Current Editor Tileset', isCurrent: false }]
+                    : []),
+                ];
+                const uniqueTilesets = Array.from(
+                  new Map(availableTilesets.map((t) => [t.url, t])).values(),
+                );
+                return (
+                  <div key={tile.id} className={`saved-paint-row ${selectedPaintTileId === tile.id ? 'is-selected' : ''}`}>
+                    <button type="button" className="secondary" onClick={() => selectPaintTile(tile.id)}>
+                      Use
+                    </button>
+                    <div
+                      className="saved-paint-row__preview-grid"
+                      style={{ gridTemplateColumns: `repeat(${tile.width}, 18px)` }}
+                    >
+                      {tile.cells.map((cell) => (
+                        <span
+                          key={`${tile.id}-${cell.dx}-${cell.dy}`}
+                          className="saved-paint-row__preview"
+                          style={getTileCellPreviewStyle(tile, cell, 18)}
+                        />
+                      ))}
+                    </div>
                     <input
-                      type="checkbox"
-                      checked={tile.ySortWithActors}
+                      value={tile.name}
                       onChange={(event) =>
                         updateSavedPaintTile(tile.id, (current) => ({
                           ...current,
-                          ySortWithActors: event.target.checked,
+                          name: event.target.value,
                         }))
                       }
                     />
-                  </label>
-                  <span className="saved-paint-row__meta">
-                    {tile.width}x{tile.height} | {tile.cells.length} codes | {tile.ySortWithActors ? 'Y-sort' : 'Flat'}
-                  </span>
-                  <button type="button" className="secondary" onClick={() => removePaintTile(tile.id)}>
-                    Remove
-                  </button>
-                </div>
-              ))}
+                    <label>
+                      Tileset
+                      <select
+                        value={currentTilesetUrl}
+                        onChange={(event) => {
+                          const newUrl = event.target.value.trim();
+                          const tilePxW = parseInteger(tilePixelWidthInput) || tile.tilePixelWidth || 16;
+                          const tilePxH = parseInteger(tilePixelHeightInput) || tile.tilePixelHeight || 16;
+                          updateSavedPaintTile(tile.id, (current) => ({
+                            ...current,
+                            tilesetUrl: newUrl || undefined,
+                            tilePixelWidth: newUrl ? tilePxW : undefined,
+                            tilePixelHeight: newUrl ? tilePxH : undefined,
+                          }));
+                        }}
+                      >
+                        <option value="">Use Editor Tileset</option>
+                        {uniqueTilesets.map((ts) => (
+                          <option key={ts.url} value={ts.url}>
+                            {ts.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Y-Sort With Actors
+                      <input
+                        type="checkbox"
+                        checked={tile.ySortWithActors}
+                        onChange={(event) =>
+                          updateSavedPaintTile(tile.id, (current) => ({
+                            ...current,
+                            ySortWithActors: event.target.checked,
+                          }))
+                        }
+                      />
+                    </label>
+                    <details className="saved-paint-row__cells-editor">
+                      <summary>Edit Cell Coordinates ({tile.cells.length} cells)</summary>
+                      <div className="saved-paint-row__cells-list">
+                        {tile.cells.map((cell, cellIdx) => (
+                          <div key={`${tile.id}-cell-${cellIdx}`} className="saved-paint-row__cell-editor">
+                            <span className="saved-paint-row__cell-preview" style={getTileCellPreviewStyle(tile, cell, 24)} />
+                            <label>
+                              Code: {cell.code}
+                              <input
+                                type="number"
+                                min={0}
+                                value={cell.atlasIndex}
+                                onChange={(event) => {
+                                  const newIndex = Math.max(0, Math.floor(Number(event.target.value) || 0));
+                                  updateSavedPaintTile(tile.id, (current) => ({
+                                    ...current,
+                                    cells: current.cells.map((c, idx) =>
+                                      idx === cellIdx ? { ...c, atlasIndex: newIndex } : c,
+                                    ),
+                                  }));
+                                }}
+                              />
+                            </label>
+                            <span className="saved-paint-row__cell-meta">
+                              dx: {cell.dx}, dy: {cell.dy}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                    <span className="saved-paint-row__meta">
+                      {tile.width}x{tile.height} | {tile.cells.length} codes | {tile.ySortWithActors ? 'Y-sort' : 'Flat'}
+                      {currentTilesetUrl && (
+                        <>
+                          {' | '}
+                          <span title={currentTilesetUrl}>Custom Tileset</span>
+                        </>
+                      )}
+                    </span>
+                    <button type="button" className="secondary" onClick={() => removePaintTile(tile.id)}>
+                      Remove
+                    </button>
+                  </div>
+                );
+              })}
             </div>
+
+            {showClearTilesConfirm && (
+              <div className="controls-modal__backdrop" onClick={() => setShowClearTilesConfirm(false)}>
+                <div className="controls-modal" onClick={(event) => event.stopPropagation()}>
+                  <h2>Clear All Database Tiles</h2>
+                  <p style={{ color: '#ffb3b3', fontWeight: 600 }}>
+                    ⚠️ Warning: This will DELETE ALL tiles from the database.
+                  </p>
+                  <p>This action cannot be undone. All saved tiles will be permanently removed.</p>
+                  <div className="admin-row" style={{ marginTop: '1rem', gap: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={async () => {
+                        try {
+                          const result = await apiFetchJson<{ ok: boolean; deletedCount?: number }>('/api/admin/tiles/clear', {
+                            method: 'POST',
+                          });
+                          if (!result.ok) {
+                            throw new Error(result.error ?? 'Failed to clear tiles from database.');
+                          }
+                          setSavedPaintTiles([]);
+                          setSelectedPaintTileId('');
+                          setSelectedTileCode('');
+                          setShowClearTilesConfirm(false);
+                          setStatus(`Cleared ${result.data?.deletedCount ?? 0} tile(s) from database.`);
+                        } catch (error) {
+                          const message = error instanceof Error ? error.message : 'Unable to clear tiles from database.';
+                          setError(message);
+                          setShowClearTilesConfirm(false);
+                        }
+                      }}
+                    >
+                      Confirm Delete
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => setShowClearTilesConfirm(false)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
           )}
 
@@ -6146,10 +6407,10 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
             )}
 
             <div className="paint-tile-grid">
-              {savedPaintTiles.length === 0 && (
+              {sortedSavedPaintTiles.length === 0 && (
                 <p className="admin-note">No saved paint tiles. Use auto mode or save from the tileset grid.</p>
               )}
-              {savedPaintTiles.map((tile) => {
+              {sortedSavedPaintTiles.map((tile) => {
                 return (
                   <button
                     key={tile.id}
@@ -6168,7 +6429,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                         <span
                           key={`${tile.id}-${cell.dx}-${cell.dy}`}
                           className="paint-tile__preview"
-                          style={atlasCellStyle(cell.atlasIndex, 12)}
+                          style={getTileCellPreviewStyle(tile, cell, 12)}
                         />
                       ))}
                     </span>
@@ -7678,6 +7939,9 @@ function sanitizeSavedPaintTile(raw: unknown): SavedPaintTile | null {
     cells?: unknown;
     code?: unknown;
     atlasIndex?: unknown;
+    tilesetUrl?: unknown;
+    tilePixelWidth?: unknown;
+    tilePixelHeight?: unknown;
   };
 
   const id = typeof record.id === 'string' && record.id.trim() ? record.id : `tile-${Date.now()}`;
@@ -7720,6 +7984,10 @@ function sanitizeSavedPaintTile(raw: unknown): SavedPaintTile | null {
         ? record.ySortWithActors
         : inferTileYSortWithActors(name, width, height);
 
+    const tilesetUrl = typeof record.tilesetUrl === 'string' && record.tilesetUrl.trim() ? record.tilesetUrl.trim() : undefined;
+    const tilePixelWidth = typeof record.tilePixelWidth === 'number' && Number.isFinite(record.tilePixelWidth) ? Math.max(1, Math.floor(record.tilePixelWidth)) : undefined;
+    const tilePixelHeight = typeof record.tilePixelHeight === 'number' && Number.isFinite(record.tilePixelHeight) ? Math.max(1, Math.floor(record.tilePixelHeight)) : undefined;
+
     return {
       id,
       name,
@@ -7728,6 +7996,9 @@ function sanitizeSavedPaintTile(raw: unknown): SavedPaintTile | null {
       height,
       ySortWithActors,
       cells,
+      ...(tilesetUrl !== undefined && { tilesetUrl }),
+      ...(tilePixelWidth !== undefined && { tilePixelWidth }),
+      ...(tilePixelHeight !== undefined && { tilePixelHeight }),
     };
   }
 
@@ -7737,6 +8008,9 @@ function sanitizeSavedPaintTile(raw: unknown): SavedPaintTile | null {
       return null;
     }
     const atlasIndex = typeof record.atlasIndex === 'number' ? clampInt(record.atlasIndex, 0, Number.MAX_SAFE_INTEGER) : 0;
+    const tilesetUrl = typeof record.tilesetUrl === 'string' && record.tilesetUrl.trim() ? record.tilesetUrl.trim() : undefined;
+    const tilePixelWidth = typeof record.tilePixelWidth === 'number' && Number.isFinite(record.tilePixelWidth) ? Math.max(1, Math.floor(record.tilePixelWidth)) : undefined;
+    const tilePixelHeight = typeof record.tilePixelHeight === 'number' && Number.isFinite(record.tilePixelHeight) ? Math.max(1, Math.floor(record.tilePixelHeight)) : undefined;
     return {
       id,
       name,
@@ -7745,6 +8019,9 @@ function sanitizeSavedPaintTile(raw: unknown): SavedPaintTile | null {
       height: 1,
       ySortWithActors: inferTileYSortWithActors(name, 1, 1),
       cells: [{ code, atlasIndex, dx: 0, dy: 0 }],
+      ...(tilesetUrl !== undefined && { tilesetUrl }),
+      ...(tilePixelWidth !== undefined && { tilePixelWidth }),
+      ...(tilePixelHeight !== undefined && { tilePixelHeight }),
     };
   }
 

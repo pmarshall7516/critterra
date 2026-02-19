@@ -49,6 +49,9 @@ interface SavedPaintTilePayload {
   width?: unknown;
   height?: unknown;
   ySortWithActors?: unknown;
+  tilesetUrl?: unknown;
+  tilePixelWidth?: unknown;
+  tilePixelHeight?: unknown;
   cells?: Array<{
     code?: unknown;
     atlasIndex?: unknown;
@@ -740,6 +743,77 @@ function scanMapFiles(): MapFileMeta[] {
   return metas;
 }
 
+/**
+ * Parse a single map .ts file: extract the object passed to createMap(...) and return
+ * an EditableMapPayload. Used by sync-from-project.
+ */
+function parseMapFileToPayload(absolutePath: string): EditableMapPayload | { error: string } {
+  let source: string;
+  try {
+    source = fs.readFileSync(absolutePath, 'utf8');
+  } catch (e) {
+    return { error: `Read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+
+  const createIdx = source.indexOf('createMap(');
+  if (createIdx === -1) {
+    return { error: 'createMap(...) not found' };
+  }
+
+  const openParen = createIdx + 'createMap('.length;
+  const firstBrace = source.indexOf('{', openParen);
+  if (firstBrace === -1) {
+    return { error: 'Object argument not found' };
+  }
+
+  let depth = 0;
+  let inString: "'" | '"' | null = null;
+  let escape = false;
+  for (let i = firstBrace; i < source.length; i += 1) {
+    const c = source[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (c === '\\' && inString) {
+      escape = true;
+      continue;
+    }
+    if (!inString) {
+      if (c === '{') {
+        depth += 1;
+      } else if (c === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          const objStr = source.slice(firstBrace, i + 1);
+          let obj: unknown;
+          try {
+            obj = new Function('return ' + objStr)();
+          } catch (e) {
+            return { error: `Parse failed: ${e instanceof Error ? e.message : String(e)}` };
+          }
+          if (obj == null || typeof obj !== 'object') {
+            return { error: 'createMap argument is not an object' };
+          }
+          try {
+            return parseEditableMapPayload({ map: obj as Partial<EditableMapPayload> });
+          } catch (e) {
+            return { error: e instanceof Error ? e.message : String(e) };
+          }
+        }
+      } else if (c === "'" || c === '"') {
+        inString = c;
+      }
+      continue;
+    }
+    if (c === inString) {
+      inString = null;
+    }
+  }
+
+  return { error: 'Unbalanced braces in createMap argument' };
+}
+
 function readExistingIndexOrder(): string[] {
   if (!fs.existsSync(mapsIndexPath)) {
     return [];
@@ -985,6 +1059,10 @@ function parseSavedPaintTiles(raw: unknown): SavedPaintTilePayload[] {
       continue;
     }
 
+    const tilesetUrl = typeof record.tilesetUrl === 'string' && record.tilesetUrl.trim() ? record.tilesetUrl.trim() : undefined;
+    const tilePixelWidth = typeof record.tilePixelWidth === 'number' && Number.isFinite(record.tilePixelWidth) ? Math.max(1, Math.floor(record.tilePixelWidth)) : undefined;
+    const tilePixelHeight = typeof record.tilePixelHeight === 'number' && Number.isFinite(record.tilePixelHeight) ? Math.max(1, Math.floor(record.tilePixelHeight)) : undefined;
+
     parsed.push({
       id: typeof record.id === 'string' ? record.id : `tile-${Date.now()}-${parsed.length}`,
       name: typeof record.name === 'string' && record.name.trim() ? record.name.trim() : 'Saved Tile',
@@ -1002,6 +1080,9 @@ function parseSavedPaintTiles(raw: unknown): SavedPaintTilePayload[] {
               typeof record.width === 'number' ? Math.max(1, Math.floor(record.width)) : 1,
               typeof record.height === 'number' ? Math.max(1, Math.floor(record.height)) : 1,
             ),
+      ...(tilesetUrl !== undefined && { tilesetUrl }),
+      ...(tilePixelWidth !== undefined && { tilePixelWidth }),
+      ...(tilePixelHeight !== undefined && { tilePixelHeight }),
       cells,
     });
   }
@@ -2028,7 +2109,10 @@ function sanitizeTilesetConfig(raw: SaveMapRequestPayload['tileset']): {
 }
 
 function buildCustomTileDefinitions(savedPaintTiles: SavedPaintTilePayload[]): Record<string, unknown> {
-  const customEntries = new Map<string, { label: string; atlasIndex: number; ySortWithActors: boolean }>();
+  const customEntries = new Map<
+    string,
+    { label: string; atlasIndex: number; ySortWithActors: boolean; tilesetUrl?: string; tilePixelWidth?: number; tilePixelHeight?: number }
+  >();
   for (const tile of savedPaintTiles) {
     const tileName =
       typeof tile.name === 'string' && tile.name.trim() ? tile.name.trim() : 'Custom Tile';
@@ -2038,6 +2122,9 @@ function buildCustomTileDefinitions(savedPaintTiles: SavedPaintTilePayload[]): R
       typeof tile.ySortWithActors === 'boolean'
         ? tile.ySortWithActors
         : inferTileYSortWithActors(tileName, tileWidth, tileHeight);
+    const tilesetUrl = typeof tile.tilesetUrl === 'string' && tile.tilesetUrl.trim() ? tile.tilesetUrl.trim() : undefined;
+    const tilePixelWidth = typeof tile.tilePixelWidth === 'number' && Number.isFinite(tile.tilePixelWidth) ? Math.max(1, Math.floor(tile.tilePixelWidth)) : undefined;
+    const tilePixelHeight = typeof tile.tilePixelHeight === 'number' && Number.isFinite(tile.tilePixelHeight) ? Math.max(1, Math.floor(tile.tilePixelHeight)) : undefined;
     const cells = Array.isArray(tile.cells) ? tile.cells : [];
     for (const cell of cells) {
       const code = typeof cell.code === 'string' ? cell.code.trim().slice(0, 1) : '';
@@ -2049,6 +2136,9 @@ function buildCustomTileDefinitions(savedPaintTiles: SavedPaintTilePayload[]): R
         label: `${tileName} ${code}`.slice(0, 60),
         atlasIndex,
         ySortWithActors: tileYSortWithActors,
+        ...(tilesetUrl !== undefined && { tilesetUrl }),
+        ...(tilePixelWidth !== undefined && { tilePixelWidth }),
+        ...(tilePixelHeight !== undefined && { tilePixelHeight }),
       });
     }
   }
@@ -2065,6 +2155,9 @@ function buildCustomTileDefinitions(savedPaintTiles: SavedPaintTilePayload[]): R
       height: 0,
       atlasIndex: entry.atlasIndex,
       ySortWithActors: entry.ySortWithActors,
+      ...(entry.tilesetUrl !== undefined && { tilesetUrl: entry.tilesetUrl }),
+      ...(entry.tilePixelWidth !== undefined && { tilePixelWidth: entry.tilePixelWidth }),
+      ...(entry.tilePixelHeight !== undefined && { tilePixelHeight: entry.tilePixelHeight }),
     };
   }
   return definitions;
@@ -2074,6 +2167,15 @@ const WORLD_MAP_BASELINE_VERSION = 1;
 const SPAWN_MAP_ID = 'spawn';
 const GLOBAL_CATALOG_KEY = 'main';
 const GLOBAL_WORLD_STATE_KEY = 'world';
+
+/** Optional default tileset URL (e.g. Supabase public URL). When set, game_tiles rows without a tileset_url are backfilled with this so the game and admin read from this image. */
+function getDefaultTilesetConfigFromEnv(): { url: string; tilePixelWidth: number; tilePixelHeight: number } | null {
+  const url = (process.env.CRITTERRA_DEFAULT_TILESET_URL ?? '').trim();
+  if (!url || url.startsWith('blob:')) return null;
+  const w = Math.max(1, Math.floor(Number(process.env.CRITTERRA_DEFAULT_TILESET_TILE_WIDTH ?? 16)));
+  const h = Math.max(1, Math.floor(Number(process.env.CRITTERRA_DEFAULT_TILESET_TILE_HEIGHT ?? 16)));
+  return { url, tilePixelWidth: w, tilePixelHeight: h };
+}
 const DEFAULT_SYSTEM_FLAGS = [
   'demo-start',
   'selected-starter-critter',
@@ -2186,24 +2288,38 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       `);
     }
 
-    const globalTileResult = await client.query('SELECT catalog_key FROM game_tile_libraries WHERE catalog_key = $1', [
-      GLOBAL_CATALOG_KEY,
-    ]);
-    if ((globalTileResult.rowCount ?? 0) === 0 && existingLegacyTables.has('tile_libraries')) {
+    if (existingLegacyTables.has('tile_libraries')) {
       const legacyTileResult = await client.query(
         'SELECT saved_tiles, tileset_config FROM tile_libraries ORDER BY updated_at DESC NULLS LAST LIMIT 1',
       );
-      const legacySavedTiles = parseSavedPaintTiles(legacyTileResult.rows[0]?.saved_tiles);
+      const legacySavedTiles = legacyTileResult.rows[0]?.saved_tiles;
       const legacyTilesetConfig = sanitizeTilesetConfig(legacyTileResult.rows[0]?.tileset_config ?? null);
-      await client.query(
-        `
-          INSERT INTO game_tile_libraries (catalog_key, saved_tiles, tileset_config, updated_at)
-          VALUES ($1, $2::jsonb, $3::jsonb, NOW())
-          ON CONFLICT (catalog_key)
-          DO UPDATE SET saved_tiles = EXCLUDED.saved_tiles, tileset_config = EXCLUDED.tileset_config, updated_at = NOW()
-        `,
-        [GLOBAL_CATALOG_KEY, JSON.stringify(legacySavedTiles), JSON.stringify(legacyTilesetConfig)],
-      );
+      const catalogUrl = typeof legacyTilesetConfig?.url === 'string' && !legacyTilesetConfig.url.startsWith('blob:') ? legacyTilesetConfig.url.trim() : null;
+      const catalogW = typeof legacyTilesetConfig?.tilePixelWidth === 'number' ? Math.max(1, Math.floor(legacyTilesetConfig.tilePixelWidth)) : null;
+      const catalogH = typeof legacyTilesetConfig?.tilePixelHeight === 'number' ? Math.max(1, Math.floor(legacyTilesetConfig.tilePixelHeight)) : null;
+      const parsed = Array.isArray(legacySavedTiles) ? parseSavedPaintTiles(legacySavedTiles) : [];
+      for (const tile of parsed) {
+        const id = typeof tile.id === 'string' && tile.id.trim() ? tile.id : `tile-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        const name = typeof tile.name === 'string' && tile.name.trim() ? tile.name.trim() : 'Saved Tile';
+        const primaryCode = typeof tile.primaryCode === 'string' && tile.primaryCode.trim() ? tile.primaryCode.trim().slice(0, 1) : ' ';
+        const width = typeof tile.width === 'number' ? Math.max(1, Math.floor(tile.width)) : 1;
+        const height = typeof tile.height === 'number' ? Math.max(1, Math.floor(tile.height)) : 1;
+        const ySort = typeof tile.ySortWithActors === 'boolean' ? tile.ySortWithActors : false;
+        const cells = Array.isArray(tile.cells) ? tile.cells : [];
+        await client.query(
+          `
+            INSERT INTO game_tiles (id, name, primary_code, width, height, y_sort_with_actors, tileset_url, tile_pixel_width, tile_pixel_height, cells, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, NOW())
+            ON CONFLICT (id) DO UPDATE SET
+              name = EXCLUDED.name, primary_code = EXCLUDED.primary_code, width = EXCLUDED.width, height = EXCLUDED.height,
+              y_sort_with_actors = EXCLUDED.y_sort_with_actors, cells = EXCLUDED.cells, updated_at = NOW(),
+              tileset_url = COALESCE(game_tiles.tileset_url, EXCLUDED.tileset_url),
+              tile_pixel_width = COALESCE(game_tiles.tile_pixel_width, EXCLUDED.tile_pixel_width),
+              tile_pixel_height = COALESCE(game_tiles.tile_pixel_height, EXCLUDED.tile_pixel_height)
+          `,
+          [id, name, primaryCode, width, height, ySort, catalogUrl, catalogW, catalogH, JSON.stringify(cells)],
+        );
+      }
     }
 
     const globalNpcResult = await client.query('SELECT catalog_key FROM game_npc_libraries WHERE catalog_key = $1', [
@@ -2543,11 +2659,19 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
+    await pool.query(`DROP TABLE IF EXISTS game_tile_libraries CASCADE`);
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS game_tile_libraries (
-        catalog_key TEXT PRIMARY KEY,
-        tileset_config JSONB,
-        saved_tiles JSONB NOT NULL DEFAULT '[]'::jsonb,
+      CREATE TABLE IF NOT EXISTS game_tiles (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL DEFAULT '',
+        primary_code TEXT NOT NULL DEFAULT ' ',
+        width INTEGER NOT NULL DEFAULT 1,
+        height INTEGER NOT NULL DEFAULT 1,
+        y_sort_with_actors BOOLEAN NOT NULL DEFAULT false,
+        tileset_url TEXT,
+        tile_pixel_width INTEGER,
+        tile_pixel_height INTEGER,
+        cells JSONB NOT NULL DEFAULT '[]'::jsonb,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
@@ -2628,6 +2752,24 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
     schemaReady = true;
   };
 
+  /** Get tileset config from game_tiles (first tile with a tileset_url). Used for bootstrap and admin. */
+  const getTilesetConfigFromGameTiles = async (client: PoolClient): Promise<{ url: string; tilePixelWidth: number; tilePixelHeight: number } | null> => {
+    const result = await client.query(
+      'SELECT tileset_url, tile_pixel_width, tile_pixel_height FROM game_tiles WHERE tileset_url IS NOT NULL AND tileset_url != \'\' LIMIT 1',
+    );
+    const row = result.rows[0];
+    if (!row || typeof row.tileset_url !== 'string') {
+      return null;
+    }
+    const url = row.tileset_url.trim();
+    if (!url || url.startsWith('blob:')) {
+      return null;
+    }
+    const w = typeof row.tile_pixel_width === 'number' ? Math.max(1, Math.floor(row.tile_pixel_width)) : 16;
+    const h = typeof row.tile_pixel_height === 'number' ? Math.max(1, Math.floor(row.tile_pixel_height)) : 16;
+    return { url, tilePixelWidth: w, tilePixelHeight: h };
+  };
+
   const ensureGlobalCatalogBaseline = async (): Promise<void> => {
     await ensureSchema();
     if (!pool) {
@@ -2667,19 +2809,6 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
             DO UPDATE SET map_init_version = EXCLUDED.map_init_version, updated_at = NOW()
           `,
           [GLOBAL_WORLD_STATE_KEY, WORLD_MAP_BASELINE_VERSION],
-        );
-      }
-
-      const globalTileResult = await client.query('SELECT catalog_key FROM game_tile_libraries WHERE catalog_key = $1', [
-        GLOBAL_CATALOG_KEY,
-      ]);
-      if ((globalTileResult.rowCount ?? 0) === 0) {
-        await client.query(
-          `
-            INSERT INTO game_tile_libraries (catalog_key, saved_tiles, tileset_config, updated_at)
-            VALUES ($1, '[]'::jsonb, NULL, NOW())
-          `,
-          [GLOBAL_CATALOG_KEY],
         );
       }
 
@@ -2994,6 +3123,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       '/api/admin/maps/list',
       '/api/admin/tiles/save',
       '/api/admin/tiles/list',
+      '/api/admin/tiles/clear',
       '/api/admin/npc/save',
       '/api/admin/npc/list',
       '/api/admin/player-sprite/save',
@@ -3236,9 +3366,16 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
           return;
         }
         await ensureGlobalCatalogBaseline();
-        const [mapsResult, tileResult, playerSpriteResult, npcLibraryResult, crittersResult, encounterResult, skills, effects, elementChart] = await Promise.all([
+        const client = await pool.connect();
+        let tilesetConfig: { url: string; tilePixelWidth: number; tilePixelHeight: number } | null = null;
+        try {
+          tilesetConfig = await getTilesetConfigFromGameTiles(client);
+        } finally {
+          client.release();
+        }
+        const [mapsResult, tilesRowsResult, playerSpriteResult, npcLibraryResult, crittersResult, encounterResult, skills, effects, elementChart] = await Promise.all([
           pool.query('SELECT map_data FROM game_maps ORDER BY updated_at DESC'),
-          pool.query('SELECT saved_tiles, tileset_config FROM game_tile_libraries WHERE catalog_key = $1', [GLOBAL_CATALOG_KEY]),
+          pool.query('SELECT id, name, primary_code, width, height, y_sort_with_actors, tileset_url, tile_pixel_width, tile_pixel_height, cells FROM game_tiles ORDER BY updated_at DESC'),
           pool.query('SELECT sprite_config FROM game_player_sprite_configs WHERE catalog_key = $1', [GLOBAL_CATALOG_KEY]),
           pool.query('SELECT sprite_library, character_library FROM game_npc_libraries WHERE catalog_key = $1', [GLOBAL_CATALOG_KEY]),
           pool.query('SELECT critter_data FROM game_critter_catalog ORDER BY critter_id ASC, name ASC'),
@@ -3247,7 +3384,18 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
           readGlobalSkillEffectsCatalog(),
           readElementChart(),
         ]);
-        const savedTiles = parseSavedPaintTiles(tileResult.rows[0]?.saved_tiles);
+        const savedTiles = (tilesRowsResult.rows ?? []).map((row: Record<string, unknown>) => ({
+          id: row.id,
+          name: row.name,
+          primaryCode: row.primary_code,
+          width: row.width,
+          height: row.height,
+          ySortWithActors: row.y_sort_with_actors,
+          ...(row.tileset_url != null && { tilesetUrl: row.tileset_url }),
+          ...(row.tile_pixel_width != null && { tilePixelWidth: row.tile_pixel_width }),
+          ...(row.tile_pixel_height != null && { tilePixelHeight: row.tile_pixel_height }),
+          cells: row.cells ?? [],
+        })) as SavedPaintTilePayload[];
         const customTileDefinitions = buildCustomTileDefinitions(savedTiles);
         const critters = parseCritterLibrary(crittersResult.rows.map((row) => row.critter_data));
         const encounterTables = parseEncounterLibrary(encounterResult.rows.map((row) => row.table_data));
@@ -3257,7 +3405,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
             maps: mapsResult.rows.map((row) => row.map_data),
             savedPaintTiles: savedTiles,
             customTileDefinitions,
-            customTilesetConfig: tileResult.rows[0]?.tileset_config ?? null,
+            customTilesetConfig: tilesetConfig,
             playerSpriteConfig: sanitizeLoadedPlayerSpriteConfig(playerSpriteResult.rows[0]?.sprite_config),
             npcSpriteLibrary: npcLibraryResult.rows[0]?.sprite_library ?? [],
             npcCharacterLibrary: npcLibraryResult.rows[0]?.character_library ?? [],
@@ -3279,6 +3427,36 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         await ensureGlobalCatalogBaseline();
         const mapsResult = await pool.query('SELECT map_data FROM game_maps ORDER BY updated_at DESC');
         sendJson(res, 200, { ok: true, maps: mapsResult.rows.map((row) => row.map_data) });
+        return;
+      }
+
+      if (url === '/api/admin/maps/sync-from-project' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const metas = scanMapFiles();
+        const errors: string[] = [];
+        let synced = 0;
+        for (const meta of metas) {
+          const result = parseMapFileToPayload(meta.absolutePath);
+          if ('error' in result) {
+            errors.push(`${meta.fileName} (${meta.id}): ${result.error}`);
+            continue;
+          }
+          await pool.query(
+            `
+              INSERT INTO game_maps (map_id, map_data, updated_at)
+              VALUES ($1, $2::jsonb, NOW())
+              ON CONFLICT (map_id)
+              DO UPDATE SET map_data = EXCLUDED.map_data, updated_at = NOW()
+            `,
+            [result.id, JSON.stringify(result)],
+          );
+          synced += 1;
+        }
+        sendJson(res, 200, { ok: true, synced, errors: errors.length > 0 ? errors : undefined });
         return;
       }
 
@@ -3310,32 +3488,47 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
           [map.id, JSON.stringify(map)],
         );
 
-        const existingTileLibraryResult = await pool.query(
-          'SELECT saved_tiles, tileset_config FROM game_tile_libraries WHERE catalog_key = $1',
-          [GLOBAL_CATALOG_KEY],
+        const existingTilesResult = await pool.query(
+          'SELECT id, name, primary_code, width, height, y_sort_with_actors, tileset_url, tile_pixel_width, tile_pixel_height, cells FROM game_tiles ORDER BY updated_at DESC',
         );
-        const existingSavedTiles = parseSavedPaintTiles(existingTileLibraryResult.rows[0]?.saved_tiles);
-        const existingTilesetConfig = sanitizeTilesetConfig(existingTileLibraryResult.rows[0]?.tileset_config ?? null);
+        const existingSavedTiles = (existingTilesResult.rows ?? []).map((row: Record<string, unknown>) => ({
+          id: row.id,
+          name: row.name,
+          primaryCode: row.primary_code,
+          width: row.width,
+          height: row.height,
+          ySortWithActors: row.y_sort_with_actors,
+          ...(row.tileset_url != null && { tilesetUrl: row.tileset_url }),
+          ...(row.tile_pixel_width != null && { tilePixelWidth: row.tile_pixel_width }),
+          ...(row.tile_pixel_height != null && { tilePixelHeight: row.tile_pixel_height }),
+          cells: row.cells ?? [],
+        }));
         const savedTiles = hasIncomingSavedPaintTiles ? parseSavedPaintTiles(rawBody.savedPaintTiles) : existingSavedTiles;
-        const tilesetConfig = hasIncomingTilesetConfig
-          ? sanitizeTilesetConfig(rawBody.tileset ?? null)
-          : existingTilesetConfig;
-        await pool.query(
-          `
-            INSERT INTO game_tile_libraries (catalog_key, saved_tiles, tileset_config, updated_at)
-            VALUES ($1, $2::jsonb, $3::jsonb, NOW())
-            ON CONFLICT (catalog_key)
-            DO UPDATE SET saved_tiles = EXCLUDED.saved_tiles, tileset_config = EXCLUDED.tileset_config, updated_at = NOW()
-          `,
-          [GLOBAL_CATALOG_KEY, JSON.stringify(savedTiles), JSON.stringify(tilesetConfig)],
-        );
+        
+        // If tileset config is provided, update all tiles in game_tiles that don't have a tileset_url
+        if (hasIncomingTilesetConfig) {
+          const tilesetConfig = sanitizeTilesetConfig(rawBody.tileset ?? null);
+          if (tilesetConfig && typeof tilesetConfig.url === 'string' && tilesetConfig.url.trim() && !tilesetConfig.url.startsWith('blob:')) {
+            const url = tilesetConfig.url.trim();
+            const w = typeof tilesetConfig.tilePixelWidth === 'number' ? Math.max(1, Math.floor(tilesetConfig.tilePixelWidth)) : 16;
+            const h = typeof tilesetConfig.tilePixelHeight === 'number' ? Math.max(1, Math.floor(tilesetConfig.tilePixelHeight)) : 16;
+            await pool.query(
+              `
+                UPDATE game_tiles
+                SET tileset_url = $1, tile_pixel_width = $2, tile_pixel_height = $3, updated_at = NOW()
+                WHERE tileset_url IS NULL
+              `,
+              [url, w, h],
+            );
+          }
+        }
 
         sendJson(res, 200, {
           ok: true,
           mapId: map.id,
           mapFilePath: fileResult?.mapFilePath ?? 'database:game_maps',
           indexFilePath: fileResult?.indexFilePath ?? 'database:game_maps',
-          customTilesFilePath: fileResult?.customTilesFilePath ?? 'database:game_tile_libraries',
+          customTilesFilePath: fileResult?.customTilesFilePath ?? 'database:game_tiles',
           customTileCodes: Object.keys(buildCustomTileDefinitions(savedTiles)),
         });
         return;
@@ -3347,14 +3540,47 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
           return;
         }
         await ensureGlobalCatalogBaseline();
-        const result = await pool.query(
-          'SELECT saved_tiles, tileset_config FROM game_tile_libraries WHERE catalog_key = $1',
-          [GLOBAL_CATALOG_KEY],
+        const tilesResult = await pool.query(
+          'SELECT id, name, primary_code, width, height, y_sort_with_actors, tileset_url, tile_pixel_width, tile_pixel_height, cells FROM game_tiles ORDER BY updated_at DESC',
         );
+        const savedPaintTiles = (tilesResult.rows ?? []).map((row: Record<string, unknown>) => ({
+          id: row.id,
+          name: row.name,
+          primaryCode: row.primary_code,
+          width: row.width,
+          height: row.height,
+          ySortWithActors: row.y_sort_with_actors,
+          ...(row.tileset_url != null && { tilesetUrl: row.tileset_url }),
+          ...(row.tile_pixel_width != null && { tilePixelWidth: row.tile_pixel_width }),
+          ...(row.tile_pixel_height != null && { tilePixelHeight: row.tile_pixel_height }),
+          cells: row.cells ?? [],
+        }));
+        const client = await pool.connect();
+        let tilesetConfig: { url: string; tilePixelWidth: number; tilePixelHeight: number } | null = null;
+        try {
+          tilesetConfig = await getTilesetConfigFromGameTiles(client);
+        } finally {
+          client.release();
+        }
         sendJson(res, 200, {
           ok: true,
-          savedPaintTiles: result.rows[0]?.saved_tiles ?? [],
-          tileset: result.rows[0]?.tileset_config ?? null,
+          savedPaintTiles,
+          tileset: tilesetConfig,
+        });
+        return;
+      }
+
+      if (url === '/api/admin/tiles/clear' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const result = await pool.query('DELETE FROM game_tiles');
+        const deletedCount = result.rowCount ?? 0;
+        sendJson(res, 200, {
+          ok: true,
+          deletedCount,
         });
         return;
       }
@@ -3368,6 +3594,125 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         const rawBody = (await readJsonBody(req)) as SaveTilesRequestPayload;
         const parsedTiles = parseSavedPaintTiles(rawBody.savedPaintTiles);
         const tilesetConfig = sanitizeTilesetConfig(rawBody.tileset ?? null);
+        let fallbackTilesetUrl =
+          tilesetConfig &&
+          typeof tilesetConfig.url === 'string' &&
+          tilesetConfig.url.trim() &&
+          !tilesetConfig.url.startsWith('blob:')
+            ? tilesetConfig.url.trim()
+            : null;
+        let fallbackTilePixelWidth =
+          tilesetConfig && typeof tilesetConfig.tilePixelWidth === 'number'
+            ? Math.max(1, Math.floor(tilesetConfig.tilePixelWidth))
+            : null;
+        let fallbackTilePixelHeight =
+          tilesetConfig && typeof tilesetConfig.tilePixelHeight === 'number'
+            ? Math.max(1, Math.floor(tilesetConfig.tilePixelHeight))
+            : null;
+
+        if (!fallbackTilesetUrl || !fallbackTilePixelWidth || !fallbackTilePixelHeight) {
+          const existingTilesetResult = await pool.query(
+            `
+              SELECT tileset_url, tile_pixel_width, tile_pixel_height
+              FROM game_tiles
+              WHERE tileset_url IS NOT NULL AND tileset_url != ''
+              ORDER BY updated_at DESC NULLS LAST
+              LIMIT 1
+            `,
+          );
+          const row = existingTilesetResult.rows[0] as
+            | { tileset_url?: unknown; tile_pixel_width?: unknown; tile_pixel_height?: unknown }
+            | undefined;
+          const existingUrl = typeof row?.tileset_url === 'string' ? row.tileset_url.trim() : '';
+          const existingW =
+            typeof row?.tile_pixel_width === 'number' && Number.isFinite(row.tile_pixel_width)
+              ? Math.max(1, Math.floor(row.tile_pixel_width))
+              : 0;
+          const existingH =
+            typeof row?.tile_pixel_height === 'number' && Number.isFinite(row.tile_pixel_height)
+              ? Math.max(1, Math.floor(row.tile_pixel_height))
+              : 0;
+          if (existingUrl && !existingUrl.startsWith('blob:') && existingW > 0 && existingH > 0) {
+            fallbackTilesetUrl = fallbackTilesetUrl ?? existingUrl;
+            fallbackTilePixelWidth = fallbackTilePixelWidth ?? existingW;
+            fallbackTilePixelHeight = fallbackTilePixelHeight ?? existingH;
+          }
+        }
+        if (!fallbackTilesetUrl || !fallbackTilePixelWidth || !fallbackTilePixelHeight) {
+          const defaultTileset = getDefaultTilesetConfigFromEnv();
+          if (defaultTileset) {
+            fallbackTilesetUrl = fallbackTilesetUrl ?? defaultTileset.url;
+            fallbackTilePixelWidth = fallbackTilePixelWidth ?? defaultTileset.tilePixelWidth;
+            fallbackTilePixelHeight = fallbackTilePixelHeight ?? defaultTileset.tilePixelHeight;
+          }
+        }
+
+        const persistedIds: string[] = [];
+        await pool.query('BEGIN');
+        try {
+          for (const tile of parsedTiles) {
+            const id = typeof tile.id === 'string' && tile.id.trim() ? tile.id : `tile-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+            const name = typeof tile.name === 'string' && tile.name.trim() ? tile.name.trim() : 'Saved Tile';
+            const primaryCode = typeof tile.primaryCode === 'string' && tile.primaryCode.trim() ? tile.primaryCode.trim().slice(0, 1) : ' ';
+            const width = typeof tile.width === 'number' ? Math.max(1, Math.floor(tile.width)) : 1;
+            const height = typeof tile.height === 'number' ? Math.max(1, Math.floor(tile.height)) : 1;
+            const ySort = typeof tile.ySortWithActors === 'boolean' ? tile.ySortWithActors : false;
+            const tileTilesetUrl = typeof tile.tilesetUrl === 'string' && tile.tilesetUrl.trim() ? tile.tilesetUrl.trim() : null;
+            const tileTilePixelWidth = typeof tile.tilePixelWidth === 'number' && Number.isFinite(tile.tilePixelWidth) ? Math.max(1, Math.floor(tile.tilePixelWidth)) : null;
+            const tileTilePixelHeight = typeof tile.tilePixelHeight === 'number' && Number.isFinite(tile.tilePixelHeight) ? Math.max(1, Math.floor(tile.tilePixelHeight)) : null;
+            const useFallbackTileset =
+              !tileTilesetUrl &&
+              fallbackTilesetUrl &&
+              fallbackTilePixelWidth &&
+              fallbackTilePixelHeight;
+            const tilesetUrl = useFallbackTileset ? fallbackTilesetUrl : tileTilesetUrl;
+            const tilePixelWidth = useFallbackTileset ? fallbackTilePixelWidth : tileTilePixelWidth;
+            const tilePixelHeight = useFallbackTileset ? fallbackTilePixelHeight : tileTilePixelHeight;
+            const cells = Array.isArray(tile.cells) ? tile.cells : [];
+            await pool.query(
+              `
+                INSERT INTO game_tiles (id, name, primary_code, width, height, y_sort_with_actors, tileset_url, tile_pixel_width, tile_pixel_height, cells, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, NOW())
+                ON CONFLICT (id) DO UPDATE SET
+                  name = EXCLUDED.name,
+                  primary_code = EXCLUDED.primary_code,
+                  width = EXCLUDED.width,
+                  height = EXCLUDED.height,
+                  y_sort_with_actors = EXCLUDED.y_sort_with_actors,
+                  tileset_url = EXCLUDED.tileset_url,
+                  tile_pixel_width = EXCLUDED.tile_pixel_width,
+                  tile_pixel_height = EXCLUDED.tile_pixel_height,
+                  cells = EXCLUDED.cells,
+                  updated_at = NOW()
+              `,
+              [id, name, primaryCode, width, height, ySort, tilesetUrl, tilePixelWidth, tilePixelHeight, JSON.stringify(cells)],
+            );
+            persistedIds.push(id);
+          }
+
+          // Save Tile Library is authoritative: remove rows no longer present in payload.
+          if (persistedIds.length > 0) {
+            await pool.query('DELETE FROM game_tiles WHERE id <> ALL($1::text[])', [Array.from(new Set(persistedIds))]);
+          } else {
+            await pool.query('DELETE FROM game_tiles');
+          }
+
+          // Backfill any remaining NULL tileset rows after replacement.
+          if (fallbackTilesetUrl && fallbackTilePixelWidth && fallbackTilePixelHeight) {
+            await pool.query(
+              `
+                UPDATE game_tiles
+                SET tileset_url = $1, tile_pixel_width = $2, tile_pixel_height = $3, updated_at = NOW()
+                WHERE tileset_url IS NULL
+              `,
+              [fallbackTilesetUrl, fallbackTilePixelWidth, fallbackTilePixelHeight],
+            );
+          }
+          await pool.query('COMMIT');
+        } catch (error) {
+          await pool.query('ROLLBACK');
+          throw error;
+        }
 
         let fileResult: ReturnType<typeof saveTileDatabaseToProject> | null = null;
         try {
@@ -3376,19 +3721,9 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
           fileResult = null;
         }
 
-        await pool.query(
-          `
-            INSERT INTO game_tile_libraries (catalog_key, saved_tiles, tileset_config, updated_at)
-            VALUES ($1, $2::jsonb, $3::jsonb, NOW())
-            ON CONFLICT (catalog_key)
-            DO UPDATE SET saved_tiles = EXCLUDED.saved_tiles, tileset_config = EXCLUDED.tileset_config, updated_at = NOW()
-          `,
-          [GLOBAL_CATALOG_KEY, JSON.stringify(parsedTiles), JSON.stringify(tilesetConfig)],
-        );
-
         sendJson(res, 200, {
           ok: true,
-          customTilesFilePath: fileResult?.customTilesFilePath ?? 'database:game_tile_libraries',
+          customTilesFilePath: fileResult?.customTilesFilePath ?? 'database:game_tiles',
           customTileCodes: Object.keys(buildCustomTileDefinitions(parsedTiles)),
         });
         return;

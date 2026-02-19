@@ -88,6 +88,8 @@ interface NpcRuntimeState {
   patternIndex: number;
   patternDirection: 1 | -1;
   animationMs: number;
+  /** Alternates 0/1 each cell moved; used for half-cycle walk animation (first leg / second leg). */
+  stridePhase: number;
 }
 
 interface NpcSpriteSheetState {
@@ -505,6 +507,8 @@ export class GameRuntime {
   private selectedStarterId: string | null;
   private playerCritterProgress: PlayerCritterProgress = createDefaultPlayerCritterProgress();
   private playerAnimationMs = 0;
+  /** Alternates 0/1 each cell moved; used for half-cycle walk animation (first leg / second leg). */
+  private playerStridePhase = 0;
   private warpCooldownMs = 0;
   private autosaveMs = AUTOSAVE_INTERVAL_MS;
   private dirty = false;
@@ -533,6 +537,11 @@ export class GameRuntime {
   private tilesetRows = 0;
   private tilesetCellCount = 0;
   private tilesetLoadAttempted = false;
+  /** Per-tile tilesets keyed by URL. Used when a tile definition has tilesetUrl. */
+  private perTileTilesetCache = new Map<
+    string,
+    { image: HTMLImageElement; tileWidth: number; tileHeight: number; columns: number; rows: number; cellCount: number }
+  >();
   private announcedCritterAdvanceKeys = new Set<string>();
 
   constructor(options?: RuntimeInitOptions) {
@@ -692,6 +701,7 @@ export class GameRuntime {
       this.moveStep.elapsed += deltaMs;
       if (this.moveStep.elapsed >= this.moveStep.duration) {
         this.playerPosition = { ...this.moveStep.to };
+        this.playerStridePhase = (this.playerStridePhase + 1) % 2;
         this.moveStep = null;
         const previousMapId = this.currentMapId;
         this.checkAutomaticWarp();
@@ -1760,6 +1770,26 @@ export class GameRuntime {
     image.src = config.url;
   }
 
+  private ensurePerTileTilesetInCache(url: string, tileWidth: number, tileHeight: number): void {
+    if (this.perTileTilesetCache.has(url)) return;
+    const image = new Image();
+    image.onload = () => {
+      const columns = Math.floor(image.width / tileWidth);
+      const rows = Math.floor(image.height / tileHeight);
+      if (columns > 0 && rows > 0) {
+        this.perTileTilesetCache.set(url, {
+          image,
+          tileWidth,
+          tileHeight,
+          columns,
+          rows,
+          cellCount: columns * rows,
+        });
+      }
+    };
+    image.src = url;
+  }
+
   private drawTileFromTileset(
     ctx: CanvasRenderingContext2D,
     tile: TileDefinition,
@@ -1767,6 +1797,61 @@ export class GameRuntime {
     y: number,
     rotationQuarter = 0,
   ): boolean {
+    const url = tile.tilesetUrl?.trim();
+    const tilePxW = tile.tilePixelWidth ?? 0;
+    const tilePxH = tile.tilePixelHeight ?? 0;
+
+    if (url && tilePxW > 0 && tilePxH > 0) {
+      this.ensurePerTileTilesetInCache(url, tilePxW, tilePxH);
+      const cached = this.perTileTilesetCache.get(url);
+      if (cached && cached.cellCount > 0) {
+        if (
+          typeof tile.atlasIndex !== 'number' ||
+          tile.atlasIndex < 0 ||
+          tile.atlasIndex >= cached.cellCount
+        ) {
+          return false;
+        }
+        const column = tile.atlasIndex % cached.columns;
+        const row = Math.floor(tile.atlasIndex / cached.columns);
+        const sourceX = column * cached.tileWidth;
+        const sourceY = row * cached.tileHeight;
+        ctx.imageSmoothingEnabled = false;
+        const rotation = sanitizeRotationQuarter(rotationQuarter);
+        if (rotation === 0) {
+          ctx.drawImage(
+            cached.image,
+            sourceX,
+            sourceY,
+            cached.tileWidth,
+            cached.tileHeight,
+            x,
+            y,
+            TILE_SIZE,
+            TILE_SIZE,
+          );
+          return true;
+        }
+        ctx.save();
+        ctx.translate(x + TILE_SIZE / 2, y + TILE_SIZE / 2);
+        ctx.rotate((Math.PI / 2) * rotation);
+        ctx.drawImage(
+          cached.image,
+          sourceX,
+          sourceY,
+          cached.tileWidth,
+          cached.tileHeight,
+          -TILE_SIZE / 2,
+          -TILE_SIZE / 2,
+          TILE_SIZE,
+          TILE_SIZE,
+        );
+        ctx.restore();
+        return true;
+      }
+      return false;
+    }
+
     if (!this.tilesetImage || !this.customTilesetConfig) {
       return false;
     }
@@ -1936,6 +2021,9 @@ export class GameRuntime {
     const key = this.getNpcStateKey(npc);
     const existing = this.npcRuntimeStates[key];
     if (existing) {
+      if (typeof existing.stridePhase !== 'number') {
+        existing.stridePhase = 0;
+      }
       const stepIntervalMs = clampNpcStepInterval(npc.movement?.stepIntervalMs);
       existing.moveCooldownMs = Math.min(existing.moveCooldownMs, stepIntervalMs);
       if (existing.anchorPosition.x !== npc.position.x || existing.anchorPosition.y !== npc.position.y) {
@@ -1961,6 +2049,7 @@ export class GameRuntime {
       patternIndex: 0,
       patternDirection: 1,
       animationMs: 0,
+      stridePhase: 0,
     };
     this.npcRuntimeStates[key] = created;
     return created;
@@ -1993,6 +2082,7 @@ export class GameRuntime {
         state.moveStep.elapsed += deltaMs;
         if (state.moveStep.elapsed >= state.moveStep.duration) {
           state.position = { ...state.moveStep.to };
+          state.stridePhase = (state.stridePhase + 1) % 2;
           state.moveStep = null;
         }
       }
@@ -4931,7 +5021,20 @@ export class GameRuntime {
     isMoving: boolean,
   ): void {
     this.ensurePlayerSpriteLoaded();
-    const frameIndex = this.getSpriteFrameIndex(this.playerSpriteConfig, facing, isMoving, this.playerAnimationMs);
+    const moveProgressAndPhase =
+      this.moveStep && isMoving
+        ? {
+            progress: clamp(this.moveStep.elapsed / this.moveStep.duration, 0, 1),
+            stridePhase: this.playerStridePhase,
+          }
+        : undefined;
+    const frameIndex = this.getSpriteFrameIndex(
+      this.playerSpriteConfig,
+      facing,
+      isMoving,
+      this.playerAnimationMs,
+      { moveProgressAndPhase },
+    );
     if (
       this.playerSpriteSheet.status === 'ready' &&
       this.playerSpriteSheet.image &&
@@ -4960,9 +5063,17 @@ export class GameRuntime {
     }
 
     const state = this.getNpcRuntimeState(npc);
+    const moveProgressAndPhase =
+      state.moveStep && isMoving
+        ? {
+            progress: clamp(state.moveStep.elapsed / state.moveStep.duration, 0, 1),
+            stridePhase: state.stridePhase ?? 0,
+          }
+        : undefined;
     return this.getSpriteFrameIndex(sprite, facing, isMoving, state.animationMs, {
       idleAnimationName: npc.idleAnimation,
       moveAnimationName: npc.moveAnimation,
+      moveProgressAndPhase,
     });
   }
 
@@ -5034,6 +5145,8 @@ export class GameRuntime {
     options?: {
       idleAnimationName?: string;
       moveAnimationName?: string;
+      /** When moving: progress 0–1 through current cell, stridePhase 0|1 for first/second leg. Half cycle per cell. */
+      moveProgressAndPhase?: { progress: number; stridePhase: number };
     },
   ): number {
     const requestedIdleAnimation = options?.idleAnimationName?.trim();
@@ -5042,16 +5155,24 @@ export class GameRuntime {
     const moveAnimationName = requestedMoveAnimation || sprite.defaultMoveAnimation?.trim() || 'walk';
 
     if (isMoving) {
+      const { progress, stridePhase } = options?.moveProgressAndPhase ?? { progress: 0, stridePhase: 0 };
+      const cycleProgress = Math.min(1, stridePhase * 0.5 + progress * 0.5);
+
       const moveFramesFromSet = this.getDirectionalAnimationFrames(sprite.animationSets, moveAnimationName, facing);
       if (moveFramesFromSet.length > 0) {
-        const frame = moveFramesFromSet[Math.floor(animationMs / 140) % moveFramesFromSet.length];
+        const frameIdx = Math.min(
+          Math.floor(cycleProgress * moveFramesFromSet.length),
+          moveFramesFromSet.length - 1,
+        );
+        const frame = moveFramesFromSet[frameIdx];
         if (Number.isFinite(frame) && frame >= 0) {
           return Math.floor(frame);
         }
       }
       const walkFrames = sprite.walkFrames?.[facing];
       if (Array.isArray(walkFrames) && walkFrames.length > 0) {
-        const frame = walkFrames[Math.floor(animationMs / 140) % walkFrames.length];
+        const frameIdx = Math.min(Math.floor(cycleProgress * walkFrames.length), walkFrames.length - 1);
+        const frame = walkFrames[frameIdx];
         if (Number.isFinite(frame) && frame >= 0) {
           return Math.floor(frame);
         }
@@ -5403,6 +5524,9 @@ function buildTileDefinitionsFromSavedPaintTiles(
   savedPaintTiles: Array<{
     name?: string;
     ySortWithActors?: boolean;
+    tilesetUrl?: string;
+    tilePixelWidth?: number;
+    tilePixelHeight?: number;
     cells?: Array<{ code?: string; atlasIndex?: number }>;
   }> | null | undefined,
 ): Record<string, TileDefinition> {
@@ -5416,6 +5540,9 @@ function buildTileDefinitionsFromSavedPaintTiles(
   for (const tile of savedPaintTiles) {
     const tileName = typeof tile?.name === 'string' && tile.name.trim() ? tile.name.trim() : 'Custom Tile';
     const ySortWithActors = typeof tile?.ySortWithActors === 'boolean' ? tile.ySortWithActors : undefined;
+    const tilesetUrl = typeof tile?.tilesetUrl === 'string' && tile.tilesetUrl.trim() ? tile.tilesetUrl.trim() : undefined;
+    const tilePixelWidth = typeof tile?.tilePixelWidth === 'number' && Number.isFinite(tile.tilePixelWidth) ? Math.max(1, Math.floor(tile.tilePixelWidth)) : undefined;
+    const tilePixelHeight = typeof tile?.tilePixelHeight === 'number' && Number.isFinite(tile.tilePixelHeight) ? Math.max(1, Math.floor(tile.tilePixelHeight)) : undefined;
     const cells = Array.isArray(tile?.cells) ? tile.cells : [];
     for (const cell of cells) {
       const code = typeof cell?.code === 'string' ? cell.code.trim().slice(0, 1) : '';
@@ -5435,6 +5562,9 @@ function buildTileDefinitionsFromSavedPaintTiles(
         height: 0,
         atlasIndex,
         ySortWithActors,
+        ...(tilesetUrl !== undefined && { tilesetUrl }),
+        ...(tilePixelWidth !== undefined && { tilePixelWidth }),
+        ...(tilePixelHeight !== undefined && { tilePixelHeight }),
       };
     }
   }

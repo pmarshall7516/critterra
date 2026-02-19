@@ -18,6 +18,10 @@ export interface TileDefinition {
   height: number;
   atlasIndex?: number;
   ySortWithActors?: boolean;
+  /** When set, this tile is drawn from this tileset image (e.g. Supabase URL) instead of the global one. */
+  tilesetUrl?: string;
+  tilePixelWidth?: number;
+  tilePixelHeight?: number;
 }
 
 export interface NpcSpriteConfig {
