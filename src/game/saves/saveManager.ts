@@ -3,8 +3,13 @@ import type { SaveProfile, SaveProgressTracking } from '@/game/saves/types';
 import { apiFetchJson } from '@/shared/apiClient';
 import { getAuthToken } from '@/shared/authStorage';
 import { createDefaultPlayerCritterProgress } from '@/game/critters/schema';
+import { createDefaultPlayerItemInventory } from '@/game/items/schema';
+import type { Direction } from '@/shared/types';
 
-export const SAVE_VERSION = 6;
+export const SAVE_VERSION = 8;
+const DEFAULT_RESPAWN_MAP_ID = 'user-house';
+const DEFAULT_RESPAWN_POSITION = { x: 5, y: 7 } as const;
+const DEFAULT_RESPAWN_FACING: Direction = 'down';
 
 type LegacySaveProfile = Partial<SaveProfile> & {
   flags?: unknown;
@@ -23,7 +28,9 @@ export function createNewSave(playerName: string): SaveProfile {
       facing: 'up',
     },
     selectedStarterId: null,
+    respawnPoint: createDefaultRespawnPoint(),
     playerCritterProgress: createDefaultPlayerCritterProgress(),
+    playerItemInventory: createDefaultPlayerItemInventory(),
     progressTracking: createDefaultProgressTracking(),
     updatedAt: new Date().toISOString(),
   };
@@ -42,6 +49,7 @@ export function loadSave(): SaveProfile | null {
     }
 
     const normalizedProgressTracking = normalizeProgressTracking(parsed.progressTracking, parsed.flags);
+    const normalizedRespawnPoint = normalizeRespawnPoint(parsed.respawnPoint);
 
     return {
       id: parsed.id ?? 'slot-1',
@@ -50,11 +58,16 @@ export function loadSave(): SaveProfile | null {
       currentMapId: parsed.currentMapId,
       player: parsed.player,
       selectedStarterId: parsed.selectedStarterId ?? null,
+      respawnPoint: normalizedRespawnPoint,
       // Preserve raw critter progress here; runtime sanitizes against the hydrated critter database.
       playerCritterProgress:
         parsed.playerCritterProgress && typeof parsed.playerCritterProgress === 'object'
           ? (parsed.playerCritterProgress as SaveProfile['playerCritterProgress'])
           : createDefaultPlayerCritterProgress(),
+      playerItemInventory:
+        parsed.playerItemInventory && typeof parsed.playerItemInventory === 'object'
+          ? (parsed.playerItemInventory as SaveProfile['playerItemInventory'])
+          : createDefaultPlayerItemInventory(),
       progressTracking: normalizedProgressTracking,
       updatedAt: parsed.updatedAt ?? new Date().toISOString(),
     };
@@ -169,6 +182,43 @@ function createDefaultProgressTracking(): SaveProgressTracking {
       flags: {},
       missions: {},
     },
+  };
+}
+
+function createDefaultRespawnPoint(): SaveProfile['respawnPoint'] {
+  return {
+    mapId: DEFAULT_RESPAWN_MAP_ID,
+    position: {
+      x: DEFAULT_RESPAWN_POSITION.x,
+      y: DEFAULT_RESPAWN_POSITION.y,
+    },
+    facing: DEFAULT_RESPAWN_FACING,
+  };
+}
+
+function normalizeRespawnPoint(raw: unknown): SaveProfile['respawnPoint'] {
+  const fallback = createDefaultRespawnPoint();
+  if (!isObjectRecord(raw)) {
+    return fallback;
+  }
+  const mapId = typeof raw.mapId === 'string' && raw.mapId.trim().length > 0 ? raw.mapId.trim() : fallback.mapId;
+  const positionRecord = isObjectRecord(raw.position) ? raw.position : null;
+  const x =
+    positionRecord && typeof positionRecord.x === 'number' && Number.isFinite(positionRecord.x)
+      ? Math.floor(positionRecord.x)
+      : fallback.position.x;
+  const y =
+    positionRecord && typeof positionRecord.y === 'number' && Number.isFinite(positionRecord.y)
+      ? Math.floor(positionRecord.y)
+      : fallback.position.y;
+  const facing =
+    raw.facing === 'up' || raw.facing === 'down' || raw.facing === 'left' || raw.facing === 'right'
+      ? raw.facing
+      : fallback.facing;
+  return {
+    mapId,
+    position: { x, y },
+    facing,
   };
 }
 

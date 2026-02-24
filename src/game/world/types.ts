@@ -63,11 +63,22 @@ export interface NpcMovementGuardDefinition {
   dialogueSpeaker?: string;
   dialogueLines?: string[];
   setFlag?: string;
-  /** Set when player wins the guard battle; guard becomes inactive. Battle uses the NPC instance's battle team. */
+  /** Set when player wins the guard battle; guard becomes inactive unless battleRepeatable is true. */
   defeatedFlag?: string;
+  /** Optional per-guard battle team override. Falls back to NPC battleTeamIds when omitted. */
+  battleTeamIds?: string[];
+  /** Optional rewards granted after winning this guard battle. */
+  battleRewards?: NpcItemRewardDefinition[];
+  /** When true, this guard battle can still trigger after defeatedFlag has been set. */
+  battleRepeatable?: boolean;
   /** After defeat, show this dialogue on interact instead of instance dialogue. */
   postDuelDialogueSpeaker?: string;
   postDuelDialogueLines?: string[];
+}
+
+export interface NpcItemRewardDefinition {
+  itemId: string;
+  quantity: number;
 }
 
 export type NpcInteractionActionDefinition =
@@ -94,6 +105,13 @@ export type NpcInteractionActionDefinition =
   | {
       type: 'wait';
       durationMs: number;
+    }
+  | {
+      type: 'give_item';
+      itemId: string;
+      quantity: number;
+      setFlag?: string;
+      message?: string;
     };
 
 export interface NpcStoryStateDefinition {
@@ -101,7 +119,17 @@ export interface NpcStoryStateDefinition {
   requiresFlag?: string;
   firstInteractionSetFlag?: string;
   firstInteractBattle?: boolean;
+  /** When true, interact battle remains available even after defeat flag is set. */
+  interactBattleRepeatable?: boolean;
+  /** Flag set when this NPC interact-battle instance is defeated. */
+  interactBattleDefeatedFlag?: string;
+  /** Rewards granted after winning this interact battle (shown/granted through post-battle dialogue). */
+  battleRewards?: NpcItemRewardDefinition[];
   healer?: boolean;
+  /** Rewards granted directly from interaction dialogue/script (supports multiple item IDs and quantities). */
+  interactionRewards?: NpcItemRewardDefinition[];
+  /** Optional one-time gate flag for interaction rewards. If set and already true, rewards are skipped. */
+  interactionRewardSetFlag?: string;
   mapId?: string;
   position?: Vector2;
   facing?: Direction;
@@ -128,7 +156,12 @@ export interface NpcDefinition {
   hideIfFlag?: string;
   firstInteractionSetFlag?: string;
   firstInteractBattle?: boolean;
+  interactBattleRepeatable?: boolean;
+  interactBattleDefeatedFlag?: string;
+  battleRewards?: NpcItemRewardDefinition[];
   healer?: boolean;
+  interactionRewards?: NpcItemRewardDefinition[];
+  interactionRewardSetFlag?: string;
   dialogueId: string;
   dialogueLines?: string[];
   dialogueSpeaker?: string;
@@ -161,6 +194,7 @@ export interface InteractionDefinition {
   position: Vector2;
   lines: string[];
   speaker?: string;
+  kind?: 'dialogue' | 'heal_tile';
   requiresFlag?: string;
   hideIfFlag?: string;
   setFlag?: string;

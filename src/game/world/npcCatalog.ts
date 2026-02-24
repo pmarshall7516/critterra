@@ -24,7 +24,12 @@ export interface NpcCharacterTemplateEntry {
   dialogueSetFlag?: string;
   firstInteractionSetFlag?: string;
   firstInteractBattle?: boolean;
+  interactBattleRepeatable?: boolean;
+  interactBattleDefeatedFlag?: string;
+  battleRewards?: Array<{ itemId: string; quantity: number }>;
   healer?: boolean;
+  interactionRewards?: Array<{ itemId: string; quantity: number }>;
+  interactionRewardSetFlag?: string;
   battleTeamIds?: string[];
   movement?: NpcMovementDefinition;
   spriteId?: string;
@@ -50,6 +55,7 @@ const FLAG_SELECTED_STARTER = 'selected-starter-critter';
 const FLAG_STARTER_SELECTION_DONE = 'starter-selection-done';
 const FLAG_DEMO_DONE = 'demo-done';
 const FLAG_BEN_DEFEATED = 'ben-defeated';
+const FLAG_JACOB_BATTLE_WON = 'jacob-battle-won';
 
 function createDefaultStorySprite(url: string): NpcSpriteConfig {
   return {
@@ -161,6 +167,8 @@ export const DEFAULT_STORY_NPC_CHARACTER_LIBRARY: NpcCharacterTemplateEntry[] = 
     facing: 'up',
     dialogueId: 'custom_npc_dialogue',
     dialogueLines: ['<player-name>! You\'ve got a Critter?!'],
+    interactBattleDefeatedFlag: FLAG_JACOB_BATTLE_WON,
+    battleRewards: [{ itemId: 'lume', quantity: 25 }],
     battleTeamIds: ['moolnir@1'],
     movement: { type: 'static' },
     spriteId: 'jacob-sprite-1',
@@ -240,6 +248,7 @@ export const DEFAULT_STORY_NPC_CHARACTER_LIBRARY: NpcCharacterTemplateEntry[] = 
             requiresFlag: FLAG_DEMO_DONE,
             maxY: 0,
             defeatedFlag: FLAG_BEN_DEFEATED,
+            battleRewards: [{ itemId: 'lume', quantity: 30 }],
             postDuelDialogueSpeaker: 'Ben',
             postDuelDialogueLines: ["I can't believe I lost... You're really strong. Go ahead, the path is clear."],
           },
@@ -249,6 +258,7 @@ export const DEFAULT_STORY_NPC_CHARACTER_LIBRARY: NpcCharacterTemplateEntry[] = 
             x: 11,
             y: 1,
             defeatedFlag: FLAG_BEN_DEFEATED,
+            battleRewards: [{ itemId: 'lume', quantity: 30 }],
             postDuelDialogueSpeaker: 'Ben',
             postDuelDialogueLines: ["I can't believe I lost... You're really strong. Go ahead, the path is clear."],
           },
@@ -282,6 +292,8 @@ function cloneStoryStates(states: NpcStoryStateDefinition[] | undefined): NpcSto
     ...state,
     position: state.position ? { ...state.position } : undefined,
     dialogueLines: state.dialogueLines ? [...state.dialogueLines] : undefined,
+    battleRewards: state.battleRewards ? state.battleRewards.map((entry) => ({ ...entry })) : undefined,
+    interactionRewards: state.interactionRewards ? state.interactionRewards.map((entry) => ({ ...entry })) : undefined,
     battleTeamIds: state.battleTeamIds ? [...state.battleTeamIds] : undefined,
     movement: state.movement
       ? {
@@ -293,9 +305,18 @@ function cloneStoryStates(states: NpcStoryStateDefinition[] | undefined): NpcSto
       ? state.movementGuards.map((guard) => ({
           ...guard,
           dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+          postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+          battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
+          battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
         }))
       : undefined,
-    interactionScript: state.interactionScript ? state.interactionScript.map((entry) => ({ ...entry })) : undefined,
+    interactionScript: state.interactionScript
+      ? state.interactionScript.map((entry) => ({
+          ...entry,
+          ...(entry.type === 'dialogue' && Array.isArray(entry.lines) ? { lines: [...entry.lines] } : {}),
+          ...(entry.type === 'move_path' && Array.isArray(entry.directions) ? { directions: [...entry.directions] } : {}),
+        }))
+      : undefined,
   }));
 }
 
@@ -303,6 +324,8 @@ function cloneNpcCharacterTemplate(character: NpcCharacterTemplateEntry): NpcCha
   return {
     ...character,
     dialogueLines: character.dialogueLines ? [...character.dialogueLines] : undefined,
+    battleRewards: character.battleRewards ? character.battleRewards.map((entry) => ({ ...entry })) : undefined,
+    interactionRewards: character.interactionRewards ? character.interactionRewards.map((entry) => ({ ...entry })) : undefined,
     battleTeamIds: character.battleTeamIds ? [...character.battleTeamIds] : undefined,
     movement: character.movement
       ? {
@@ -314,10 +337,19 @@ function cloneNpcCharacterTemplate(character: NpcCharacterTemplateEntry): NpcCha
       ? character.movementGuards.map((guard) => ({
           ...guard,
           dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+          postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+          battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
+          battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
         }))
       : undefined,
     storyStates: cloneStoryStates(character.storyStates),
-    interactionScript: character.interactionScript ? character.interactionScript.map((entry) => ({ ...entry })) : undefined,
+    interactionScript: character.interactionScript
+      ? character.interactionScript.map((entry) => ({
+          ...entry,
+          ...(entry.type === 'dialogue' && Array.isArray(entry.lines) ? { lines: [...entry.lines] } : {}),
+          ...(entry.type === 'move_path' && Array.isArray(entry.directions) ? { directions: [...entry.directions] } : {}),
+        }))
+      : undefined,
   };
 }
 

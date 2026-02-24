@@ -204,9 +204,9 @@ function parseRotations(
 
     return row.split('').map((char, columnIndex) => {
       const value = Number.parseInt(char, 10);
-      if (!Number.isFinite(value) || value < 0 || value > 3) {
+      if (!Number.isFinite(value) || value < 0 || value > 7) {
         throw new Error(
-          `Map ${mapId} layer ${layerInput.id} rotation at (${columnIndex}, ${rowIndex}) must be 0-3`,
+          `Map ${mapId} layer ${layerInput.id} rotation at (${columnIndex}, ${rowIndex}) must be 0-7`,
         );
       }
       return value;

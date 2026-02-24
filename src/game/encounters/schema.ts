@@ -40,20 +40,40 @@ export function sanitizeEncounterEntries(raw: unknown): EncounterTableDefinition
   if (!Array.isArray(raw)) {
     return [];
   }
-  const seen = new Set<number>();
   const parsed: EncounterTableDefinition['entries'] = [];
   for (const entry of raw) {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
       continue;
     }
     const record = entry as Record<string, unknown>;
-    const critterId = clampInt(record.critterId, 1, 999999, -1);
-    if (critterId < 0 || seen.has(critterId)) {
+    const kindRaw = typeof record.kind === 'string' ? record.kind.trim().toLowerCase() : '';
+    const isItemEntry = kindRaw === 'item' || (kindRaw === '' && typeof record.itemId === 'string');
+    if (isItemEntry) {
+      const itemId = sanitizeEncounterItemId(record.itemId);
+      if (!itemId) {
+        continue;
+      }
+      const [minAmount, maxAmount] = sanitizeEncounterAmountRange(
+        record.minAmount ?? record.minQty ?? record.minQuantity ?? record.minLevel,
+        record.maxAmount ?? record.maxQty ?? record.maxQuantity ?? record.maxLevel,
+      );
+      parsed.push({
+        kind: 'item',
+        itemId,
+        weight: sanitizeEncounterWeight(record.weight),
+        minAmount,
+        maxAmount,
+      });
       continue;
     }
-    seen.add(critterId);
+
+    const critterId = clampInt(record.critterId, 1, 999999, -1);
+    if (critterId < 0) {
+      continue;
+    }
     const [minLevel, maxLevel] = sanitizeEncounterLevelRange(record.minLevel, record.maxLevel);
     parsed.push({
+      kind: 'critter',
       critterId,
       weight: sanitizeEncounterWeight(record.weight),
       minLevel,
@@ -153,6 +173,35 @@ function sanitizeEncounterLevelValue(raw: unknown): number | null {
     return null;
   }
   return clampInt(raw, 1, 99, 1);
+}
+
+function sanitizeEncounterAmountRange(minRaw: unknown, maxRaw: unknown): [number | null, number | null] {
+  const minAmount = sanitizeEncounterAmountValue(minRaw);
+  const maxAmount = sanitizeEncounterAmountValue(maxRaw);
+  if (minAmount !== null && maxAmount !== null && minAmount > maxAmount) {
+    return [maxAmount, minAmount];
+  }
+  return [minAmount, maxAmount];
+}
+
+function sanitizeEncounterAmountValue(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return null;
+  }
+  return clampInt(raw, 1, 9999, 1);
+}
+
+function sanitizeEncounterItemId(raw: unknown): string {
+  if (typeof raw !== 'string') {
+    return '';
+  }
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+/g, '')
+    .replace(/-+$/g, '');
 }
 
 function sanitizeTilePositions(raw: unknown, mapWidth: number, mapHeight: number): Vector2[] {

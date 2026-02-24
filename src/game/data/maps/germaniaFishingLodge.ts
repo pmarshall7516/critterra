@@ -1,16 +1,16 @@
 import { createMap } from '@/game/world/mapBuilder';
 
-export const userHouseMap = createMap({
-  id: 'user-house',
-  name: 'Home',
+export const germaniaFishingLodgeMap = createMap({
+  id: 'germania-fishing-lodge',
+  name: 'Fishing Lodge',
   layers: [
     {
       id: 1,
       name: 'Base',
       tiles: [
         '',
-        '',
-        '',
+        '',
+        '',
         '',
         '',
         '',
@@ -55,30 +55,32 @@ export const userHouseMap = createMap({
   ],
   warps: [
     {
-      id: 'user_house_warp_1',
-      to: {
-        x: 14,
-        y: 8
-      },
+      id: 'germania_fishing_lodge_warp_1',
       from: {
         x: 5,
         y: 10
       },
-      label: 'To Portlock',
-      toMapId: 'portlock',
-      toPositions: [
-        {
-          x: 14,
-          y: 8
-        }
-      ],
       fromPositions: [
         {
           x: 5,
           y: 10
         }
       ],
-      requireInteract: false
+      toMapId: 'germania',
+      to: {
+        x: 9,
+        y: 9
+      },
+      toPositions: [
+        {
+          x: 9,
+          y: 9
+        }
+      ],
+      requireInteract: false,
+      requiredFacing: 'down',
+      label: 'To Germania',
+      toFacing: 'down'
     }
   ]
 });

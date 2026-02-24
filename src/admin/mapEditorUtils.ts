@@ -278,6 +278,7 @@ export function updateTile(
   y: number,
   code: EditorTileCode,
   rotationQuarter = 0,
+  mirrorHorizontal = false,
 ): EditableMap {
   const next = cloneEditableMap(map);
   const layer = next.layers.find((entry) => entry.id === layerId);
@@ -291,16 +292,15 @@ export function updateTile(
     return map;
   }
 
-  const safeRotation = sanitizeRotationQuarter(rotationQuarter);
-  const rotationChar = String(safeRotation);
-  const nextRotation = code === BLANK_TILE_CODE ? '0' : rotationChar;
-  if (row[x] === code && (rotationRow?.[x] ?? '0') === nextRotation) {
+  const nextTransform = code === BLANK_TILE_CODE ? 0 : encodeTileTransform(rotationQuarter, mirrorHorizontal);
+  const transformChar = String(nextTransform);
+  if (row[x] === code && (rotationRow?.[x] ?? '0') === transformChar) {
     return map;
   }
 
   layer.tiles[y] = `${row.slice(0, x)}${code}${row.slice(x + 1)}`;
   const currentRotationRow = rotationRow ?? '0'.repeat(row.length);
-  layer.rotations[y] = `${currentRotationRow.slice(0, x)}${nextRotation}${currentRotationRow.slice(x + 1)}`;
+  layer.rotations[y] = `${currentRotationRow.slice(0, x)}${transformChar}${currentRotationRow.slice(x + 1)}`;
   return next;
 }
 
@@ -311,6 +311,7 @@ export function floodFill(
   startY: number,
   code: EditorTileCode,
   rotationQuarter = 0,
+  mirrorHorizontal = false,
 ): EditableMap {
   const targetCode = getTileCodeAt(map, startX, startY, layerId);
   if (!targetCode || targetCode === code) {
@@ -326,7 +327,7 @@ export function floodFill(
   const { width, height } = getMapSize(next);
   const queue: Array<{ x: number; y: number }> = [{ x: startX, y: startY }];
   const visited = new Set<string>();
-  const nextRotation = String(code === BLANK_TILE_CODE ? 0 : sanitizeRotationQuarter(rotationQuarter));
+  const nextTransform = String(code === BLANK_TILE_CODE ? 0 : encodeTileTransform(rotationQuarter, mirrorHorizontal));
 
   while (queue.length > 0) {
     const current = queue.shift();
@@ -352,7 +353,7 @@ export function floodFill(
     const row = layer.tiles[current.y];
     layer.tiles[current.y] = `${row.slice(0, current.x)}${code}${row.slice(current.x + 1)}`;
     const rotationRow = layer.rotations[current.y] ?? '0'.repeat(row.length);
-    layer.rotations[current.y] = `${rotationRow.slice(0, current.x)}${nextRotation}${rotationRow.slice(current.x + 1)}`;
+    layer.rotations[current.y] = `${rotationRow.slice(0, current.x)}${nextTransform}${rotationRow.slice(current.x + 1)}`;
 
     queue.push({ x: current.x + 1, y: current.y });
     queue.push({ x: current.x - 1, y: current.y });
@@ -402,7 +403,21 @@ export function getTileRotationAt(map: EditableMap, x: number, y: number, layerI
   }
 
   const value = Number.parseInt(row[x] ?? '0', 10);
-  return Number.isFinite(value) ? sanitizeRotationQuarter(value) : 0;
+  return decodeTileTransform(value).rotationQuarter;
+}
+
+export function getTileMirrorHorizontalAt(map: EditableMap, x: number, y: number, layerId: string): boolean {
+  const layer = map.layers.find((entry) => entry.id === layerId);
+  if (!layer) {
+    return false;
+  }
+  const row = layer.rotations[y];
+  if (!row || x < 0 || x >= row.length) {
+    return false;
+  }
+
+  const value = Number.parseInt(row[x] ?? '0', 10);
+  return decodeTileTransform(value).mirrorHorizontal;
 }
 
 export function getCollisionEdgeMaskAt(map: EditableMap, x: number, y: number, layerId: string): number {
@@ -647,7 +662,7 @@ function worldLayerToEditable(layer: WorldMapLayer): EditableMapLayer {
       layer.name?.trim() ||
       (layerOrderId === 1 ? 'Base' : layerOrderId === NPC_LAYER_ORDER_ID ? 'NPC' : `Layer ${layerOrderId}`),
     tiles: layer.tiles.map((row) => row.join('')),
-    rotations: layer.rotations.map((row) => row.map((value) => String(sanitizeRotationQuarter(value))).join('')),
+    rotations: layer.rotations.map((row) => row.map((value) => String(sanitizeTileTransform(value))).join('')),
     collisionEdges: layer.collisionEdges.map((row) =>
       row.map((value) => sanitizeCollisionEdgeMask(value).toString(16)).join(''),
     ),
@@ -662,6 +677,12 @@ function cloneNpc(npc: NpcDefinition): NpcDefinition {
     position: { ...npc.position },
     facing: npc.facing,
     dialogueLines: npc.dialogueLines ? [...npc.dialogueLines] : undefined,
+    firstInteractBattle: npc.firstInteractBattle,
+    interactBattleRepeatable: npc.interactBattleRepeatable,
+    interactBattleDefeatedFlag: npc.interactBattleDefeatedFlag,
+    battleRewards: npc.battleRewards ? npc.battleRewards.map((entry) => ({ ...entry })) : undefined,
+    interactionRewards: npc.interactionRewards ? npc.interactionRewards.map((entry) => ({ ...entry })) : undefined,
+    interactionRewardSetFlag: npc.interactionRewardSetFlag,
     battleTeamIds: npc.battleTeamIds ? [...npc.battleTeamIds] : undefined,
     movement: npc.movement
       ? {
@@ -674,9 +695,17 @@ function cloneNpc(npc: NpcDefinition): NpcDefinition {
           ...guard,
           dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
           postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+          battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
+          battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
         }))
       : undefined,
-    interactionScript: npc.interactionScript ? npc.interactionScript.map((step) => ({ ...step })) : undefined,
+    interactionScript: npc.interactionScript
+      ? npc.interactionScript.map((step) => ({
+          ...step,
+          ...(step.type === 'dialogue' && Array.isArray(step.lines) ? { lines: [...step.lines] } : {}),
+          ...(step.type === 'move_path' && Array.isArray(step.directions) ? { directions: [...step.directions] } : {}),
+        }))
+      : undefined,
     idleAnimation: npc.idleAnimation,
     moveAnimation: npc.moveAnimation,
     storyStates: npc.storyStates
@@ -684,6 +713,12 @@ function cloneNpc(npc: NpcDefinition): NpcDefinition {
           ...state,
           position: state.position ? { ...state.position } : undefined,
           dialogueLines: state.dialogueLines ? [...state.dialogueLines] : undefined,
+          firstInteractBattle: state.firstInteractBattle,
+          interactBattleRepeatable: state.interactBattleRepeatable,
+          interactBattleDefeatedFlag: state.interactBattleDefeatedFlag,
+          battleRewards: state.battleRewards ? state.battleRewards.map((entry) => ({ ...entry })) : undefined,
+          interactionRewards: state.interactionRewards ? state.interactionRewards.map((entry) => ({ ...entry })) : undefined,
+          interactionRewardSetFlag: state.interactionRewardSetFlag,
           battleTeamIds: state.battleTeamIds ? [...state.battleTeamIds] : undefined,
           movement: state.movement
             ? {
@@ -696,9 +731,17 @@ function cloneNpc(npc: NpcDefinition): NpcDefinition {
                 ...guard,
                 dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
                 postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+                battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
+                battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
               }))
             : undefined,
-          interactionScript: state.interactionScript ? state.interactionScript.map((step) => ({ ...step })) : undefined,
+          interactionScript: state.interactionScript
+            ? state.interactionScript.map((step) => ({
+                ...step,
+                ...(step.type === 'dialogue' && Array.isArray(step.lines) ? { lines: [...step.lines] } : {}),
+                ...(step.type === 'move_path' && Array.isArray(step.directions) ? { directions: [...step.directions] } : {}),
+              }))
+            : undefined,
           sprite: state.sprite
             ? {
                 ...state.sprite,
@@ -908,7 +951,7 @@ function normalizeRotationRows(
     let normalized = '';
     for (let i = 0; i < row.length; i += 1) {
       const value = Number.parseInt(row[i] ?? '0', 10);
-      normalized += String(Number.isFinite(value) ? sanitizeRotationQuarter(value) : 0);
+      normalized += String(Number.isFinite(value) ? sanitizeTileTransform(value) : 0);
     }
     return normalized;
   });
@@ -992,7 +1035,7 @@ function toWorldMapInput(map: EditableMap): WorldMapInput {
     if (layer.collision === false) {
       layerPayload.collision = false;
     }
-    if (layer.rotations.some((row) => /[1-3]/.test(row))) {
+    if (layer.rotations.some((row) => /[1-7]/.test(row))) {
       layerPayload.rotations = layer.rotations;
     }
     if (layer.collisionEdges.some((row) => /[1-9a-f]/i.test(row))) {
@@ -1016,7 +1059,7 @@ function shouldSerializeAsLegacyTiles(map: EditableMap): boolean {
   }
 
   return (
-    !layer.rotations.some((row) => /[1-3]/.test(row)) &&
+    !layer.rotations.some((row) => /[1-7]/.test(row)) &&
     !layer.collisionEdges.some((row) => /[1-9a-f]/i.test(row))
   );
 }
@@ -1085,6 +1128,24 @@ function sanitizeWarpDefinition(raw: WarpDefinition): WarpDefinition | null {
 function sanitizeRotationQuarter(value: number): number {
   const intValue = Math.floor(Math.abs(value));
   return intValue % 4;
+}
+
+export function sanitizeTileTransform(value: number): number {
+  const intValue = Number.isFinite(value) ? Math.floor(Math.abs(value)) : 0;
+  return intValue % 8;
+}
+
+export function encodeTileTransform(rotationQuarter: number, mirrorHorizontal = false): number {
+  const normalizedRotation = sanitizeRotationQuarter(rotationQuarter);
+  return mirrorHorizontal ? normalizedRotation + 4 : normalizedRotation;
+}
+
+export function decodeTileTransform(value: number): { rotationQuarter: number; mirrorHorizontal: boolean } {
+  const normalized = sanitizeTileTransform(value);
+  return {
+    rotationQuarter: normalized % 4,
+    mirrorHorizontal: normalized >= 4,
+  };
 }
 
 function sanitizeCollisionEdgeMask(value: number): number {

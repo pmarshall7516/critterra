@@ -26,29 +26,67 @@ const DEFAULT_VIEWPORT: ViewportSize = {
 
 const FIXED_STEP_MS = 1000 / 60;
 
-type SideMenuView = 'root' | 'squad' | 'collection';
+type SideMenuView = 'root' | 'squad' | 'collection' | 'backpack';
 type CollectionSort = 'id' | 'name';
 type CritterCardEntry = RuntimeSnapshot['critters']['collection'][number];
 type BattleSnapshot = NonNullable<RuntimeSnapshot['battle']>;
+type BattleTeamEntry = BattleSnapshot['playerTeam'][number];
+type BackpackSort = 'name' | 'category';
+type BackpackItemEntry = RuntimeSnapshot['backpack']['items'][number];
+type GameViewKeyIntent = 'toggle-fullscreen' | 'battle-cancel' | 'toggle-menu' | 'block-for-menu' | 'forward-to-runtime';
+
+interface ResolveGameViewKeyIntentInput {
+  key: string;
+  battleActive: boolean;
+  storyInputLocked: boolean;
+  menuOpen: boolean;
+}
+
+export function resolveGameViewKeyIntent(input: ResolveGameViewKeyIntentInput): GameViewKeyIntent {
+  const { key, battleActive, storyInputLocked, menuOpen } = input;
+  if (key === 'y' || key === 'Y') {
+    return 'toggle-fullscreen';
+  }
+  if (battleActive && key === 'Escape') {
+    return 'battle-cancel';
+  }
+  if (!battleActive && key === 'Escape') {
+    if (storyInputLocked) {
+      return 'block-for-menu';
+    }
+    return 'toggle-menu';
+  }
+  if (menuOpen || battleActive) {
+    return 'block-for-menu';
+  }
+  return 'forward-to-runtime';
+}
 
 export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const runtimeRef = useRef<GameRuntime | null>(null);
+  const squadGridRef = useRef<HTMLDivElement | null>(null);
   const menuOpenRef = useRef(false);
   const battleActiveRef = useRef(false);
   const renderSizeRef = useRef<ViewportSize>(DEFAULT_VIEWPORT);
   const manualStepUntilRef = useRef(0);
   const storyInputLockedRef = useRef(false);
+  const healPromptActiveRef = useRef(false);
 
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<SideMenuView>('root');
   const [collectionSearchInput, setCollectionSearchInput] = useState('');
   const [collectionSort, setCollectionSort] = useState<CollectionSort>('id');
+  const [backpackSearchInput, setBackpackSearchInput] = useState('');
+  const [backpackSort, setBackpackSort] = useState<BackpackSort>('name');
+  const [backpackCategoryFilter, setBackpackCategoryFilter] = useState<'all' | string>('all');
+  const [backpackHealingItemId, setBackpackHealingItemId] = useState<string | null>(null);
   const [squadPickerSlotIndex, setSquadPickerSlotIndex] = useState<number | null>(null);
   const [squadSearchInput, setSquadSearchInput] = useState('');
   const [expandedStatsByCritterId, setExpandedStatsByCritterId] = useState<Record<number, boolean>>({});
+  const [squadLargestOccupiedCardHeight, setSquadLargestOccupiedCardHeight] = useState<number | null>(null);
   const [hoveredStarterCritterId, setHoveredStarterCritterId] = useState<number | null>(null);
   const [blockedSquadRemovalNotice, setBlockedSquadRemovalNotice] = useState<{ slotIndex: number; attempt: number } | null>(
     null,
@@ -64,17 +102,18 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
   }, [snapshot?.battle]);
 
   useEffect(() => {
-    storyInputLockedRef.current = Boolean(snapshot?.story.inputLocked || snapshot?.dialogue);
+    storyInputLockedRef.current = Boolean(snapshot?.story.inputLocked || snapshot?.dialogue || snapshot?.story.healPrompt);
+    healPromptActiveRef.current = Boolean(snapshot?.story.healPrompt);
     if (!snapshot?.story.starterSelection) {
       setHoveredStarterCritterId(null);
     }
-  }, [snapshot?.dialogue, snapshot?.story.inputLocked, snapshot?.story.starterSelection]);
+  }, [snapshot?.dialogue, snapshot?.story.healPrompt, snapshot?.story.inputLocked, snapshot?.story.starterSelection]);
 
   useEffect(() => {
-    if (snapshot?.dialogue && menuOpen) {
+    if ((snapshot?.dialogue || snapshot?.story.healPrompt) && menuOpen) {
       setMenuOpen(false);
     }
-  }, [menuOpen, snapshot?.dialogue]);
+  }, [menuOpen, snapshot?.dialogue, snapshot?.story.healPrompt]);
 
   useEffect(() => {
     if (snapshot?.battle?.id) {
@@ -87,6 +126,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
       setMenuView('root');
       setSquadPickerSlotIndex(null);
       setSquadSearchInput('');
+      setBackpackHealingItemId(null);
     }
   }, [menuOpen]);
 
@@ -95,6 +135,9 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
       setSquadPickerSlotIndex(null);
       setSquadSearchInput('');
       setBlockedSquadRemovalNotice(null);
+    }
+    if (menuView !== 'backpack') {
+      setBackpackHealingItemId(null);
     }
   }, [menuView]);
 
@@ -228,28 +271,29 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
 
     const handleKeyDown = (event: KeyboardEvent) => {
       const key = event.key;
+      const keyIntent = resolveGameViewKeyIntent({
+        key,
+        battleActive: battleActiveRef.current,
+        storyInputLocked: storyInputLockedRef.current,
+        menuOpen: menuOpenRef.current,
+      });
 
-      if (key === 'f' || key === 'F') {
+      if (keyIntent === 'toggle-fullscreen') {
         event.preventDefault();
         void toggleFullscreen(viewport);
         return;
       }
 
-      if (key === 'Escape' && document.fullscreenElement) {
+      if (keyIntent === 'battle-cancel') {
         event.preventDefault();
-        void document.exitFullscreen();
+        const changed = runtime.cancelBattleSwapSelection();
+        if (changed) {
+          setSnapshot(runtime.getSnapshot());
+        }
         return;
       }
 
       if (battleActiveRef.current) {
-        if (key === 'Escape') {
-          event.preventDefault();
-          const changed = runtime.cancelBattleSwapSelection();
-          if (changed) {
-            setSnapshot(runtime.getSnapshot());
-          }
-          return;
-        }
         if (
           key.startsWith('Arrow') ||
           key === 'w' ||
@@ -268,17 +312,23 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
         return;
       }
 
-      if (key === 'Escape') {
-        if (storyInputLockedRef.current) {
-          event.preventDefault();
-          return;
-        }
+      if (
+        healPromptActiveRef.current &&
+        (key === 'y' || key === 'Y' || key === 'n' || key === 'N' || key === 'Enter')
+      ) {
+        event.preventDefault();
+      }
+
+      if (keyIntent === 'toggle-menu') {
         event.preventDefault();
         setMenuOpen((open) => !open);
         return;
       }
 
-      if (menuOpenRef.current) {
+      if (keyIntent === 'block-for-menu') {
+        if (key === 'Escape') {
+          event.preventDefault();
+        }
         return;
       }
 
@@ -292,6 +342,8 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
         key === 'S' ||
         key === 'd' ||
         key === 'D' ||
+        key === 'f' ||
+        key === 'F' ||
         key === ' '
       ) {
         event.preventDefault();
@@ -355,6 +407,34 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     }
   };
 
+  const handleUseBackpackItem = (item: BackpackItemEntry) => {
+    const runtime = runtimeRef.current;
+    if (!runtime) {
+      return;
+    }
+    if (item.effectType === 'heal_flat' || item.effectType === 'heal_percent') {
+      setBackpackHealingItemId(item.itemId);
+      return;
+    }
+    const changed = runtime.useBackpackItem(item.itemId);
+    setSnapshot(runtime.getSnapshot());
+    if (!changed) {
+      return;
+    }
+  };
+
+  const handleUseBackpackHealingItemOnSlot = (itemId: string, slotIndex: number) => {
+    const runtime = runtimeRef.current;
+    if (!runtime) {
+      return;
+    }
+    const changed = runtime.useBackpackItemOnSquadSlot(itemId, slotIndex);
+    setSnapshot(runtime.getSnapshot());
+    if (changed) {
+      setBackpackHealingItemId(null);
+    }
+  };
+
   const handleAssignSquadCritter = (critterId: number) => {
     const runtime = runtimeRef.current;
     if (!runtime || squadPickerSlotIndex === null) {
@@ -362,8 +442,8 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     }
 
     const changed = runtime.assignCritterToSquadSlot(squadPickerSlotIndex, critterId);
+    setSnapshot(runtime.getSnapshot());
     if (changed) {
-      setSnapshot(runtime.getSnapshot());
       setSquadPickerSlotIndex(null);
       setSquadSearchInput('');
     }
@@ -383,9 +463,9 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
       return;
     }
     const changed = runtime.clearSquadSlot(slotIndex);
+    setSnapshot(runtime.getSnapshot());
     if (changed) {
       setBlockedSquadRemovalNotice(null);
-      setSnapshot(runtime.getSnapshot());
       return;
     }
 
@@ -527,14 +607,37 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     }
   };
 
+  const handleHealPromptChoice = (shouldHeal: boolean) => {
+    const runtime = runtimeRef.current;
+    if (!runtime) {
+      return;
+    }
+    const changed = runtime.chooseHealPrompt(shouldHeal);
+    if (changed) {
+      setSnapshot(runtime.getSnapshot());
+    }
+  };
+
   const closeMenu = () => {
     setMenuOpen(false);
   };
 
   const critterState = snapshot?.critters;
+  const backpackState = snapshot?.backpack;
   const starterSelection = snapshot?.story.starterSelection ?? null;
+  const healPrompt = snapshot?.story.healPrompt ?? null;
   const squadSlots = critterState?.squadSlots ?? [];
   const collection = critterState?.collection ?? [];
+  const backpackItems = backpackState?.items ?? [];
+  const backpackCategories = backpackState?.categories ?? [];
+  useEffect(() => {
+    if (backpackCategoryFilter === 'all') {
+      return;
+    }
+    if (!backpackCategories.includes(backpackCategoryFilter)) {
+      setBackpackCategoryFilter('all');
+    }
+  }, [backpackCategories, backpackCategoryFilter]);
   const collectionById = useMemo(() => {
     const next = new Map<number, CritterCardEntry>();
     for (const entry of collection) {
@@ -622,6 +725,15 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     }
     return assigned;
   }, [squadSlots]);
+  const hasAssignedSquadCritter = assignedSquadCritterIds.size > 0;
+  const squadGridStyle = useMemo(() => {
+    if (!Number.isFinite(squadLargestOccupiedCardHeight) || squadLargestOccupiedCardHeight === null) {
+      return undefined;
+    }
+    return {
+      '--squad-slot-target-height': `${Math.ceil(squadLargestOccupiedCardHeight)}px`,
+    } as CSSProperties;
+  }, [squadLargestOccupiedCardHeight]);
   const displayCollection = useMemo(() => {
     const query = collectionSearchInput.trim().toLowerCase();
     const filtered = !query
@@ -640,6 +752,92 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     });
     return filtered;
   }, [collection, collectionSearchInput, collectionSort]);
+  const displayBackpackItems = useMemo(() => {
+    const query = backpackSearchInput.trim().toLowerCase();
+    let filtered = !query
+      ? [...backpackItems]
+      : backpackItems.filter((item) => {
+          return (
+            item.name.toLowerCase().includes(query) ||
+            item.category.toLowerCase().includes(query) ||
+            item.description.toLowerCase().includes(query)
+          );
+        });
+    if (backpackCategoryFilter !== 'all') {
+      filtered = filtered.filter((item) => item.category === backpackCategoryFilter);
+    }
+    filtered.sort((left, right) => {
+      if (backpackSort === 'category') {
+        const byCategory = left.category.localeCompare(right.category, undefined, { sensitivity: 'base' });
+        if (byCategory !== 0) {
+          return byCategory;
+        }
+      }
+      return left.name.localeCompare(right.name, undefined, { sensitivity: 'base' });
+    });
+    return filtered;
+  }, [backpackCategoryFilter, backpackItems, backpackSearchInput, backpackSort]);
+  const backpackHealingItem = useMemo(
+    () => (backpackHealingItemId ? backpackItems.find((item) => item.itemId === backpackHealingItemId) ?? null : null),
+    [backpackHealingItemId, backpackItems],
+  );
+  const backpackHealingTargetSlots = useMemo(() => squadSlots, [squadSlots]);
+
+  useEffect(() => {
+    if (menuView !== 'squad') {
+      setSquadLargestOccupiedCardHeight(null);
+      return;
+    }
+
+    const squadGridNode = squadGridRef.current;
+    if (!squadGridNode) {
+      setSquadLargestOccupiedCardHeight(null);
+      return;
+    }
+
+    const cardSelector = '.squad-slot.is-unlocked .collection-card';
+    const measureLargestCard = () => {
+      const occupiedCards = Array.from(squadGridNode.querySelectorAll<HTMLElement>(cardSelector));
+      if (occupiedCards.length === 0) {
+        setSquadLargestOccupiedCardHeight(null);
+        return;
+      }
+
+      let largestHeight = 0;
+      for (const card of occupiedCards) {
+        largestHeight = Math.max(largestHeight, card.getBoundingClientRect().height);
+      }
+      const nextHeight = largestHeight > 0 ? Math.ceil(largestHeight) : null;
+      setSquadLargestOccupiedCardHeight((current) => (current === nextHeight ? current : nextHeight));
+    };
+
+    let frameHandle = window.requestAnimationFrame(measureLargestCard);
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => {
+            window.cancelAnimationFrame(frameHandle);
+            frameHandle = window.requestAnimationFrame(measureLargestCard);
+          })
+        : null;
+
+    if (resizeObserver) {
+      const occupiedCards = Array.from(squadGridNode.querySelectorAll<HTMLElement>(cardSelector));
+      for (const card of occupiedCards) {
+        resizeObserver.observe(card);
+      }
+    }
+
+    return () => {
+      window.cancelAnimationFrame(frameHandle);
+      resizeObserver?.disconnect();
+    };
+  }, [collection, expandedStatsByCritterId, menuView, squadSlots]);
+
+  useEffect(() => {
+    if (menuView === 'squad' && !hasAssignedSquadCritter) {
+      setMenuView('root');
+    }
+  }, [hasAssignedSquadCritter, menuView]);
 
   const inBattle = Boolean(snapshot?.battle);
 
@@ -657,6 +855,22 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
             <p className="dialogue-box__meta">
               Line {snapshot.dialogue.lineIndex}/{snapshot.dialogue.totalLines}
             </p>
+          </div>
+        )}
+
+        {healPrompt && !snapshot?.dialogue && (
+          <div className="dialogue-box">
+            <p className="dialogue-box__speaker">{healPrompt.speaker}</p>
+            <p>{healPrompt.text}</p>
+            <div className="dialogue-box__actions">
+              <button type="button" className="primary" onClick={() => handleHealPromptChoice(true)}>
+                Yes
+              </button>
+              <button type="button" className="secondary" onClick={() => handleHealPromptChoice(false)}>
+                No
+              </button>
+            </div>
+            <p className="dialogue-box__meta">Press Y or Space for Yes. Press N for No.</p>
           </div>
         )}
 
@@ -687,7 +901,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
         {menuOpen && <div className="side-menu__backdrop" onClick={closeMenu} />}
 
         <aside
-          className={`side-menu ${menuOpen ? 'is-open' : ''} ${menuView === 'collection' ? 'side-menu--collection' : ''} ${
+          className={`side-menu ${menuOpen ? 'is-open' : ''} ${menuView === 'collection' || menuView === 'backpack' ? 'side-menu--collection' : ''} ${
             menuView === 'squad' ? 'side-menu--squad' : ''
           }`}
         >
@@ -698,11 +912,17 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                 <button type="button" className="secondary" onClick={() => setMenuView('collection')}>
                   Collection
                 </button>
-                <button type="button" className="secondary" onClick={() => setMenuView('squad')}>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setMenuView('squad')}
+                  disabled={!hasAssignedSquadCritter}
+                  title={!hasAssignedSquadCritter ? 'No critters are currently assigned to your squad.' : undefined}
+                >
                   Squad
                 </button>
-                <button type="button" className="secondary" disabled>
-                  Backpack (Soon)
+                <button type="button" className="secondary" onClick={() => setMenuView('backpack')}>
+                  Backpack
                 </button>
               </div>
               <div className="side-menu__actions">
@@ -730,42 +950,16 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
               <p className="side-menu__meta">
                 {critterState?.unlockedSquadSlots ?? 0}/{critterState?.maxSquadSlots ?? 0} slots unlocked.
               </p>
-              <div className="squad-layout">
-                {squadPickerSlotIndex !== null && (
-                  <section className="squad-picker">
-                    <div className="squad-picker__toolbar">
-                      <input
-                        value={squadSearchInput}
-                        onChange={(event) => setSquadSearchInput(event.target.value)}
-                        placeholder="Search Name or ID"
-                      />
-                      <button type="button" className="squad-picker__close" onClick={() => setSquadPickerSlotIndex(null)}>
-                        X
-                      </button>
-                    </div>
-                    <p className="side-menu__meta">Selecting for slot {squadPickerSlotIndex + 1}.</p>
-                    <div className="squad-picker__grid">
-                      {squadPickerCollection.map((entry) => (
-                        <CritterCard
-                          key={`squad-pick-${entry.critterId}`}
-                          entry={entry}
-                          elementLogoBucketRoot={elementLogoBucketRoot}
-                          iconsBucketRoot={iconsBucketRoot}
-                          showStatBreakdown={Boolean(expandedStatsByCritterId[entry.critterId])}
-                          onToggleStatInfo={() => handleToggleStatInfo(entry.critterId)}
-                          onSelectCritter={handleAssignSquadCritter}
-                          isSelectionDisabled={assignedSquadCritterIds.has(entry.critterId)}
-                        />
-                      ))}
-                      {squadPickerCollection.length === 0 && (
-                        <p className="collection-card__mission-summary">No unlocked critters match that search.</p>
-                      )}
-                    </div>
-                  </section>
-                )}
-                <div className="squad-grid">
+              {snapshot?.message && <p className="side-menu__notice">{snapshot.message}</p>}
+              <div className={`squad-layout ${squadPickerSlotIndex !== null ? 'is-picking' : ''}`}>
+                <div className="squad-grid" ref={squadGridRef} style={squadGridStyle}>
                   {squadSlots.map((slot) => {
                     const slottedCritter = slot.critterId ? collectionById.get(slot.critterId) ?? null : null;
+                    const isKnockedOutSlot =
+                      slot.unlocked &&
+                      slot.critterId !== null &&
+                      slot.currentHp !== null &&
+                      slot.currentHp <= 0;
                     const isBlockedRemovalSlot = blockedSquadRemovalNotice?.slotIndex === slot.index;
                     const blockedRemovalAnimationName =
                       blockedSquadRemovalNotice && isBlockedRemovalSlot
@@ -778,7 +972,9 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                         key={`squad-slot-${slot.index}`}
                         className={`squad-slot ${slot.unlocked ? 'is-unlocked' : 'is-locked'} ${
                           slot.index === squadPickerSlotIndex ? 'is-selected' : ''
-                        } ${isBlockedRemovalSlot ? 'is-removal-blocked' : ''}`}
+                        } ${isBlockedRemovalSlot ? 'is-removal-blocked' : ''} ${
+                          isKnockedOutSlot ? 'is-knocked-out' : ''
+                        }`}
                         style={
                           blockedRemovalAnimationName
                             ? ({ '--squad-slot-shake-name': blockedRemovalAnimationName } as CSSProperties)
@@ -807,6 +1003,8 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                             iconsBucketRoot={iconsBucketRoot}
                             showStatBreakdown={Boolean(expandedStatsByCritterId[slottedCritter.critterId])}
                             onToggleStatInfo={() => handleToggleStatInfo(slottedCritter.critterId)}
+                            onEquipSkill={handleEquipSkill}
+                            onUnequipSkill={handleUnequipSkill}
                             healthProgress={
                               slot.currentHp !== null && slot.maxHp !== null
                                 ? {
@@ -819,6 +1017,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                         ) : (
                           <span className="squad-slot__placeholder">Empty</span>
                         )}
+                        {isKnockedOutSlot && <div className="squad-slot__ko-badge">Knocked Out</div>}
                         {isBlockedRemovalSlot && (
                           <div className="squad-slot__blocked-popup">You need at least 1 Critter!</div>
                         )}
@@ -827,6 +1026,169 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                   })}
                 </div>
               </div>
+              {squadPickerSlotIndex !== null && (
+                <div className="squad-picker-modal" role="dialog" aria-modal="true" aria-label="Choose squad critter">
+                  <button type="button" className="squad-picker-modal__backdrop" onClick={() => setSquadPickerSlotIndex(null)} />
+                  <section className="squad-picker">
+                    <div className="squad-picker__toolbar">
+                      <input
+                        value={squadSearchInput}
+                        onChange={(event) => setSquadSearchInput(event.target.value)}
+                        placeholder="Search unlocked critters"
+                      />
+                      <button type="button" className="squad-picker__close" onClick={() => setSquadPickerSlotIndex(null)}>
+                        X
+                      </button>
+                    </div>
+                    <p className="side-menu__meta">Selecting for slot {squadPickerSlotIndex + 1}.</p>
+                    <div className="squad-picker__grid">
+                      {squadPickerCollection.map((entry) => (
+                        <CritterCard
+                          key={`squad-pick-${entry.critterId}`}
+                          entry={entry}
+                          elementLogoBucketRoot={elementLogoBucketRoot}
+                          iconsBucketRoot={iconsBucketRoot}
+                          showStatBreakdown={Boolean(expandedStatsByCritterId[entry.critterId])}
+                          onToggleStatInfo={() => handleToggleStatInfo(entry.critterId)}
+                          onSelectCritter={handleAssignSquadCritter}
+                          isSelectionDisabled={assignedSquadCritterIds.has(entry.critterId)}
+                        />
+                      ))}
+                      {squadPickerCollection.length === 0 && (
+                        <p className="collection-card__mission-summary">No unlocked critters match that search.</p>
+                      )}
+                    </div>
+                  </section>
+                </div>
+              )}
+              <div className="side-menu__actions">
+                <button type="button" className="secondary" onClick={() => setMenuView('root')}>
+                  Back
+                </button>
+              </div>
+            </>
+          ) : menuView === 'backpack' ? (
+            <>
+              <h2>Backpack</h2>
+              <p className="side-menu__meta">
+                {backpackState?.totalOwnedKinds ?? 0} item types | {backpackState?.totalOwnedCount ?? 0} total items.
+              </p>
+              {snapshot?.message && <p className="side-menu__notice">{snapshot.message}</p>}
+              <div className="collection-toolbar">
+                <label className="collection-toolbar__search">
+                  Search
+                  <input
+                    value={backpackSearchInput}
+                    onChange={(event) => setBackpackSearchInput(event.target.value)}
+                    placeholder="Name, category, or description"
+                  />
+                </label>
+                <div className="collection-toolbar__sort">
+                  <span>Sort</span>
+                  <button
+                    type="button"
+                    className={`secondary ${backpackSort === 'name' ? 'is-selected' : ''}`}
+                    onClick={() => setBackpackSort('name')}
+                  >
+                    Name
+                  </button>
+                  <button
+                    type="button"
+                    className={`secondary ${backpackSort === 'category' ? 'is-selected' : ''}`}
+                    onClick={() => setBackpackSort('category')}
+                  >
+                    Category
+                  </button>
+                </div>
+                <div className="collection-toolbar__sort">
+                  <span>Filter</span>
+                  <button
+                    type="button"
+                    className={`secondary ${backpackCategoryFilter === 'all' ? 'is-selected' : ''}`}
+                    onClick={() => setBackpackCategoryFilter('all')}
+                  >
+                    All
+                  </button>
+                  {backpackCategories.map((category) => (
+                    <button
+                      key={`backpack-filter-${category}`}
+                      type="button"
+                      className={`secondary ${backpackCategoryFilter === category ? 'is-selected' : ''}`}
+                      onClick={() => setBackpackCategoryFilter(category)}
+                    >
+                      {category}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="collection-grid backpack-grid">
+                {displayBackpackItems.map((item) => (
+                  <BackpackItemCard key={`backpack-${item.itemId}`} item={item} onUse={() => handleUseBackpackItem(item)} />
+                ))}
+                {displayBackpackItems.length === 0 && (
+                  <p className="collection-card__mission-summary">No items match that search/filter.</p>
+                )}
+              </div>
+              {backpackHealingItem && (
+                <section className="backpack-heal-picker">
+                  <p className="side-menu__meta">Select a squad critter to use {backpackHealingItem.name}.</p>
+                  <div className="backpack-heal-picker__grid">
+                    {backpackHealingTargetSlots.map((slot) => {
+                      const critterEntry = slot.critterId ? collectionById.get(slot.critterId) ?? null : null;
+                      const isSelectable = slot.unlocked && slot.critterId !== null;
+                      const critterName = slot.critterName ?? critterEntry?.name ?? (slot.unlocked ? 'Empty' : 'Locked');
+                      const maxHp = Math.max(1, slot.maxHp ?? critterEntry?.effectiveStats.hp ?? 1);
+                      const currentHp = Math.max(0, Math.min(slot.currentHp ?? 0, maxHp));
+                      const hpPercent = Math.max(0, Math.min(100, Math.round((currentHp / maxHp) * 100)));
+                      const hpTier = hpPercent <= 25 ? 'critical' : hpPercent <= 55 ? 'warning' : 'healthy';
+                      const hpStyle = {
+                        '--backpack-heal-hp-fill': `${hpPercent}%`,
+                      } as CSSProperties;
+                      return (
+                        <button
+                          key={`backpack-heal-slot-${slot.index}`}
+                          type="button"
+                          className={`backpack-heal-target-card ${currentHp <= 0 ? 'is-knocked-out' : ''} ${
+                            isSelectable ? '' : 'is-disabled'
+                          }`}
+                          onClick={() => handleUseBackpackHealingItemOnSlot(backpackHealingItem.itemId, slot.index)}
+                          disabled={!isSelectable}
+                          title={`Slot ${slot.index + 1}: ${critterName}`}
+                        >
+                          <span className="backpack-heal-target-card__slot">Slot {slot.index + 1}</span>
+                          <span className="backpack-heal-target-card__name">{critterName}</span>
+                          {critterEntry?.spriteUrl ? (
+                            <img
+                              src={critterEntry.spriteUrl}
+                              alt={critterName}
+                              className="backpack-heal-target-card__sprite"
+                              loading="lazy"
+                              decoding="async"
+                            />
+                          ) : (
+                            <div className="backpack-heal-target-card__sprite backpack-heal-target-card__sprite--missing">
+                              No Sprite
+                            </div>
+                          )}
+                          {isSelectable ? (
+                            <div className={`backpack-heal-target-card__hp is-${hpTier}`} style={hpStyle}>
+                              <span className="backpack-heal-target-card__hp-fill" />
+                              <span className="backpack-heal-target-card__hp-label">
+                                HP {currentHp}/{maxHp}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="backpack-heal-target-card__status">{slot.unlocked ? 'No critter' : 'Locked slot'}</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button type="button" className="secondary" onClick={() => setBackpackHealingItemId(null)}>
+                    Cancel
+                  </button>
+                </section>
+              )}
               <div className="side-menu__actions">
                 <button type="button" className="secondary" onClick={() => setMenuView('root')}>
                   Back
@@ -878,6 +1240,14 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                     onAdvanceCritter={handleAdvanceCritter}
                     onEquipSkill={handleEquipSkill}
                     onUnequipSkill={handleUnequipSkill}
+                    healthProgress={
+                      entry.currentHp !== null && entry.maxHp !== null
+                        ? {
+                            currentHp: entry.currentHp,
+                            maxHp: entry.maxHp,
+                          }
+                        : undefined
+                    }
                   />
                 ))}
               </div>
@@ -909,6 +1279,50 @@ function collectionCardStyle(element: string): CSSProperties {
   return {
     '--collection-accent': ELEMENT_ACCENTS[element] ?? '#7bc8ff',
   } as CSSProperties;
+}
+
+interface BackpackItemCardProps {
+  item: BackpackItemEntry;
+  onUse: () => void;
+}
+
+function BackpackItemCard({ item, onUse }: BackpackItemCardProps) {
+  const detailsText = item.description.trim() || item.effectSummary;
+  return (
+    <article className={`collection-card backpack-card ${item.hasUseAction && !item.canUse ? 'is-locked' : ''}`}>
+      <div className="collection-card__body">
+        <header className="backpack-card__head">
+          <span className="backpack-card__name">{item.name}</span>
+          <span className="backpack-card__type">{capitalizeToken(item.category)}</span>
+        </header>
+        <div className="backpack-card__image-wrap">
+          {item.imageUrl ? (
+            <img src={item.imageUrl} alt={item.name} className="collection-card__sprite" loading="lazy" decoding="async" />
+          ) : (
+            <div className="collection-card__sprite collection-card__sprite--missing">No Image</div>
+          )}
+        </div>
+        <p className="backpack-card__owned">Owned: {item.quantityOwned}</p>
+        <section className="backpack-card__details">
+          <p className="collection-card__mission-summary">{detailsText || 'No details set.'}</p>
+        </section>
+      </div>
+      {item.hasUseAction && (
+        <button
+          type="button"
+          className="collection-card__advance backpack-card__use"
+          disabled={!item.canUse}
+          onClick={(event) => {
+            event.stopPropagation();
+            onUse();
+          }}
+        >
+          Use
+        </button>
+      )}
+      {!item.hasUseAction && <div className="backpack-card__use-spacer" aria-hidden="true" />}
+    </article>
+  );
 }
 
 interface CritterCardProps {
@@ -1132,17 +1546,21 @@ function CritterCard({
                     className="collection-card__skill-slot"
                     style={color ? { backgroundColor: color, color: '#1a1a1a' } : undefined}
                     onClick={(e) => {
-                      e.stopPropagation();
-                      if (onEquipSkill) setSkillPopup({ slotIndex: index });
+                      if (onEquipSkill) {
+                        e.stopPropagation();
+                        setSkillPopup({ slotIndex: index });
+                      }
                     }}
                     onContextMenu={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
+                      if (onUnequipSkill && slot) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }
                       if (onUnequipSkill && slot && equippedCount > 1) {
                         onUnequipSkill(entry.critterId, index);
                       }
                     }}
-                    title={tooltip || (slot ? undefined : 'Empty slot – click to equip')}
+                    title={tooltip || (!slot && onEquipSkill ? 'Empty slot – click to equip' : undefined)}
                   >
                     <SkillCellContent slot={slot} iconsBucketRoot={iconsBucketRoot} />
                   </button>
@@ -1159,6 +1577,7 @@ function CritterCard({
             className="collection-card__skill-popup"
             role="dialog"
             aria-label="Equip skill"
+            onClick={(e) => e.stopPropagation()}
           >
             <p className="collection-card__skill-popup-title">Equip or replace skill (slot {skillPopup.slotIndex + 1})</p>
             <div className="collection-card__skill-popup-list">
@@ -1188,7 +1607,14 @@ function CritterCard({
                 Clear slot
               </button>
             </div>
-            <button type="button" className="secondary" onClick={() => setSkillPopup(null)}>
+            <button
+              type="button"
+              className="secondary"
+              onClick={(e) => {
+                e.stopPropagation();
+                setSkillPopup(null);
+              }}
+            >
               Cancel
             </button>
           </div>
@@ -1367,6 +1793,7 @@ function BattleOverlay({
   }
 
   const canSelectSquad = !battle.canAdvanceNarration && (battle.requiresStarterSelection || battle.requiresSwapSelection);
+  const showSwapBackLink = !battle.canAdvanceNarration && battle.requiresSwapSelection && battle.canCancelSwap;
 
   return (
     <div className="battle-overlay">
@@ -1380,19 +1807,35 @@ function BattleOverlay({
             title="Your Critter"
             position="player"
             critter={activePlayer}
+            teamEntries={battle.playerTeam}
+            iconsBucketRoot={iconsBucketRoot}
             isAttacking={battle.activeAnimation?.attacker === 'player'}
             attackToken={battle.activeAnimation?.attacker === 'player' ? battle.activeAnimation.token : null}
             squadEntries={battle.playerTeam}
             playerActiveIndex={battle.playerActiveIndex}
             canSelectSquad={canSelectSquad}
+            emptyText={
+              canSelectSquad
+                ? battle.requiresStarterSelection
+                  ? 'Choose your lead critter.'
+                  : 'Choose a squad critter.'
+                : 'No active critter.'
+            }
             onSelectSquadSlot={onSelectSquadSlot}
           />
           <BattleActivePanel
             title="Opponent"
             position="opponent"
             critter={activeOpponent}
+            teamEntries={battle.opponentTeam}
+            iconsBucketRoot={iconsBucketRoot}
             isAttacking={battle.activeAnimation?.attacker === 'opponent'}
             attackToken={battle.activeAnimation?.attacker === 'opponent' ? battle.activeAnimation.token : null}
+            emptyText={
+              battle.requiresStarterSelection && battle.source.type === 'npc'
+                ? 'Opponent reveals after your pick.'
+                : 'No active critter.'
+            }
           />
         </div>
         <div className="battle-screen__console">
@@ -1405,6 +1848,18 @@ function BattleOverlay({
                 onClick={(e) => {
                   e.preventDefault();
                   setShowSkillPicker(false);
+                }}
+              >
+                ← Back
+              </a>
+            )}
+            {showSwapBackLink && (
+              <a
+                href="#"
+                className="battle-screen__back-link"
+                onClick={(e) => {
+                  e.preventDefault();
+                  onCancelSwap();
                 }}
               >
                 ← Back
@@ -1520,40 +1975,226 @@ interface BattleActivePanelProps {
   title: string;
   position: 'player' | 'opponent';
   critter: BattleSnapshot['playerTeam'][number] | null;
+  teamEntries?: BattleTeamEntry[];
+  iconsBucketRoot: string | null;
   isAttacking: boolean;
   attackToken: number | null;
   squadEntries?: BattleSnapshot['playerTeam'];
   playerActiveIndex?: number | null;
   canSelectSquad?: boolean;
+  emptyText?: string;
   onSelectSquadSlot?: (slotIndex: number) => void;
+}
+
+const BATTLE_HP_ANIMATION_MIN_MS = 120;
+const BATTLE_HP_ANIMATION_MAX_MS = 1400;
+const BATTLE_HP_ANIMATION_MS_PER_PERCENT = 16;
+
+function calcBattleHpPercent(entry: BattleSnapshot['playerTeam'][number] | null): number {
+  if (!entry) return 0;
+  const safeMax = Math.max(1, entry.maxHp);
+  const safeCurrent = Math.max(0, Math.min(entry.currentHp, safeMax));
+  return Math.max(0, Math.min(100, (safeCurrent / safeMax) * 100));
+}
+
+function calcBattleHpAnimationMs(deltaPercent: number): number {
+  const safeDelta = Math.max(0, deltaPercent);
+  if (safeDelta <= 0) return 0;
+  const rawDuration = Math.round(BATTLE_HP_ANIMATION_MIN_MS + safeDelta * BATTLE_HP_ANIMATION_MS_PER_PERCENT);
+  return Math.max(BATTLE_HP_ANIMATION_MIN_MS, Math.min(BATTLE_HP_ANIMATION_MAX_MS, rawDuration));
 }
 
 function BattleActivePanel({
   title,
   position,
   critter,
+  teamEntries = [],
+  iconsBucketRoot,
   isAttacking,
   attackToken,
   squadEntries = [],
   playerActiveIndex = null,
   canSelectSquad = false,
+  emptyText = 'No active critter.',
   onSelectSquadSlot,
 }: BattleActivePanelProps) {
-  const hpPercent = critter
-    ? Math.max(0, Math.min(100, Math.round((Math.max(0, critter.currentHp) / Math.max(1, critter.maxHp)) * 100)))
-    : 0;
+  const [displayCritter, setDisplayCritter] = useState<BattleSnapshot['playerTeam'][number] | null>(critter);
+  const [spriteMotion, setSpriteMotion] = useState<'idle' | 'entering' | 'knockout'>('idle');
+  const [displayedHpPercent, setDisplayedHpPercent] = useState<number>(() => calcBattleHpPercent(critter));
+  const [hpBarTransitionMs, setHpBarTransitionMs] = useState(0);
+  const previousCritterRef = useRef<BattleSnapshot['playerTeam'][number] | null>(critter);
+  const previousHpIdentityRef = useRef<{ critterId: number; maxHp: number } | null>(
+    critter ? { critterId: critter.critterId, maxHp: critter.maxHp } : null,
+  );
+  const previousAnimatedHpRef = useRef<number>(calcBattleHpPercent(critter));
+  const hiddenKnockoutCritterIdRef = useRef<number | null>(null);
+  const spriteMotionTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (spriteMotionTimeoutRef.current !== null) {
+        window.clearTimeout(spriteMotionTimeoutRef.current);
+        spriteMotionTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const previous = previousCritterRef.current;
+    previousCritterRef.current = critter;
+
+    if (spriteMotionTimeoutRef.current !== null) {
+      window.clearTimeout(spriteMotionTimeoutRef.current);
+      spriteMotionTimeoutRef.current = null;
+    }
+
+    if (!critter) {
+      hiddenKnockoutCritterIdRef.current = null;
+      setDisplayCritter(null);
+      setSpriteMotion('idle');
+      return;
+    }
+
+    const sameCritter = previous?.critterId === critter.critterId;
+    const previousAlive = Boolean(previous && !previous.fainted && previous.currentHp > 0);
+    const nowFainted = critter.fainted || critter.currentHp <= 0;
+
+    if (!sameCritter) {
+      hiddenKnockoutCritterIdRef.current = null;
+      setDisplayCritter(critter);
+      setSpriteMotion('entering');
+      spriteMotionTimeoutRef.current = window.setTimeout(() => {
+        setSpriteMotion('idle');
+        spriteMotionTimeoutRef.current = null;
+      }, 340);
+      return;
+    }
+
+    if (hiddenKnockoutCritterIdRef.current === critter.critterId && nowFainted) {
+      setDisplayCritter(null);
+      setSpriteMotion('idle');
+      return;
+    }
+
+    if (sameCritter && previousAlive && nowFainted) {
+      setDisplayCritter(critter);
+      setSpriteMotion('knockout');
+      spriteMotionTimeoutRef.current = window.setTimeout(() => {
+        hiddenKnockoutCritterIdRef.current = critter.critterId;
+        setDisplayCritter((current) => (current && current.critterId === critter.critterId ? null : current));
+        setSpriteMotion('idle');
+        spriteMotionTimeoutRef.current = null;
+      }, 520);
+      return;
+    }
+
+    setDisplayCritter(critter);
+    setSpriteMotion('idle');
+  }, [
+    critter?.critterId,
+    critter?.currentHp,
+    critter?.fainted,
+    critter?.name,
+    critter?.level,
+    critter?.attack,
+    critter?.defense,
+    critter?.speed,
+    critter?.spriteUrl,
+    critter?.element,
+    critter?.maxHp,
+  ]);
+
+  const critterForRender = displayCritter;
+  const battleDotStates = buildBattleDotStates(teamEntries, position === 'player');
   const attackStyle = {
     animationDelay: isAttacking && attackToken !== null ? `${attackToken % 2}ms` : undefined,
+  } as CSSProperties;
+  const hpFillStyle = {
+    width: `${displayedHpPercent}%`,
+    '--battle-hp-transition-ms': `${hpBarTransitionMs}ms`,
   } as CSSProperties;
 
   const showSquadGrid = position === 'player' && squadEntries.length > 0 && canSelectSquad;
 
-  const effectIcons = critter?.activeEffectIconUrls ?? [];
-  const effectDescriptions = critter?.activeEffectDescriptions ?? [];
+  const effectIcons = critterForRender?.activeEffectIconUrls ?? [];
+  const effectDescriptions = critterForRender?.activeEffectDescriptions ?? [];
+  const elementLogoUrl = critterForRender
+    ? buildElementLogoUrlFromIconsBucket(critterForRender.element, iconsBucketRoot) ??
+      buildElementLogoUrl(critterForRender.element, critterForRender.spriteUrl, null)
+    : null;
+  const elementToken = critterForRender ? critterForRender.element.trim().slice(0, 2).toUpperCase() : '';
+  const spriteClasses = [
+    'battle-critter__sprite',
+    isAttacking ? 'is-attacking' : '',
+    spriteMotion === 'entering' ? 'is-entering' : '',
+    spriteMotion === 'knockout' ? 'is-knocked-out' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const missingSpriteClasses = [
+    'battle-critter__sprite',
+    'battle-critter__sprite--missing',
+    isAttacking ? 'is-attacking' : '',
+    spriteMotion === 'entering' ? 'is-entering' : '',
+    spriteMotion === 'knockout' ? 'is-knocked-out' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  useEffect(() => {
+    if (!critterForRender) {
+      previousHpIdentityRef.current = null;
+      previousAnimatedHpRef.current = 0;
+      setHpBarTransitionMs(0);
+      setDisplayedHpPercent(0);
+      return;
+    }
+
+    const nextPercent = calcBattleHpPercent(critterForRender);
+    const previousHpIdentity = previousHpIdentityRef.current;
+    const isNewCritter =
+      !previousHpIdentity ||
+      previousHpIdentity.critterId !== critterForRender.critterId ||
+      previousHpIdentity.maxHp !== critterForRender.maxHp;
+
+    if (isNewCritter) {
+      previousAnimatedHpRef.current = nextPercent;
+      setHpBarTransitionMs(0);
+      setDisplayedHpPercent(nextPercent);
+      previousHpIdentityRef.current = { critterId: critterForRender.critterId, maxHp: critterForRender.maxHp };
+      return;
+    }
+
+    const deltaPercent = Math.abs(nextPercent - previousAnimatedHpRef.current);
+    previousAnimatedHpRef.current = nextPercent;
+    setHpBarTransitionMs(calcBattleHpAnimationMs(deltaPercent));
+    setDisplayedHpPercent(nextPercent);
+    previousHpIdentityRef.current = { critterId: critterForRender.critterId, maxHp: critterForRender.maxHp };
+  }, [critterForRender?.critterId, critterForRender?.currentHp, critterForRender?.maxHp]);
 
   return (
     <article className={`battle-critter battle-critter--${position}`}>
       <p className="battle-critter__title">{title}</p>
+      <div className="battle-critter__slot-dots" aria-label={`${title} squad status`}>
+        {battleDotStates.map((state, index) => (
+          <span key={`battle-dot-${position}-${index}`} className={`battle-critter__slot-dot is-${state}`} />
+        ))}
+      </div>
+      {critterForRender && (
+        <span className="battle-critter__element-logo-wrap" title={`${capitalizeToken(critterForRender.element)} element`}>
+          {elementLogoUrl ? (
+            <img
+              src={elementLogoUrl}
+              alt={`${critterForRender.element} element`}
+              className="battle-critter__element-logo"
+              loading="lazy"
+              decoding="async"
+            />
+          ) : (
+            <span className="battle-critter__element-logo battle-critter__element-logo--fallback">{elementToken}</span>
+          )}
+        </span>
+      )}
       {effectIcons.length > 0 && (
         <div className="battle-critter__effect-bubbles" aria-label="Active effects">
           {effectIcons.map((url, i) => (
@@ -1563,41 +2204,43 @@ function BattleActivePanel({
           ))}
         </div>
       )}
-      {critter ? (
+      {critterForRender ? (
         <>
           <div className="battle-critter__head">
-            <h3>{critter.name}</h3>
-            <span>Lv.{critter.level}</span>
+            <h3>{critterForRender.name}</h3>
+            <span>Lv.{critterForRender.level}</span>
           </div>
-          {critter.spriteUrl ? (
+          {critterForRender.spriteUrl ? (
             <img
-              src={critter.spriteUrl}
-              alt={critter.name}
-              className={`battle-critter__sprite ${isAttacking ? 'is-attacking' : ''}`}
+              src={critterForRender.spriteUrl}
+              alt={critterForRender.name}
+              className={spriteClasses}
               style={attackStyle}
               loading="lazy"
               decoding="async"
             />
           ) : (
-            <div className={`battle-critter__sprite battle-critter__sprite--missing ${isAttacking ? 'is-attacking' : ''}`}>
+            <div className={missingSpriteClasses}>
               No Sprite
             </div>
           )}
           <div className="battle-critter__hp">
             <span className="battle-critter__hp-bar">
-              <span className="battle-critter__hp-fill" style={{ width: `${hpPercent}%` }} />
+              <span className="battle-critter__hp-fill" style={hpFillStyle} />
             </span>
             <span className="battle-critter__hp-label">
-              HP {Math.max(0, critter.currentHp)}/{Math.max(1, critter.maxHp)}
+              HP {Math.max(0, critterForRender.currentHp)}/{Math.max(1, critterForRender.maxHp)}
             </span>
           </div>
           <div className="battle-critter__stats">
-            <span>ATK {critter.attack}</span>
-            <span>DEF {critter.defense}</span>
-            <span>SPD {critter.speed}</span>
+            <span>ATK {critterForRender.attack}</span>
+            <span>DEF {critterForRender.defense}</span>
+            <span>SPD {critterForRender.speed}</span>
           </div>
         </>
-      ) : null}
+      ) : (
+        <p className="battle-critter__empty">{emptyText}</p>
+      )}
       {showSquadGrid && (
         <div className="battle-critter__squad-grid-wrap">
           <div className="battle-squad-grid" aria-label="Squad">
@@ -1637,6 +2280,34 @@ function BattleActivePanel({
       )}
     </article>
   );
+}
+
+function buildBattleDotStates(teamEntries: BattleTeamEntry[], preferSlotIndex: boolean): Array<'alive' | 'fainted' | 'empty'> {
+  const dots: Array<'alive' | 'fainted' | 'empty'> = Array.from({ length: 8 }, () => 'empty');
+  const fallbackOrder: number[] = [];
+  for (let index = 0; index < dots.length; index += 1) {
+    fallbackOrder.push(index);
+  }
+
+  for (const entry of teamEntries) {
+    let targetIndex = -1;
+    if (
+      preferSlotIndex &&
+      typeof entry.slotIndex === 'number' &&
+      entry.slotIndex >= 0 &&
+      entry.slotIndex < dots.length &&
+      dots[entry.slotIndex] === 'empty'
+    ) {
+      targetIndex = entry.slotIndex;
+    } else {
+      targetIndex = fallbackOrder.find((index) => dots[index] === 'empty') ?? -1;
+    }
+    if (targetIndex < 0) {
+      continue;
+    }
+    dots[targetIndex] = entry.fainted || entry.currentHp <= 0 ? 'fainted' : 'alive';
+  }
+  return dots;
 }
 
 function formatMissionTypeLabel(mission: {

@@ -3,6 +3,8 @@ import type { CritterDefinition } from '@/game/critters/types';
 import { sanitizeCritterDatabase } from '@/game/critters/schema';
 import { sanitizeEncounterTableLibrary } from '@/game/encounters/schema';
 import type { EncounterTableDefinition } from '@/game/encounters/types';
+import type { GameItemDefinition } from '@/game/items/types';
+import { sanitizeItemCatalog } from '@/game/items/schema';
 import { apiFetchJson } from '@/shared/apiClient';
 
 interface CritterListResponse {
@@ -17,16 +19,27 @@ interface EncounterListResponse {
   error?: string;
 }
 
+interface ItemListResponse {
+  ok: boolean;
+  items?: unknown;
+  error?: string;
+}
+
 interface EncounterSaveResponse {
   ok: boolean;
   error?: string;
 }
 
+type EncounterDraftEntryKind = 'critter' | 'item';
+
 interface EncounterEntryDraft {
-  critterId: number;
+  rowId: string;
+  kind: EncounterDraftEntryKind;
+  critterId: number | null;
+  itemId: string;
   weightInput: string;
-  minLevelInput: string;
-  maxLevelInput: string;
+  minValueInput: string;
+  maxValueInput: string;
 }
 
 interface EncounterTableDraft {
@@ -58,6 +71,7 @@ const ENCOUNTER_ELEMENT_LABELS: Record<string, string> = {
 
 export function EncounterTool() {
   const [critters, setCritters] = useState<CritterDefinition[]>([]);
+  const [items, setItems] = useState<GameItemDefinition[]>([]);
   const [encounterTables, setEncounterTables] = useState<EncounterTableDefinition[]>([]);
   const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
   const [draft, setDraft] = useState<EncounterTableDraft>({ id: '', entries: [] });
@@ -88,19 +102,37 @@ export function EncounterTool() {
     if (!selectedTable) {
       return draft.id.trim().length > 0 || draft.entries.length > 0;
     }
-    return JSON.stringify(tableToDraft(selectedTable)) !== JSON.stringify(draft);
+    return toComparableDraftJson(tableToDraft(selectedTable)) !== toComparableDraftJson(draft);
   }, [draft, selectedTable]);
+
+  const sortedCritters = useMemo(() => [...critters].sort((left, right) => left.id - right.id), [critters]);
+  const sortedItems = useMemo(
+    () => [...items].sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })),
+    [items],
+  );
 
   const filteredCritters = useMemo(() => {
     const query = searchInput.trim().toLowerCase();
-    const sorted = [...critters].sort((left, right) => left.id - right.id);
     if (!query) {
-      return sorted;
+      return sortedCritters;
     }
-    return sorted.filter(
+    return sortedCritters.filter(
       (critter) => critter.name.toLowerCase().includes(query) || String(critter.id).includes(query),
     );
-  }, [critters, searchInput]);
+  }, [searchInput, sortedCritters]);
+
+  const filteredItems = useMemo(() => {
+    const query = searchInput.trim().toLowerCase();
+    if (!query) {
+      return sortedItems;
+    }
+    return sortedItems.filter(
+      (item) =>
+        item.id.toLowerCase().includes(query) ||
+        item.name.toLowerCase().includes(query) ||
+        item.category.toLowerCase().includes(query),
+    );
+  }, [searchInput, sortedItems]);
 
   const critterById = useMemo(() => {
     const lookup = new Map<number, CritterDefinition>();
@@ -110,31 +142,39 @@ export function EncounterTool() {
     return lookup;
   }, [critters]);
 
-  const selectedCritterIds = useMemo(() => new Set(draft.entries.map((entry) => entry.critterId)), [draft.entries]);
-  const addableCritters = useMemo(
-    () => filteredCritters.filter((critter) => !selectedCritterIds.has(critter.id)),
-    [filteredCritters, selectedCritterIds],
-  );
+  const itemById = useMemo(() => {
+    const lookup = new Map<string, GameItemDefinition>();
+    for (const item of items) {
+      lookup.set(item.id, item);
+    }
+    return lookup;
+  }, [items]);
 
   const loadAll = async () => {
     setIsLoading(true);
     setError('');
     setStatus('');
     try {
-      const [critterResult, encounterResult] = await Promise.all([
+      const [critterResult, itemResult, encounterResult] = await Promise.all([
         apiFetchJson<CritterListResponse>('/api/admin/critters/list'),
+        apiFetchJson<ItemListResponse>('/api/admin/items/list'),
         apiFetchJson<EncounterListResponse>('/api/admin/encounters/list'),
       ]);
       if (!critterResult.ok) {
         throw new Error(critterResult.error ?? critterResult.data?.error ?? 'Unable to load critters.');
+      }
+      if (!itemResult.ok) {
+        throw new Error(itemResult.error ?? itemResult.data?.error ?? 'Unable to load items.');
       }
       if (!encounterResult.ok) {
         throw new Error(encounterResult.error ?? encounterResult.data?.error ?? 'Unable to load encounter tables.');
       }
 
       const loadedCritters = sanitizeCritterDatabase(critterResult.data?.critters);
+      const loadedItems = sanitizeItemCatalog(itemResult.data?.items);
       const loadedTables = sanitizeEncounterTableLibrary(encounterResult.data?.encounterTables);
       setCritters(loadedCritters);
+      setItems(loadedItems);
       setEncounterTables(loadedTables);
       if (loadedTables.length > 0) {
         setSelectedTableId(loadedTables[0].id);
@@ -144,7 +184,9 @@ export function EncounterTool() {
         setSelectedTableId(null);
         setDraft({ id: fallbackId, entries: [] });
       }
-      setStatus(`Loaded ${loadedTables.length} encounter table(s) and ${loadedCritters.length} critter(s).`);
+      setStatus(
+        `Loaded ${loadedTables.length} encounter table(s), ${loadedCritters.length} critter(s), and ${loadedItems.length} item(s).`,
+      );
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : 'Unable to load encounter data.');
     } finally {
@@ -176,11 +218,6 @@ export function EncounterTool() {
   };
 
   const addCritterToDraft = (critterId: number) => {
-    if (draft.entries.some((entry) => entry.critterId === critterId)) {
-      setError(`Critter #${critterId} is already in this encounter table.`);
-      return;
-    }
-
     const critter = critterById.get(critterId);
     const maxLevel = getMaxCritterLevel(critter);
     setDraft((current) => ({
@@ -188,28 +225,97 @@ export function EncounterTool() {
       entries: [
         ...current.entries,
         {
+          rowId: createDraftRowId(),
+          kind: 'critter',
           critterId,
+          itemId: '',
           weightInput: '0',
-          minLevelInput: '1',
-          maxLevelInput: String(maxLevel),
+          minValueInput: '1',
+          maxValueInput: String(maxLevel),
         },
       ],
     }));
     setError('');
-    setStatus(`Added critter #${critterId} with default weight 0 and level range 1-${maxLevel}.`);
+    setStatus(`Added critter #${critterId} row with weight 0 and level range 1-${maxLevel}.`);
   };
 
-  const removeDraftEntry = (critterId: number) => {
+  const addItemToDraft = (itemId: string) => {
+    const item = itemById.get(itemId);
+    if (!item) {
+      setError('Choose a valid item.');
+      return;
+    }
     setDraft((current) => ({
       ...current,
-      entries: current.entries.filter((entry) => entry.critterId !== critterId),
+      entries: [
+        ...current.entries,
+        {
+          rowId: createDraftRowId(),
+          kind: 'item',
+          critterId: null,
+          itemId,
+          weightInput: '0',
+          minValueInput: '1',
+          maxValueInput: '1',
+        },
+      ],
+    }));
+    setError('');
+    setStatus(`Added item row for "${item.name}" with weight 0 and amount range 1-1.`);
+  };
+
+  const updateDraftEntry = (rowId: string, patch: Partial<EncounterEntryDraft>) => {
+    setDraft((current) => ({
+      ...current,
+      entries: current.entries.map((entry) => (entry.rowId === rowId ? { ...entry, ...patch } : entry)),
+    }));
+  };
+
+  const updateDraftEntryKind = (rowId: string, nextKind: EncounterDraftEntryKind) => {
+    setDraft((current) => ({
+      ...current,
+      entries: current.entries.map((entry) => {
+        if (entry.rowId !== rowId || entry.kind === nextKind) {
+          return entry;
+        }
+        if (nextKind === 'item') {
+          return {
+            ...entry,
+            kind: 'item',
+            critterId: null,
+            itemId: sortedItems[0]?.id ?? '',
+            minValueInput: '1',
+            maxValueInput: '1',
+          };
+        }
+        const fallbackCritter = sortedCritters[0];
+        const maxLevel = getMaxCritterLevel(fallbackCritter);
+        return {
+          ...entry,
+          kind: 'critter',
+          critterId: fallbackCritter?.id ?? 1,
+          itemId: '',
+          minValueInput: '1',
+          maxValueInput: String(maxLevel),
+        };
+      }),
+    }));
+  };
+
+  const removeDraftEntry = (rowId: string) => {
+    setDraft((current) => ({
+      ...current,
+      entries: current.entries.filter((entry) => entry.rowId !== rowId),
     }));
   };
 
   const applyDraft = () => {
-    const parsed = parseDraft(draft);
+    const parsed = parseDraft(draft, {
+      allowedCritterIds: new Set(critters.map((critter) => critter.id)),
+      allowedItemIds: new Set(items.map((item) => item.id)),
+    });
     if (!parsed) {
-      setError('Encounter table draft is invalid. Check ID, weights, and level ranges.');
+      setError('Encounter table draft is invalid. Check ID, weights, critter/item rows, and ranges.');
       return;
     }
 
@@ -259,7 +365,7 @@ export function EncounterTool() {
 
     for (const table of encounterTables) {
       if (table.entries.length === 0) {
-        setError(`Encounter table "${table.id}" must include at least one critter.`);
+        setError(`Encounter table "${table.id}" must include at least one entry.`);
         return;
       }
       const totalWeight = table.entries.reduce((sum, entry) => sum + entry.weight, 0);
@@ -315,9 +421,13 @@ export function EncounterTool() {
               {isSaving ? 'Saving...' : 'Save Encounter Tables'}
             </button>
           </div>
-          <p className="admin-note">Each table must have unique critters and weights that sum to exactly 1.0.</p>
+          <p className="admin-note">Entries can be critters or items. Duplicate rows are allowed. Weights must sum to 1.0.</p>
           {status && <p className="admin-note">{status}</p>}
-          {error && <p className="admin-note" style={{ color: '#f7b9b9' }}>{error}</p>}
+          {error && (
+            <p className="admin-note" style={{ color: '#f7b9b9' }}>
+              {error}
+            </p>
+          )}
           <div className="admin-item-grid">
             {encounterTables.map((table) => (
               <button
@@ -356,59 +466,88 @@ export function EncounterTool() {
           </div>
 
           <h4>Current Entries</h4>
-          <p className="admin-note">
-            Optional level range: when set, wild levels are sampled from this critter&apos;s implemented levels inside Min/Max.
-          </p>
+          <p className="admin-note">Critter rows use level ranges. Item rows use amount ranges.</p>
           <div className="encounter-current-grid">
             {draft.entries.map((entry) => {
-              const critter = critterById.get(entry.critterId);
+              const critter = entry.kind === 'critter' && entry.critterId !== null ? critterById.get(entry.critterId) : null;
+              const item = entry.kind === 'item' ? itemById.get(entry.itemId) : null;
+              const rangeLabelMin = entry.kind === 'critter' ? 'Min Lv' : 'Min Amt';
+              const rangeLabelMax = entry.kind === 'critter' ? 'Max Lv' : 'Max Amt';
               return (
-                <article key={`entry-${entry.critterId}`} className="encounter-entry-card">
+                <article key={entry.rowId} className="encounter-entry-card">
                   <p className="encounter-entry-card__name">
-                    #{entry.critterId} {critter?.name ?? 'Unknown Critter'}
+                    {entry.kind === 'critter'
+                      ? `Critter: #${entry.critterId ?? '?'} ${critter?.name ?? 'Unknown Critter'}`
+                      : `Item: ${item?.name ?? entry.itemId ?? 'Unknown Item'}`}
                   </p>
                   <div className="encounter-entry-card__fields">
+                    <label>
+                      Type
+                      <select
+                        value={entry.kind}
+                        onChange={(event) => updateDraftEntryKind(entry.rowId, event.target.value as EncounterDraftEntryKind)}
+                      >
+                        <option value="critter">Critter</option>
+                        <option value="item">Item</option>
+                      </select>
+                    </label>
+                    {entry.kind === 'critter' ? (
+                      <label>
+                        Critter
+                        <select
+                          value={entry.critterId ?? ''}
+                          onChange={(event) => {
+                            const nextId = Number.parseInt(event.target.value, 10);
+                            const maxLevel = getMaxCritterLevel(critterById.get(nextId));
+                            updateDraftEntry(entry.rowId, {
+                              critterId: Number.isFinite(nextId) ? nextId : null,
+                              minValueInput: '1',
+                              maxValueInput: String(maxLevel),
+                            });
+                          }}
+                        >
+                          {sortedCritters.map((candidate) => (
+                            <option key={`row-${entry.rowId}-critter-${candidate.id}`} value={candidate.id}>
+                              #{candidate.id} {candidate.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : (
+                      <label>
+                        Item
+                        <select
+                          value={entry.itemId}
+                          onChange={(event) => updateDraftEntry(entry.rowId, { itemId: event.target.value })}
+                        >
+                          {sortedItems.map((candidate) => (
+                            <option key={`row-${entry.rowId}-item-${candidate.id}`} value={candidate.id}>
+                              {candidate.name} ({candidate.id})
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
                     <label>
                       Wt
                       <input
                         value={entry.weightInput}
-                        onChange={(event) =>
-                          setDraft((current) => ({
-                            ...current,
-                            entries: current.entries.map((row) =>
-                              row.critterId === entry.critterId ? { ...row, weightInput: event.target.value } : row,
-                            ),
-                          }))
-                        }
+                        onChange={(event) => updateDraftEntry(entry.rowId, { weightInput: event.target.value })}
                       />
                     </label>
                     <label>
-                      Min Lv
+                      {rangeLabelMin}
                       <input
-                        value={entry.minLevelInput}
-                        onChange={(event) =>
-                          setDraft((current) => ({
-                            ...current,
-                            entries: current.entries.map((row) =>
-                              row.critterId === entry.critterId ? { ...row, minLevelInput: event.target.value } : row,
-                            ),
-                          }))
-                        }
+                        value={entry.minValueInput}
+                        onChange={(event) => updateDraftEntry(entry.rowId, { minValueInput: event.target.value })}
                         placeholder="auto"
                       />
                     </label>
                     <label>
-                      Max Lv
+                      {rangeLabelMax}
                       <input
-                        value={entry.maxLevelInput}
-                        onChange={(event) =>
-                          setDraft((current) => ({
-                            ...current,
-                            entries: current.entries.map((row) =>
-                              row.critterId === entry.critterId ? { ...row, maxLevelInput: event.target.value } : row,
-                            ),
-                          }))
-                        }
+                        value={entry.maxValueInput}
+                        onChange={(event) => updateDraftEntry(entry.rowId, { maxValueInput: event.target.value })}
                         placeholder="auto"
                       />
                     </label>
@@ -416,27 +555,29 @@ export function EncounterTool() {
                   <button
                     type="button"
                     className="secondary encounter-entry-card__remove"
-                    onClick={() => removeDraftEntry(entry.critterId)}
+                    onClick={() => removeDraftEntry(entry.rowId)}
                   >
                     Remove
                   </button>
                 </article>
               );
             })}
-            {draft.entries.length === 0 && <p className="admin-note">No critters in this table yet.</p>}
+            {draft.entries.length === 0 && <p className="admin-note">No entries in this table yet.</p>}
           </div>
 
-          <h4>Add Critter</h4>
+          <h4>Add Encounter Row</h4>
           <label className="encounter-search-field">
-            Search Critter (Name or ID)
+            Search Critters / Items (Name or ID)
             <input
               value={searchInput}
               onChange={(event) => setSearchInput(event.target.value)}
-              placeholder="buddo or 1"
+              placeholder="buddo, old-rod, 1"
             />
           </label>
+
+          <h5>Critter Rows</h5>
           <div className="encounter-candidate-grid">
-            {addableCritters.map((critter) => {
+            {filteredCritters.map((critter) => {
               const maxLevel = getMaxCritterLevel(critter);
               return (
                 <article
@@ -474,18 +615,28 @@ export function EncounterTool() {
                     className="primary encounter-candidate-card__add"
                     onClick={() => addCritterToDraft(critter.id)}
                   >
-                    Add To Table
+                    Add Critter Row
                   </button>
                 </article>
               );
             })}
-            {addableCritters.length === 0 && (
-              <p className="admin-note">
-                {filteredCritters.length === 0
-                  ? 'No critters match that search.'
-                  : 'All matching critters are already in the current encounter table.'}
-              </p>
-            )}
+            {filteredCritters.length === 0 && <p className="admin-note">No critters match that search.</p>}
+          </div>
+
+          <h5>Item Rows</h5>
+          <div className="admin-item-grid">
+            {filteredItems.map((item) => (
+              <article key={`item-candidate-${item.id}`} className="encounter-entry-card">
+                <p className="encounter-entry-card__name">{item.name}</p>
+                <p className="admin-note">
+                  {item.id} | {item.category}
+                </p>
+                <button type="button" className="primary" onClick={() => addItemToDraft(item.id)}>
+                  Add Item Row
+                </button>
+              </article>
+            ))}
+            {filteredItems.length === 0 && <p className="admin-note">No items match that search.</p>}
           </div>
         </section>
       </section>
@@ -496,34 +647,77 @@ export function EncounterTool() {
 function tableToDraft(table: EncounterTableDefinition): EncounterTableDraft {
   return {
     id: table.id,
-    entries: table.entries.map((entry) => ({
-      critterId: entry.critterId,
-      weightInput: String(entry.weight),
-      minLevelInput: typeof entry.minLevel === 'number' ? String(entry.minLevel) : '',
-      maxLevelInput: typeof entry.maxLevel === 'number' ? String(entry.maxLevel) : '',
-    })),
+    entries: table.entries.map((entry, index) => {
+      if (entry.kind === 'item') {
+        return {
+          rowId: `row-${index + 1}`,
+          kind: 'item',
+          critterId: null,
+          itemId: entry.itemId,
+          weightInput: String(entry.weight),
+          minValueInput: typeof entry.minAmount === 'number' ? String(entry.minAmount) : '',
+          maxValueInput: typeof entry.maxAmount === 'number' ? String(entry.maxAmount) : '',
+        };
+      }
+      return {
+        rowId: `row-${index + 1}`,
+        kind: 'critter',
+        critterId: entry.critterId,
+        itemId: '',
+        weightInput: String(entry.weight),
+        minValueInput: typeof entry.minLevel === 'number' ? String(entry.minLevel) : '',
+        maxValueInput: typeof entry.maxLevel === 'number' ? String(entry.maxLevel) : '',
+      };
+    }),
   };
 }
 
-function parseDraft(draft: EncounterTableDraft): EncounterTableDefinition | null {
+function parseDraft(
+  draft: EncounterTableDraft,
+  options: { allowedCritterIds: Set<number>; allowedItemIds: Set<string> },
+): EncounterTableDefinition | null {
   const id = sanitizeEncounterId(draft.id);
   if (!id) {
     return null;
   }
-  const seen = new Set<number>();
+
   const entries: EncounterTableDefinition['entries'] = [];
   for (const entry of draft.entries) {
-    if (seen.has(entry.critterId)) {
-      return null;
-    }
-    seen.add(entry.critterId);
-
     const parsedWeight = Number.parseFloat(entry.weightInput);
     if (!Number.isFinite(parsedWeight)) {
       return null;
     }
-    const minLevel = parseLevelInput(entry.minLevelInput);
-    const maxLevel = parseLevelInput(entry.maxLevelInput);
+    const weight = Math.max(0, Math.min(1, parsedWeight));
+
+    if (entry.kind === 'item') {
+      const itemId = sanitizeItemId(entry.itemId);
+      if (!itemId || !options.allowedItemIds.has(itemId)) {
+        return null;
+      }
+      const minAmount = parseAmountInput(entry.minValueInput);
+      const maxAmount = parseAmountInput(entry.maxValueInput);
+      if (minAmount === undefined || maxAmount === undefined) {
+        return null;
+      }
+      const normalizedMin =
+        minAmount !== null && maxAmount !== null && minAmount > maxAmount ? maxAmount : minAmount;
+      const normalizedMax =
+        minAmount !== null && maxAmount !== null && minAmount > maxAmount ? minAmount : maxAmount;
+      entries.push({
+        kind: 'item',
+        itemId,
+        weight,
+        minAmount: normalizedMin,
+        maxAmount: normalizedMax,
+      });
+      continue;
+    }
+
+    if (entry.critterId === null || !Number.isInteger(entry.critterId) || !options.allowedCritterIds.has(entry.critterId)) {
+      return null;
+    }
+    const minLevel = parseLevelInput(entry.minValueInput);
+    const maxLevel = parseLevelInput(entry.maxValueInput);
     if (minLevel === undefined || maxLevel === undefined) {
       return null;
     }
@@ -531,14 +725,15 @@ function parseDraft(draft: EncounterTableDraft): EncounterTableDefinition | null
       minLevel !== null && maxLevel !== null && minLevel > maxLevel ? maxLevel : minLevel;
     const normalizedMax =
       minLevel !== null && maxLevel !== null && minLevel > maxLevel ? minLevel : maxLevel;
-    const weight = Math.max(0, Math.min(1, parsedWeight));
     entries.push({
+      kind: 'critter',
       critterId: entry.critterId,
       weight,
       minLevel: normalizedMin,
       maxLevel: normalizedMax,
     });
   }
+
   return {
     id,
     entries,
@@ -560,6 +755,21 @@ function parseLevelInput(value: string): number | null | undefined {
   return Math.max(1, Math.min(99, Math.floor(parsed)));
 }
 
+function parseAmountInput(value: string): number | null | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  return Math.max(1, Math.min(9999, Math.floor(parsed)));
+}
+
 function encounterCandidateCardStyle(element: string): CSSProperties {
   return {
     '--encounter-accent': ENCOUNTER_ELEMENT_ACCENTS[element] ?? '#7bc8ff',
@@ -577,6 +787,16 @@ function sanitizeEncounterId(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
 }
 
+function sanitizeItemId(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+/g, '')
+    .replace(/-+$/g, '');
+}
+
 function suggestEncounterId(current: EncounterTableDefinition[]): string {
   const used = new Set(current.map((table) => table.id));
   let index = 1;
@@ -586,4 +806,22 @@ function suggestEncounterId(current: EncounterTableDefinition[]): string {
     candidate = `encounter-table-${index}`;
   }
   return candidate;
+}
+
+function createDraftRowId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function toComparableDraftJson(draft: EncounterTableDraft): string {
+  return JSON.stringify({
+    id: draft.id.trim(),
+    entries: draft.entries.map((entry) => ({
+      kind: entry.kind,
+      critterId: entry.critterId,
+      itemId: entry.itemId,
+      weightInput: entry.weightInput,
+      minValueInput: entry.minValueInput,
+      maxValueInput: entry.maxValueInput,
+    })),
+  });
 }

@@ -20,8 +20,14 @@ import {
   type CritterLevelMissionRequirement,
   type PlayerCritterProgress,
 } from '@/game/critters/types';
+import { areEquippedSkillSlotsEqual, equipSkillInUniqueSlot } from '@/game/critters/equippedSkills';
 import { sanitizeEncounterTableLibrary } from '@/game/encounters/schema';
-import type { EncounterTableDefinition } from '@/game/encounters/types';
+import type {
+  EncounterTableCritterEntry,
+  EncounterTableDefinition,
+  EncounterTableEntry,
+  EncounterTableItemEntry,
+} from '@/game/encounters/types';
 import { collisionEdgeMaskAt, createMap, isInsideMap, tileAt } from '@/game/world/mapBuilder';
 import { CUSTOM_TILESET_CONFIG, type CustomTilesetConfig } from '@/game/world/customTiles';
 import { PLAYER_SPRITE_CONFIG } from '@/game/world/playerSprite';
@@ -39,6 +45,7 @@ import type {
   InteractionDefinition,
   NpcInteractionActionDefinition,
   NpcDefinition,
+  NpcItemRewardDefinition,
   NpcMovementGuardDefinition,
   NpcStoryStateDefinition,
   NpcSpriteConfig,
@@ -57,6 +64,14 @@ import {
   sanitizeSkillEffectLibrary,
   sanitizeSkillLibrary,
 } from '@/game/skills/schema';
+import {
+  createDefaultPlayerItemInventory,
+  getItemInventoryQuantity,
+  sanitizeItemCatalog,
+  sanitizePlayerItemInventory,
+  setItemInventoryQuantity,
+} from '@/game/items/schema';
+import type { GameItemDefinition, ItemEffectType, PlayerItemInventory } from '@/game/items/types';
 
 interface MoveStep {
   from: Vector2;
@@ -71,11 +86,40 @@ interface DialogueState {
   index: number;
   setFlag?: string;
   healSquad?: boolean;
+  rewardItems?: NpcItemRewardDefinition[];
+  rewardSetFlag?: string;
+}
+
+interface HealPromptState {
+  speaker: string;
+  text: string;
 }
 
 interface TransientMessage {
   text: string;
   remainingMs: number;
+}
+
+interface FishingSessionState {
+  mapId: string;
+  groupId: string;
+  tableId: string;
+  fishFrequency: number;
+  targetTile: Vector2;
+  itemId: string;
+  itemName: string;
+  power: number;
+  hasPendingBite: boolean;
+  waitDurationMs: number;
+  waitRemainingMs: number;
+  biteWindowRemainingMs: number;
+  biteWindowDurationMs: number;
+}
+
+interface RuntimeImageState {
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  url: string | null;
+  image: HTMLImageElement | null;
 }
 
 interface NpcRuntimeState {
@@ -96,6 +140,28 @@ interface NpcSpriteSheetState {
   status: 'loading' | 'ready' | 'error';
   image: HTMLImageElement | null;
   columns: number;
+}
+
+interface PerTileTilesetState {
+  status: 'loading' | 'ready' | 'error';
+  image: HTMLImageElement | null;
+  requestedTileWidth: number;
+  requestedTileHeight: number;
+  sourceCellWidth: number;
+  sourceCellHeight: number;
+  columns: number;
+  rows: number;
+  cellCount: number;
+}
+
+interface MapTilesetRequirements {
+  usesGlobalTileset: boolean;
+  perTileTilesets: Array<{
+    key: string;
+    url: string;
+    tileWidth: number;
+    tileHeight: number;
+  }>;
 }
 
 interface ResolvedNpcDefinition extends NpcDefinition {
@@ -164,6 +230,31 @@ interface BattleSourceState {
   npcId?: string;
 }
 
+interface PendingNpcInteractBattleDefeat {
+  npc: NpcDefinition;
+  defeatedFlag: string;
+  rewards: NpcItemRewardDefinition[];
+}
+
+interface PendingNpcInteractBattleStart {
+  npc: NpcDefinition;
+  defeatedFlag: string;
+  rewards: NpcItemRewardDefinition[];
+}
+
+interface PendingGuardBattleDefeat {
+  npc: NpcDefinition;
+  guard: NpcMovementGuardDefinition;
+  defeatedFlag?: string;
+  rewards: NpcItemRewardDefinition[];
+}
+
+interface PendingBattleRewardDialogue {
+  speaker: string;
+  lines: string[];
+  rewards: NpcItemRewardDefinition[];
+}
+
 interface BattleRuntimeState {
   id: number;
   source: BattleSourceState;
@@ -178,10 +269,14 @@ interface BattleRuntimeState {
   opponentTeam: BattleCritterState[];
   playerActiveIndex: number | null;
   opponentActiveIndex: number | null;
+  pendingOpponentSwitchIndex: number | null;
+  pendingOpponentSwitchDelayMs: number;
+  pendingOpponentSwitchAnnouncementShown: boolean;
   pendingForcedSwap: boolean;
   narrationQueue: BattleNarrationEvent[];
   activeNarration: BattleNarrationEvent | null;
   activeAnimation: BattleAnimationState | null;
+  pendingKnockoutResolution: BattlePendingKnockoutResolution | null;
   nextAnimationToken: number;
 }
 
@@ -198,6 +293,12 @@ interface BattleAnimationState {
   remainingMs: number;
   durationMs: number;
   token: number;
+}
+
+interface BattlePendingKnockoutResolution {
+  defenderTeam: 'player' | 'opponent';
+  remainingMs: number;
+  playerAttackerCritterId: number | null;
 }
 
 export interface RuntimeBattleSnapshot {
@@ -280,6 +381,7 @@ export interface RuntimeSnapshot {
   mapName: string;
   mapId: string;
   objective: string;
+  message: string | null;
   warpHint: string | null;
   dialogue: {
     speaker: string;
@@ -310,6 +412,17 @@ export interface RuntimeSnapshot {
         description: string;
       }>;
     } | null;
+    healPrompt: {
+      speaker: string;
+      text: string;
+    } | null;
+  };
+  fishing: {
+    isCasting: boolean;
+    biteReady: boolean;
+    targetTile: { x: number; y: number } | null;
+    remainingMs: number | null;
+    power: number | null;
   };
   critters: {
     unlockedCount: number;
@@ -334,6 +447,8 @@ export interface RuntimeSnapshot {
       unlocked: boolean;
       level: number;
       maxLevel: number;
+      currentHp: number | null;
+      maxHp: number | null;
       canAdvance: boolean;
       advanceActionLabel: 'Unlock' | 'Level Up' | null;
       missionCompletions: number | null;
@@ -418,6 +533,26 @@ export interface RuntimeSnapshot {
       } | null;
     }>;
   };
+  backpack: {
+    totalOwnedKinds: number;
+    totalOwnedCount: number;
+    categories: string[];
+    items: Array<{
+      itemId: string;
+      name: string;
+      category: string;
+      description: string;
+      imageUrl: string;
+      misuseText: string;
+      effectType: ItemEffectType;
+      effectSummary: string;
+      consumable: boolean;
+      isActive: boolean;
+      quantityOwned: number;
+      hasUseAction: boolean;
+      canUse: boolean;
+    }>;
+  };
 }
 
 const DIRECTION_DELTAS: Record<Direction, Vector2> = {
@@ -442,10 +577,11 @@ const FLAG_SELECTED_STARTER = 'selected-starter-critter';
 const FLAG_STARTER_SELECTION_DONE = 'starter-selection-done';
 const FLAG_DEMO_DONE = 'demo-done';
 const FLAG_JACOB_LEFT_HOUSE = 'jacob-left-house';
+const FLAG_JACOB_BATTLE_WON = 'jacob-battle-won';
 
-const BLACKOUT_MAP_ID = 'user-house';
-const BLACKOUT_POSITION = { x: 5, y: 7 } as const;
-const BLACKOUT_FACING = 'down' as const;
+const DEFAULT_RESPAWN_MAP_ID = 'user-house';
+const DEFAULT_RESPAWN_POSITION = { x: 5, y: 7 } as const;
+const DEFAULT_RESPAWN_FACING = 'down' as const;
 
 const SPAWN_MAP_INPUT: WorldMapInput = {
   id: 'spawn',
@@ -471,6 +607,20 @@ export interface RuntimeInitOptions {
   playerName?: string;
 }
 
+/** Keep URLs stable so browser and CDN caches can accelerate recurring loads. */
+function resolveAssetUrl(url: string): string {
+  return url.trim();
+}
+
+const DEFAULT_FISHING_POWER = 0.2;
+const FISHING_POWER_MIN = 0;
+const FISHING_POWER_MAX = 1;
+const FISHING_MIN_BITE_WAIT_MS = 900;
+const FISHING_MAX_BITE_WAIT_MS = 4200;
+const FISHING_MIN_BITE_WINDOW_MS = 1000;
+const FISHING_MAX_BITE_WINDOW_MS = 7000;
+const BATTLE_KNOCKOUT_RESOLUTION_DELAY_MS = 520;
+
 export class GameRuntime {
   private mapRegistry: Record<string, WorldMap> = buildMapRegistryFromInputs([SPAWN_MAP_INPUT], TILE_DEFINITIONS);
   private tileDefinitions: Record<string, TileDefinition> = TILE_DEFINITIONS;
@@ -483,6 +633,9 @@ export class GameRuntime {
   private skillEffectLibrary: SkillEffectDefinition[] = [];
   private skillEffectLookupById: Record<string, SkillEffectDefinition> = {};
   private elementChart: ElementChart = buildDefaultElementChart();
+  private itemDatabase: GameItemDefinition[] = [];
+  private itemById: Record<string, GameItemDefinition> = {};
+  private playerItemInventory: PlayerItemInventory = createDefaultPlayerItemInventory();
   private npcSpriteLibrary: NpcSpriteLibraryEntry[] = [
     ...DEFAULT_NPC_SPRITE_LIBRARY,
     ...DEFAULT_STORY_NPC_SPRITE_LIBRARY,
@@ -495,9 +648,13 @@ export class GameRuntime {
   private currentMapId: string;
   private playerPosition: Vector2;
   private facing: Direction;
+  private respawnMapId = DEFAULT_RESPAWN_MAP_ID;
+  private respawnPosition: Vector2 = { x: DEFAULT_RESPAWN_POSITION.x, y: DEFAULT_RESPAWN_POSITION.y };
+  private respawnFacing: Direction = DEFAULT_RESPAWN_FACING;
   private moveStep: MoveStep | null = null;
   private heldDirections: Direction[] = [];
   private dialogue: DialogueState | null = null;
+  private healPrompt: HealPromptState | null = null;
   private flags: Record<string, boolean>;
   private mainStoryStageId: string | null = null;
   private sideStoryStageId: string | null = null;
@@ -514,13 +671,22 @@ export class GameRuntime {
   private dirty = false;
   private lastSavedAt: string | null = null;
   private transientMessage: TransientMessage | null = null;
+  private fishingSession: FishingSessionState | null = null;
+  private fishingBiteIcon: RuntimeImageState = {
+    status: 'idle',
+    url: null,
+    image: null,
+  };
   private lastEncounter: RuntimeSnapshot['lastEncounter'] = null;
   private activeBattle: BattleRuntimeState | null = null;
   private starterSelection: StarterSelectionState | null = null;
   private activeCutscene: StoryCutsceneState | null = null;
   private activeScriptedScene: ScriptedSceneState | null = null;
   private pendingStoryAction: 'open-starter-selection' | 'start-jacob-battle' | 'start-jacob-exit' | null = null;
-  private pendingGuardDefeat: { guard: NpcMovementGuardDefinition } | null = null;
+  private pendingGuardDefeat: PendingGuardBattleDefeat | null = null;
+  private pendingNpcInteractBattleDefeat: PendingNpcInteractBattleDefeat | null = null;
+  private pendingNpcInteractBattleStart: PendingNpcInteractBattleStart | null = null;
+  private pendingBattleRewardDialogue: PendingBattleRewardDialogue | null = null;
   private pendingGuardBattle: { npc: NpcDefinition; guard: NpcMovementGuardDefinition } | null = null;
   private nextBattleId = 1;
   private warpHintLabel: string | null = null;
@@ -536,12 +702,12 @@ export class GameRuntime {
   private tilesetColumns = 0;
   private tilesetRows = 0;
   private tilesetCellCount = 0;
-  private tilesetLoadAttempted = false;
-  /** Per-tile tilesets keyed by URL. Used when a tile definition has tilesetUrl. */
-  private perTileTilesetCache = new Map<
-    string,
-    { image: HTMLImageElement; tileWidth: number; tileHeight: number; columns: number; rows: number; cellCount: number }
-  >();
+  private tilesetSourceCellWidth = 0;
+  private tilesetSourceCellHeight = 0;
+  private tilesetLoadState: 'idle' | 'loading' | 'ready' | 'error' = 'idle';
+  /** Per-tile tilesets keyed by URL+tile dimensions (e.g. "url::16x16"). */
+  private perTileTilesetCache = new Map<string, PerTileTilesetState>();
+  private mapTilesetRequirementsCache = new Map<string, MapTilesetRequirements>();
   private announcedCritterAdvanceKeys = new Set<string>();
 
   constructor(options?: RuntimeInitOptions) {
@@ -590,7 +756,9 @@ export class GameRuntime {
         {} as Record<string, SkillDefinition>,
       );
       this.elementChart = sanitizeElementChart(storedWorldContent.elementChart) ?? buildDefaultElementChart();
+      this.itemDatabase = sanitizeItemCatalog(storedWorldContent.items);
     }
+    this.itemById = buildItemLookup(this.itemDatabase);
 
     const save = !options?.forceNewGame ? loadSave() : null;
     const hasUsableSave = Boolean(save && this.isValidSave(save));
@@ -599,9 +767,19 @@ export class GameRuntime {
     this.currentMapId = state.currentMapId;
     this.playerPosition = { x: state.player.x, y: state.player.y };
     this.facing = state.player.facing;
+    const resolvedRespawn = this.resolveRespawnPoint(state.respawnPoint);
+    this.respawnMapId = resolvedRespawn.mapId;
+    this.respawnPosition = resolvedRespawn.position;
+    this.respawnFacing = resolvedRespawn.facing;
     this.flags = { ...state.progressTracking.mainStory.flags };
+    let migratedMainStoryFlags = false;
     if (this.flags[FLAG_DEMO_DONE] && !this.flags[FLAG_JACOB_LEFT_HOUSE]) {
       this.flags[FLAG_JACOB_LEFT_HOUSE] = true;
+      migratedMainStoryFlags = true;
+    }
+    if ((this.flags[FLAG_DEMO_DONE] || this.flags[FLAG_JACOB_LEFT_HOUSE]) && !this.flags[FLAG_JACOB_BATTLE_WON]) {
+      this.flags[FLAG_JACOB_BATTLE_WON] = true;
+      migratedMainStoryFlags = true;
     }
     this.mainStoryStageId = state.progressTracking.mainStory.stageId;
     this.sideStoryStageId = state.progressTracking.sideStory.stageId;
@@ -613,13 +791,20 @@ export class GameRuntime {
       state.playerCritterProgress,
       this.critterDatabase,
     );
+    this.playerItemInventory = sanitizePlayerItemInventory(state.playerItemInventory, this.itemDatabase);
+    if (migratedMainStoryFlags) {
+      this.dirty = true;
+    }
     if (this.ensureMinimumSquadCritterAssignment()) {
       this.dirty = true;
     }
     this.lastSavedAt = state.updatedAt;
     this.ensureNpcRuntimeState();
+    this.preloadKnownNpcSpriteSheets();
     this.ensurePlayerSpriteLoaded();
-    this.ensureTilesetLoaded();
+    this.preloadMapVisualAssets(this.currentMapId);
+    this.preloadNeighborMapVisualAssets(this.currentMapId);
+    this.ensureFishingBiteIconLoaded();
     this.updateWarpHint();
 
     const preferredPlayerName = options?.playerName?.trim();
@@ -651,7 +836,21 @@ export class GameRuntime {
       return;
     }
 
+    if (this.healPrompt) {
+      this.heldDirections = [];
+      if (key === 'y' || key === 'Y' || key === 'Enter' || isInteractKey(key)) {
+        this.resolveHealPromptChoice(true);
+      } else if (key === 'n' || key === 'N' || key === 'Escape') {
+        this.resolveHealPromptChoice(false);
+      }
+      return;
+    }
+
     if (this.isPlayerControlLocked()) {
+      return;
+    }
+
+    if (this.tryHandleFishingInputKey(key)) {
       return;
     }
 
@@ -683,6 +882,7 @@ export class GameRuntime {
   public update(deltaMs: number): void {
     this.playerAnimationMs += deltaMs;
     this.tickMessage(deltaMs);
+    this.tickFishing(deltaMs);
     this.updateStoryState(deltaMs);
 
     if (this.activeBattle) {
@@ -737,6 +937,9 @@ export class GameRuntime {
 
   public render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
     const map = this.getCurrentMap();
+    this.preloadMapVisualAssets(map.id);
+    this.preloadNeighborMapVisualAssets(map.id);
+    const mapAssetsReady = this.areMapVisualAssetsReady(map.id);
     const mapNpcs = this.getNpcsForMap(map.id);
     const playerRenderPos = this.getPlayerRenderPosition();
 
@@ -770,6 +973,20 @@ export class GameRuntime {
     ctx.beginPath();
     ctx.rect(0, 0, viewPixelW, viewPixelH);
     ctx.clip();
+
+    if (!mapAssetsReady) {
+      ctx.fillStyle = '#101419';
+      ctx.fillRect(0, 0, viewPixelW, viewPixelH);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+      ctx.font = '14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`Loading ${map.name}...`, Math.round(viewPixelW / 2), Math.round(viewPixelH / 2));
+      ctx.textAlign = 'start';
+      ctx.textBaseline = 'alphabetic';
+      ctx.restore();
+      return;
+    }
 
     const startX = Math.floor(cameraX) - 1;
     const endX = Math.ceil(cameraX + viewTilesX) + 1;
@@ -810,13 +1027,13 @@ export class GameRuntime {
           const tile = this.getTileDefinition(code);
           const screenX = x * TILE_SIZE - cameraPixelX;
           const screenY = y * TILE_SIZE - cameraPixelY;
-          const rotationQuarter = sanitizeRotationQuarter(rotationRow[x] ?? 0);
+          const tileTransform = sanitizeTileTransformValue(rotationRow[x] ?? 0);
 
           // Draw atlas first so transparent pixels on higher layers reveal lower layers.
           // Only use color fallback when atlas art is unavailable for this tile.
           const isOverhead = this.shouldDepthSortTile(layer.orderId, tile);
           if (!isOverhead) {
-            const drewAtlas = this.drawTileFromTileset(ctx, tile, screenX, screenY, rotationQuarter);
+            const drewAtlas = this.drawTileFromTileset(ctx, tile, screenX, screenY, tileTransform);
             if (!drewAtlas) {
               this.drawTile(ctx, tile.color, tile.accentColor ?? tile.color, screenX, screenY, tile.height);
             }
@@ -826,7 +1043,7 @@ export class GameRuntime {
               layerOrder: layer.orderId,
               kind: 'overlay',
               draw: () => {
-                const drewOverlayAtlas = this.drawTileFromTileset(ctx, tile, screenX, screenY, rotationQuarter);
+                const drewOverlayAtlas = this.drawTileFromTileset(ctx, tile, screenX, screenY, tileTransform);
                 if (!drewOverlayAtlas) {
                   this.drawTile(ctx, tile.color, tile.accentColor ?? tile.color, screenX, screenY, tile.height);
                 }
@@ -874,6 +1091,9 @@ export class GameRuntime {
       entry.draw();
     }
 
+    this.drawFishingCastIndicator(ctx, cameraPixelX, cameraPixelY, playerRenderPos);
+    this.drawFishingBiteIndicator(ctx, cameraPixelX, cameraPixelY);
+
     ctx.restore();
 
     if (this.transientMessage) {
@@ -890,15 +1110,174 @@ export class GameRuntime {
     }
   }
 
+  private drawFishingBiteIndicator(
+    ctx: CanvasRenderingContext2D,
+    cameraPixelX: number,
+    cameraPixelY: number,
+  ): void {
+    const session = this.fishingSession;
+    if (!session?.hasPendingBite) {
+      return;
+    }
+    const drawX = session.targetTile.x * TILE_SIZE - cameraPixelX + TILE_SIZE / 2;
+    const drawY = session.targetTile.y * TILE_SIZE - cameraPixelY - TILE_SIZE * 0.56;
+    if (this.fishingBiteIcon.status === 'ready' && this.fishingBiteIcon.image) {
+      const iconSize = Math.round(TILE_SIZE * 0.8);
+      ctx.drawImage(
+        this.fishingBiteIcon.image,
+        Math.round(drawX - iconSize / 2),
+        Math.round(drawY - iconSize / 2),
+        iconSize,
+        iconSize,
+      );
+      return;
+    }
+    ctx.font = 'bold 15px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+    ctx.lineWidth = 3;
+    ctx.strokeText('!', drawX, drawY);
+    ctx.fillStyle = '#ffd94f';
+    ctx.fillText('!', drawX, drawY);
+    ctx.textAlign = 'start';
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  private drawFishingCastIndicator(
+    ctx: CanvasRenderingContext2D,
+    cameraPixelX: number,
+    cameraPixelY: number,
+    playerRenderPos: Vector2,
+  ): void {
+    const session = this.fishingSession;
+    if (!session || session.hasPendingBite) {
+      return;
+    }
+    const startX = playerRenderPos.x * TILE_SIZE - cameraPixelX + TILE_SIZE * 0.48;
+    const startY = playerRenderPos.y * TILE_SIZE - cameraPixelY + TILE_SIZE * 0.63;
+    const targetX = session.targetTile.x * TILE_SIZE - cameraPixelX + TILE_SIZE / 2;
+    const targetY = session.targetTile.y * TILE_SIZE - cameraPixelY + TILE_SIZE * 0.54;
+    const progress = session.waitDurationMs > 0 ? clamp(1 - session.waitRemainingMs / session.waitDurationMs, 0, 1) : 1;
+    const castArc = Math.sin(progress * Math.PI) * TILE_SIZE * 0.24;
+    const bobberX = lerp(startX, targetX, progress);
+    const bobberY = lerp(startY, targetY, progress) - castArc + Math.sin(this.playerAnimationMs / 140) * 1.2;
+    const ripplePulse = 0.65 + Math.sin(this.playerAnimationMs / 190) * 0.35;
+    const rippleRadius = TILE_SIZE * (0.12 + 0.05 * ripplePulse);
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(139, 212, 255, 0.64)';
+    ctx.lineWidth = Math.max(1, Math.floor(TILE_SIZE / 20));
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    ctx.lineTo(bobberX, bobberY);
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(116, 197, 245, 0.44)';
+    ctx.beginPath();
+    ctx.ellipse(targetX, targetY, rippleRadius * 1.5, rippleRadius, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.fillStyle = 'rgba(255, 224, 120, 0.96)';
+    ctx.beginPath();
+    ctx.arc(bobberX, bobberY, Math.max(2, TILE_SIZE * 0.08), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  private ensureFishingBiteIconLoaded(): void {
+    if (this.fishingBiteIcon.status === 'loading' || this.fishingBiteIcon.status === 'ready') {
+      return;
+    }
+    const resolvedUrl = this.resolveFishingBiteIconUrl();
+    if (!resolvedUrl) {
+      this.fishingBiteIcon = {
+        status: 'error',
+        url: null,
+        image: null,
+      };
+      return;
+    }
+
+    this.fishingBiteIcon = {
+      status: 'loading',
+      url: resolvedUrl,
+      image: null,
+    };
+    const image = new Image();
+    image.onload = () => {
+      const applyReady = () => {
+        this.fishingBiteIcon = {
+          status: 'ready',
+          url: resolvedUrl,
+          image,
+        };
+      };
+      if (typeof image.decode === 'function') {
+        image.decode().then(applyReady).catch(applyReady);
+      } else {
+        applyReady();
+      }
+    };
+    image.onerror = () => {
+      this.fishingBiteIcon = {
+        status: 'error',
+        url: resolvedUrl,
+        image: null,
+      };
+    };
+    image.src = resolveAssetUrl(resolvedUrl);
+  }
+
+  private resolveFishingBiteIconUrl(): string | null {
+    const knownUrls: string[] = [];
+    if (this.customTilesetConfig?.url) {
+      knownUrls.push(this.customTilesetConfig.url);
+    }
+    if (this.playerSpriteConfig?.url) {
+      knownUrls.push(this.playerSpriteConfig.url);
+    }
+    for (const item of this.itemDatabase) {
+      if (item.imageUrl) {
+        knownUrls.push(item.imageUrl);
+      }
+    }
+    for (const effect of this.skillEffectLibrary) {
+      if (effect.iconUrl) {
+        knownUrls.push(effect.iconUrl);
+      }
+    }
+
+    for (const url of knownUrls) {
+      const root = extractSupabasePublicRoot(url);
+      if (root) {
+        return `${root}/icons/exclaim-icon.png`;
+      }
+    }
+    try {
+      const envUrl = (typeof import.meta !== 'undefined' &&
+        (import.meta as { env?: { VITE_SUPABASE_URL?: string } }).env?.VITE_SUPABASE_URL) as string | undefined;
+      const base = typeof envUrl === 'string' && envUrl.trim() ? envUrl.trim().replace(/\/+$/, '') : '';
+      if (base) {
+        return `${base}/storage/v1/object/public/icons/exclaim-icon.png`;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+
   public getSnapshot(): RuntimeSnapshot {
     const map = this.getCurrentMap();
     const critterSummary = this.getCritterSummary();
+    const backpackSummary = this.getBackpackSummary();
 
     return {
       playerName: this.playerName,
       mapName: map.name,
       mapId: map.id,
       objective: this.getObjectiveText(),
+      message: this.transientMessage?.text ?? null,
       warpHint: this.activeBattle ? null : this.warpHintLabel,
       dialogue: this.dialogue
         ? {
@@ -915,8 +1294,11 @@ export class GameRuntime {
       story: {
         inputLocked: this.isPlayerControlLocked(),
         starterSelection: this.getStarterSelectionSnapshot(),
+        healPrompt: this.getHealPromptSnapshot(),
       },
+      fishing: this.getFishingSnapshot(),
       critters: critterSummary,
+      backpack: backpackSummary,
     };
   }
 
@@ -927,6 +1309,7 @@ export class GameRuntime {
     const facingTile = this.getFacingTile();
     const facingTileCode = tileAt(map, facingTile.x, facingTile.y);
     const critterSummary = this.getCritterSummary();
+    const backpackSummary = this.getBackpackSummary();
 
     const activeFlags = Object.keys(this.flags)
       .filter((flag) => this.flags[flag])
@@ -975,7 +1358,9 @@ export class GameRuntime {
       story: {
         inputLocked: this.isPlayerControlLocked(),
         starterSelection: this.getStarterSelectionSnapshot(),
+        healPrompt: this.getHealPromptSnapshot(),
       },
+      fishing: this.getFishingSnapshot(),
       flags: activeFlags,
       npcs: mapNpcs.map((npc) => {
         const npcState = this.getNpcRuntimeState(npc);
@@ -1021,6 +1406,7 @@ export class GameRuntime {
           x: interaction.position.x,
           y: interaction.position.y,
           speaker: interaction.speaker ?? 'Note',
+          kind: this.resolveInteractionKind(interaction),
         })),
       save: {
         status: this.dirty ? 'Unsaved' : 'Saved',
@@ -1034,6 +1420,7 @@ export class GameRuntime {
         squad: critterSummary.squadSlots,
         collection: critterSummary.collection,
       },
+      backpack: backpackSummary,
     };
 
     return JSON.stringify(payload);
@@ -1042,6 +1429,67 @@ export class GameRuntime {
   public saveNow(): void {
     this.persistNow();
     this.showMessage('Progress Saved');
+  }
+
+  public useBackpackItem(itemId: string): boolean {
+    return this.tryUseBackpackItem(itemId, null);
+  }
+
+  public useBackpackItemOnSquadSlot(itemId: string, squadSlotIndex: number): boolean {
+    return this.tryUseBackpackItem(itemId, squadSlotIndex);
+  }
+
+  public chooseHealPrompt(shouldHeal: boolean): boolean {
+    return this.resolveHealPromptChoice(shouldHeal);
+  }
+
+  private tryUseBackpackItem(itemId: string, squadSlotIndex: number | null): boolean {
+    if (this.activeBattle) {
+      this.showMessage('Backpack items are unavailable during battle.', 2200);
+      return false;
+    }
+    if (this.dialogue || this.isPlayerControlLocked()) {
+      return false;
+    }
+
+    const item = this.itemById[itemId];
+    if (!item || !item.isActive) {
+      return false;
+    }
+    if (item.category === 'material') {
+      this.showItemMisuse(item, 'Materials are used for crafting or shopping.');
+      return false;
+    }
+
+    const quantity = getItemInventoryQuantity(this.playerItemInventory, item.id);
+    if (quantity <= 0) {
+      this.showItemMisuse(item, `You do not have any ${item.name}.`);
+      return false;
+    }
+
+    let used = false;
+    if (item.effectType === 'tool_action') {
+      used = this.tryUseToolItem(item);
+    } else if (item.effectType === 'equip_stub') {
+      this.showMessage(this.resolveItemSuccessText(item, 'Equipment support is coming soon.'), 2200);
+      used = true;
+    } else if (item.effectType === 'heal_flat' || item.effectType === 'heal_percent') {
+      used = this.tryUseHealingItem(item, squadSlotIndex);
+    } else {
+      const effect = item.effectConfig as { successText?: string };
+      this.showMessage(this.resolveItemSuccessText(item, effect.successText?.trim() || `${item.name} used.`), 2000);
+      used = true;
+    }
+
+    if (!used) {
+      return false;
+    }
+
+    if (item.consumable) {
+      this.playerItemInventory = setItemInventoryQuantity(this.playerItemInventory, this.itemDatabase, item.id, quantity - 1);
+      this.markProgressDirty();
+    }
+    return true;
   }
 
   public selectStarterCandidate(critterId: number): boolean {
@@ -1109,7 +1557,12 @@ export class GameRuntime {
 
     const requiredMissionCount = Math.min(levelRow.requiredMissionCount, levelRow.missions.length);
     const completedMissionCount = levelRow.missions.reduce((count, mission) => {
-      const currentValue = this.getMissionCurrentValue(mission, levelRow.level, progress.missionProgress);
+      const currentValue = this.getMissionCurrentValue(
+        mission,
+        levelRow.level,
+        progress.missionProgress,
+        levelRow.missions,
+      );
       return count + (currentValue >= mission.targetValue ? 1 : 0);
     }, 0);
     if (completedMissionCount < requiredMissionCount) {
@@ -1240,8 +1693,10 @@ export class GameRuntime {
       const equippedCount = progress.equippedSkillIds.filter((id) => id !== null).length;
       if (equippedCount <= 1) return false;
     }
-    const next = [...progress.equippedSkillIds] as EquippedSkillSlots;
-    next[slot] = skillId;
+    const next = equipSkillInUniqueSlot(progress.equippedSkillIds, slot, skillId);
+    if (areEquippedSkillSlotsEqual(next, progress.equippedSkillIds)) {
+      return false;
+    }
     progress.equippedSkillIds = next;
     this.markProgressDirty();
     return true;
@@ -1249,7 +1704,14 @@ export class GameRuntime {
 
   public battleChooseAction(action: 'guard' | 'swap' | 'retreat'): boolean {
     const battle = this.activeBattle;
-    if (!battle || battle.phase !== 'player-turn' || battle.result !== 'ongoing' || battle.activeNarration) {
+    if (
+      !battle ||
+      battle.phase !== 'player-turn' ||
+      battle.result !== 'ongoing' ||
+      battle.activeNarration ||
+      battle.pendingKnockoutResolution !== null ||
+      battle.pendingOpponentSwitchIndex !== null
+    ) {
       return false;
     }
 
@@ -1281,7 +1743,14 @@ export class GameRuntime {
 
   public battleChooseSkill(skillSlotIndex: number): boolean {
     const battle = this.activeBattle;
-    if (!battle || battle.phase !== 'player-turn' || battle.result !== 'ongoing' || battle.activeNarration) {
+    if (
+      !battle ||
+      battle.phase !== 'player-turn' ||
+      battle.result !== 'ongoing' ||
+      battle.activeNarration ||
+      battle.pendingKnockoutResolution !== null ||
+      battle.pendingOpponentSwitchIndex !== null
+    ) {
       return false;
     }
     const slot = Math.floor(skillSlotIndex);
@@ -1336,8 +1805,18 @@ export class GameRuntime {
     battle.playerActiveIndex = teamIndex;
 
     if (battle.phase === 'choose-starter') {
+      if (battle.source.type === 'npc' && battle.opponentActiveIndex === null) {
+        const opponentIndex = this.findFirstAliveTeamIndex(battle.opponentTeam);
+        if (opponentIndex < 0) {
+          this.setBattleResult(battle, 'won', `${battle.source.label} has no available critters.`);
+          return true;
+        }
+        battle.opponentActiveIndex = opponentIndex;
+        battle.logLine = `${battle.source.label} selected ${battle.opponentTeam[opponentIndex].name}. Choose your move.`;
+      } else {
+        battle.logLine = `${selected.name}, I choose you!`;
+      }
       battle.phase = 'player-turn';
-      battle.logLine = `${selected.name}, I choose you!`;
       return true;
     }
 
@@ -1370,16 +1849,26 @@ export class GameRuntime {
     if (!this.activeBattle || this.activeBattle.phase !== 'result') {
       return false;
     }
-    if (this.activeBattle.result === 'lost') {
+    if (this.activeBattle.result === 'lost' && this.hasAnyUnlockedCritter()) {
       this.performBlackout();
     }
     this.activeBattle = null;
+    if (this.pendingBattleRewardDialogue && this.pendingBattleRewardDialogue.rewards.length > 0) {
+      this.startDialogue(
+        this.pendingBattleRewardDialogue.speaker,
+        this.pendingBattleRewardDialogue.lines,
+        undefined,
+        undefined,
+        this.pendingBattleRewardDialogue.rewards,
+      );
+      this.pendingBattleRewardDialogue = null;
+    }
     return true;
   }
 
   public battleAdvanceNarration(): boolean {
     const battle = this.activeBattle;
-    if (!battle || !battle.activeNarration) {
+    if (!battle || !battle.activeNarration || battle.pendingKnockoutResolution !== null) {
       return false;
     }
 
@@ -1454,7 +1943,14 @@ export class GameRuntime {
     let dialogueSetFlag = baseNpc.dialogueSetFlag;
     let firstInteractionSetFlag = baseNpc.firstInteractionSetFlag;
     let firstInteractBattle = Boolean(baseNpc.firstInteractBattle);
+    let interactBattleRepeatable = Boolean(baseNpc.interactBattleRepeatable);
+    let interactBattleDefeatedFlag = baseNpc.interactBattleDefeatedFlag;
+    let battleRewards = baseNpc.battleRewards ? baseNpc.battleRewards.map((entry) => ({ ...entry })) : undefined;
     let healer = Boolean(baseNpc.healer);
+    let interactionRewards = baseNpc.interactionRewards
+      ? baseNpc.interactionRewards.map((entry) => ({ ...entry }))
+      : undefined;
+    let interactionRewardSetFlag = baseNpc.interactionRewardSetFlag;
     let battleTeamIds = baseNpc.battleTeamIds ? [...baseNpc.battleTeamIds] : undefined;
     let movement = baseNpc.movement
       ? {
@@ -1472,6 +1968,9 @@ export class GameRuntime {
       ? baseNpc.movementGuards.map((guard) => ({
           ...guard,
           dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+          postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+          battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
+          battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
         }))
       : undefined;
     let activeStoryStateKey = 'base';
@@ -1510,11 +2009,28 @@ export class GameRuntime {
       if (typeof state.firstInteractBattle === 'boolean') {
         firstInteractBattle = state.firstInteractBattle;
       }
+      if (typeof state.interactBattleRepeatable === 'boolean') {
+        interactBattleRepeatable = state.interactBattleRepeatable;
+      }
+      if (typeof state.interactBattleDefeatedFlag === 'string' && state.interactBattleDefeatedFlag.trim()) {
+        interactBattleDefeatedFlag = state.interactBattleDefeatedFlag;
+      }
+      if (Array.isArray(state.battleRewards)) {
+        battleRewards = state.battleRewards.map((entry) => ({ ...entry }));
+      }
       if (typeof state.healer === 'boolean') {
         healer = state.healer;
       }
+      if (Array.isArray(state.interactionRewards)) {
+        interactionRewards = state.interactionRewards.map((entry) => ({ ...entry }));
+      }
+      if (typeof state.interactionRewardSetFlag === 'string' && state.interactionRewardSetFlag.trim()) {
+        interactionRewardSetFlag = state.interactionRewardSetFlag;
+      }
       if (Array.isArray(state.battleTeamIds)) {
-        battleTeamIds = state.battleTeamIds.filter((entry) => typeof entry === 'string');
+        battleTeamIds = state.battleTeamIds
+          .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+          .map((entry) => entry.trim());
       }
       if (state.movement) {
         movement = {
@@ -1538,6 +2054,9 @@ export class GameRuntime {
         movementGuards = state.movementGuards.map((guard) => ({
           ...guard,
           dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+          postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+          battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
+          battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
         }));
       }
     }
@@ -1552,7 +2071,12 @@ export class GameRuntime {
       dialogueSetFlag,
       firstInteractionSetFlag,
       firstInteractBattle,
+      interactBattleRepeatable,
+      interactBattleDefeatedFlag,
+      battleRewards,
       healer,
+      interactionRewards,
+      interactionRewardSetFlag,
       battleTeamIds,
       movement,
       interactionScript,
@@ -1601,7 +2125,23 @@ export class GameRuntime {
           typeof state.firstInteractBattle === 'boolean'
             ? state.firstInteractBattle
             : Boolean(character.firstInteractBattle),
+        interactBattleRepeatable:
+          typeof state.interactBattleRepeatable === 'boolean'
+            ? state.interactBattleRepeatable
+            : Boolean(character.interactBattleRepeatable),
+        interactBattleDefeatedFlag: state.interactBattleDefeatedFlag ?? character.interactBattleDefeatedFlag,
+        battleRewards: state.battleRewards
+          ? state.battleRewards.map((entry) => ({ ...entry }))
+          : character.battleRewards
+            ? character.battleRewards.map((entry) => ({ ...entry }))
+            : undefined,
         healer: typeof state.healer === 'boolean' ? state.healer : Boolean(character.healer),
+        interactionRewards: state.interactionRewards
+          ? state.interactionRewards.map((entry) => ({ ...entry }))
+          : character.interactionRewards
+            ? character.interactionRewards.map((entry) => ({ ...entry }))
+            : undefined,
+        interactionRewardSetFlag: state.interactionRewardSetFlag ?? character.interactionRewardSetFlag,
         battleTeamIds: state.battleTeamIds ? [...state.battleTeamIds] : character.battleTeamIds ? [...character.battleTeamIds] : undefined,
         movement: state.movement
           ? {
@@ -1621,17 +2161,31 @@ export class GameRuntime {
           ? state.movementGuards.map((guard) => ({
               ...guard,
               dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+              postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+              battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
+              battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
             }))
           : character.movementGuards
             ? character.movementGuards.map((guard) => ({
                 ...guard,
                 dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+                postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+                battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
+                battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
               }))
             : undefined,
         interactionScript: state.interactionScript
-          ? state.interactionScript.map((step) => ({ ...step }))
+          ? state.interactionScript.map((step) => ({
+              ...step,
+              ...(step.type === 'dialogue' && Array.isArray(step.lines) ? { lines: [...step.lines] } : {}),
+              ...(step.type === 'move_path' && Array.isArray(step.directions) ? { directions: [...step.directions] } : {}),
+            }))
           : character.interactionScript
-            ? character.interactionScript.map((step) => ({ ...step }))
+            ? character.interactionScript.map((step) => ({
+                ...step,
+                ...(step.type === 'dialogue' && Array.isArray(step.lines) ? { lines: [...step.lines] } : {}),
+                ...(step.type === 'move_path' && Array.isArray(step.directions) ? { directions: [...step.directions] } : {}),
+              }))
             : undefined,
         __characterKey: `character:${character.id}`,
         __sourceMapId: `character:${character.id}`,
@@ -1713,13 +2267,19 @@ export class GameRuntime {
     if (layerOrderId < NPC_LAYER_ORDER_ID) {
       return false;
     }
-    if (typeof tile.ySortWithActors === 'boolean') {
-      return tile.ySortWithActors;
-    }
-    if (layerOrderId > NPC_LAYER_ORDER_ID && tile.height <= 0 && this.isFlatCoverTile(tile.label)) {
+    const hasExplicitYSort = typeof tile.ySortWithActors === 'boolean';
+    const wantsDepthSort = hasExplicitYSort ? Boolean(tile.ySortWithActors) : layerOrderId >= NPC_LAYER_ORDER_ID || tile.height > 0;
+    if (!wantsDepthSort) {
       return false;
     }
-    return layerOrderId >= NPC_LAYER_ORDER_ID || tile.height > 0;
+
+    // Upper map layers often hold interior furniture/decor where explicit layer order should win over actor y-sorting.
+    // Keep these flat so they do not appear visually sliced by per-row depth ordering.
+    // Respect explicit per-tile y-sort settings from tile metadata.
+    if (!hasExplicitYSort && layerOrderId > NPC_LAYER_ORDER_ID && tile.height <= 0 && this.isFlatCoverTile(tile.label)) {
+      return false;
+    }
+    return true;
   }
 
   private isFlatCoverTile(label: string): boolean {
@@ -1727,33 +2287,63 @@ export class GameRuntime {
     if (!normalized) {
       return false;
     }
-    return ['grass', 'flower', 'path', 'sand', 'water', 'floor', 'ground'].some((keyword) =>
+    return [
+      'grass',
+      'flower',
+      'path',
+      'sand',
+      'water',
+      'floor',
+      'ground',
+      'healer',
+      'hospital',
+      'counter',
+      'desk',
+      'table',
+      'bed',
+      'machine',
+      'terminal',
+    ].some((keyword) =>
       normalized.includes(keyword),
     );
   }
 
   private ensureTilesetLoaded(): void {
-    if (this.tilesetLoadAttempted) {
+    if (this.tilesetLoadState === 'loading' || this.tilesetLoadState === 'ready') {
       return;
     }
 
-    this.tilesetLoadAttempted = true;
     const config = this.customTilesetConfig;
     if (!config || !config.url) {
+      this.tilesetLoadState = 'error';
       return;
     }
 
+    this.tilesetLoadState = 'loading';
     const image = new Image();
     image.onload = () => {
       const columns = Math.floor(image.width / config.tileWidth);
-      if (columns <= 0) return;
       const rows = Math.floor(image.height / config.tileHeight);
-      if (rows <= 0) return;
+      const sourceCellWidth = columns > 0 ? image.width / columns : 0;
+      const sourceCellHeight = rows > 0 ? image.height / rows : 0;
       const apply = () => {
+        if (columns <= 0 || rows <= 0) {
+          this.tilesetLoadState = 'error';
+          this.tilesetImage = null;
+          this.tilesetColumns = 0;
+          this.tilesetRows = 0;
+          this.tilesetCellCount = 0;
+          this.tilesetSourceCellWidth = 0;
+          this.tilesetSourceCellHeight = 0;
+          return;
+        }
+        this.tilesetLoadState = 'ready';
         this.tilesetImage = image;
         this.tilesetColumns = columns;
         this.tilesetRows = rows;
         this.tilesetCellCount = columns * rows;
+        this.tilesetSourceCellWidth = sourceCellWidth;
+        this.tilesetSourceCellHeight = sourceCellHeight;
       };
       if (typeof image.decode === 'function') {
         image.decode().then(apply).catch(apply);
@@ -1762,32 +2352,215 @@ export class GameRuntime {
       }
     };
     image.onerror = () => {
+      this.tilesetLoadState = 'error';
       this.tilesetImage = null;
       this.tilesetColumns = 0;
       this.tilesetRows = 0;
       this.tilesetCellCount = 0;
+      this.tilesetSourceCellWidth = 0;
+      this.tilesetSourceCellHeight = 0;
     };
-    image.src = config.url;
+    image.src = resolveAssetUrl(config.url);
+  }
+
+  private getPerTileTilesetCacheKey(url: string, tileWidth: number, tileHeight: number): string {
+    return `${url}::${tileWidth}x${tileHeight}`;
   }
 
   private ensurePerTileTilesetInCache(url: string, tileWidth: number, tileHeight: number): void {
-    if (this.perTileTilesetCache.has(url)) return;
+    const normalizedUrl = resolveAssetUrl(url);
+    if (!normalizedUrl) {
+      return;
+    }
+
+    const key = this.getPerTileTilesetCacheKey(normalizedUrl, tileWidth, tileHeight);
+    const existing = this.perTileTilesetCache.get(key);
+    if (existing && (existing.status === 'loading' || existing.status === 'ready' || existing.status === 'error')) {
+      return;
+    }
+
+    this.perTileTilesetCache.set(key, {
+      status: 'loading',
+      image: null,
+      requestedTileWidth: tileWidth,
+      requestedTileHeight: tileHeight,
+      sourceCellWidth: 0,
+      sourceCellHeight: 0,
+      columns: 0,
+      rows: 0,
+      cellCount: 0,
+    });
+
     const image = new Image();
     image.onload = () => {
       const columns = Math.floor(image.width / tileWidth);
       const rows = Math.floor(image.height / tileHeight);
-      if (columns > 0 && rows > 0) {
-        this.perTileTilesetCache.set(url, {
-          image,
-          tileWidth,
-          tileHeight,
-          columns,
-          rows,
-          cellCount: columns * rows,
+      const sourceCellWidth = columns > 0 ? image.width / columns : 0;
+      const sourceCellHeight = rows > 0 ? image.height / rows : 0;
+      const apply = () => {
+        this.perTileTilesetCache.set(key, {
+          status: columns > 0 && rows > 0 ? 'ready' : 'error',
+          image: columns > 0 && rows > 0 ? image : null,
+          requestedTileWidth: tileWidth,
+          requestedTileHeight: tileHeight,
+          sourceCellWidth: columns > 0 && rows > 0 ? sourceCellWidth : 0,
+          sourceCellHeight: columns > 0 && rows > 0 ? sourceCellHeight : 0,
+          columns: Math.max(0, columns),
+          rows: Math.max(0, rows),
+          cellCount: columns > 0 && rows > 0 ? columns * rows : 0,
         });
+      };
+      if (typeof image.decode === 'function') {
+        image.decode().then(apply).catch(apply);
+      } else {
+        apply();
       }
     };
-    image.src = url;
+    image.onerror = () => {
+      this.perTileTilesetCache.set(key, {
+        status: 'error',
+        image: null,
+        requestedTileWidth: tileWidth,
+        requestedTileHeight: tileHeight,
+        sourceCellWidth: 0,
+        sourceCellHeight: 0,
+        columns: 0,
+        rows: 0,
+        cellCount: 0,
+      });
+    };
+    image.src = normalizedUrl;
+  }
+
+  private getMapTilesetRequirements(mapId: string): MapTilesetRequirements {
+    const cached = this.mapTilesetRequirementsCache.get(mapId);
+    if (cached) {
+      return cached;
+    }
+
+    const map = this.mapRegistry[mapId];
+    if (!map) {
+      const empty: MapTilesetRequirements = { usesGlobalTileset: false, perTileTilesets: [] };
+      this.mapTilesetRequirementsCache.set(mapId, empty);
+      return empty;
+    }
+
+    let usesGlobalTileset = false;
+    const perTileTilesetByKey = new Map<string, MapTilesetRequirements['perTileTilesets'][number]>();
+    const visitedCodes = new Set<string>();
+
+    for (const layer of map.layers) {
+      for (const row of layer.tiles) {
+        for (const code of row) {
+          if (!code || code === BLANK_TILE_CODE || visitedCodes.has(code)) {
+            continue;
+          }
+          visitedCodes.add(code);
+          const tile = this.getTileDefinition(code);
+          if (typeof tile.atlasIndex !== 'number' || tile.atlasIndex < 0) {
+            continue;
+          }
+
+          const tilesetUrl = tile.tilesetUrl?.trim();
+          const tilePixelWidth = tile.tilePixelWidth ?? 0;
+          const tilePixelHeight = tile.tilePixelHeight ?? 0;
+          if (tilesetUrl && tilePixelWidth > 0 && tilePixelHeight > 0) {
+            const normalizedUrl = resolveAssetUrl(tilesetUrl);
+            if (!normalizedUrl) {
+              continue;
+            }
+            const key = this.getPerTileTilesetCacheKey(normalizedUrl, tilePixelWidth, tilePixelHeight);
+            if (!perTileTilesetByKey.has(key)) {
+              perTileTilesetByKey.set(key, {
+                key,
+                url: normalizedUrl,
+                tileWidth: tilePixelWidth,
+                tileHeight: tilePixelHeight,
+              });
+            }
+          } else {
+            usesGlobalTileset = true;
+          }
+        }
+      }
+    }
+
+    const requirements: MapTilesetRequirements = {
+      usesGlobalTileset,
+      perTileTilesets: Array.from(perTileTilesetByKey.values()),
+    };
+    this.mapTilesetRequirementsCache.set(mapId, requirements);
+    return requirements;
+  }
+
+  private preloadMapVisualAssets(mapId: string): void {
+    const map = this.mapRegistry[mapId];
+    if (!map) {
+      return;
+    }
+
+    const requirements = this.getMapTilesetRequirements(mapId);
+    if (requirements.usesGlobalTileset) {
+      this.ensureTilesetLoaded();
+    }
+    for (const requirement of requirements.perTileTilesets) {
+      this.ensurePerTileTilesetInCache(requirement.url, requirement.tileWidth, requirement.tileHeight);
+    }
+
+    this.ensurePlayerSpriteLoaded();
+    for (const npc of this.getNpcsForMap(map.id)) {
+      this.ensureNpcSpriteLoaded(npc);
+    }
+  }
+
+  private preloadNeighborMapVisualAssets(mapId: string): void {
+    const map = this.mapRegistry[mapId];
+    if (!map) {
+      return;
+    }
+    for (const warp of map.warps) {
+      this.preloadMapVisualAssets(warp.toMapId);
+    }
+  }
+
+  private preloadKnownNpcSpriteSheets(): void {
+    for (const entry of this.npcSpriteLibrary) {
+      this.ensureNpcSpriteSheetLoaded(entry.sprite);
+    }
+  }
+
+  private areMapVisualAssetsReady(mapId: string): boolean {
+    const map = this.mapRegistry[mapId];
+    if (!map) {
+      return true;
+    }
+
+    const requirements = this.getMapTilesetRequirements(mapId);
+    if (requirements.usesGlobalTileset && this.tilesetLoadState === 'loading') {
+      return false;
+    }
+    for (const requirement of requirements.perTileTilesets) {
+      const state = this.perTileTilesetCache.get(requirement.key);
+      if (!state || state.status === 'loading') {
+        return false;
+      }
+    }
+
+    if (this.playerSpriteConfig?.url && this.playerSpriteSheet.status === 'loading') {
+      return false;
+    }
+    for (const npc of this.getNpcsForMap(map.id)) {
+      const spriteUrl = npc.sprite?.url?.trim();
+      if (!spriteUrl) {
+        continue;
+      }
+      const sheet = this.npcSpriteSheets[spriteUrl];
+      if (!sheet || sheet.status === 'loading') {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   private drawTileFromTileset(
@@ -1795,16 +2568,18 @@ export class GameRuntime {
     tile: TileDefinition,
     x: number,
     y: number,
-    rotationQuarter = 0,
+    tileTransform = 0,
   ): boolean {
     const url = tile.tilesetUrl?.trim();
     const tilePxW = tile.tilePixelWidth ?? 0;
     const tilePxH = tile.tilePixelHeight ?? 0;
 
     if (url && tilePxW > 0 && tilePxH > 0) {
-      this.ensurePerTileTilesetInCache(url, tilePxW, tilePxH);
-      const cached = this.perTileTilesetCache.get(url);
-      if (cached && cached.cellCount > 0) {
+      const normalizedUrl = resolveAssetUrl(url);
+      this.ensurePerTileTilesetInCache(normalizedUrl, tilePxW, tilePxH);
+      const key = this.getPerTileTilesetCacheKey(normalizedUrl, tilePxW, tilePxH);
+      const cached = this.perTileTilesetCache.get(key);
+      if (cached?.status === 'ready' && cached.image && cached.cellCount > 0) {
         if (
           typeof tile.atlasIndex !== 'number' ||
           tile.atlasIndex < 0 ||
@@ -1814,17 +2589,18 @@ export class GameRuntime {
         }
         const column = tile.atlasIndex % cached.columns;
         const row = Math.floor(tile.atlasIndex / cached.columns);
-        const sourceX = column * cached.tileWidth;
-        const sourceY = row * cached.tileHeight;
+        const sourceX = column * cached.sourceCellWidth;
+        const sourceY = row * cached.sourceCellHeight;
         ctx.imageSmoothingEnabled = false;
-        const rotation = sanitizeRotationQuarter(rotationQuarter);
-        if (rotation === 0) {
+        const decodedTransform = decodeTileTransform(tileTransform);
+        const rotation = decodedTransform.rotationQuarter;
+        if (rotation === 0 && !decodedTransform.mirrorHorizontal) {
           ctx.drawImage(
             cached.image,
             sourceX,
             sourceY,
-            cached.tileWidth,
-            cached.tileHeight,
+            cached.sourceCellWidth,
+            cached.sourceCellHeight,
             x,
             y,
             TILE_SIZE,
@@ -1835,12 +2611,15 @@ export class GameRuntime {
         ctx.save();
         ctx.translate(x + TILE_SIZE / 2, y + TILE_SIZE / 2);
         ctx.rotate((Math.PI / 2) * rotation);
+        if (decodedTransform.mirrorHorizontal) {
+          ctx.scale(-1, 1);
+        }
         ctx.drawImage(
           cached.image,
           sourceX,
           sourceY,
-          cached.tileWidth,
-          cached.tileHeight,
+          cached.sourceCellWidth,
+          cached.sourceCellHeight,
           -TILE_SIZE / 2,
           -TILE_SIZE / 2,
           TILE_SIZE,
@@ -1855,7 +2634,6 @@ export class GameRuntime {
     if (!this.tilesetImage || !this.customTilesetConfig) {
       return false;
     }
-    const config = this.customTilesetConfig;
     if (
       typeof tile.atlasIndex !== 'number' ||
       tile.atlasIndex < 0 ||
@@ -1871,18 +2649,19 @@ export class GameRuntime {
 
     const column = tile.atlasIndex % this.tilesetColumns;
     const row = Math.floor(tile.atlasIndex / this.tilesetColumns);
-    const sourceX = column * config.tileWidth;
-    const sourceY = row * config.tileHeight;
+    const sourceX = column * this.tilesetSourceCellWidth;
+    const sourceY = row * this.tilesetSourceCellHeight;
 
     ctx.imageSmoothingEnabled = false;
-    const rotation = sanitizeRotationQuarter(rotationQuarter);
-    if (rotation === 0) {
+    const decodedTransform = decodeTileTransform(tileTransform);
+    const rotation = decodedTransform.rotationQuarter;
+    if (rotation === 0 && !decodedTransform.mirrorHorizontal) {
       ctx.drawImage(
         this.tilesetImage,
         sourceX,
         sourceY,
-        config.tileWidth,
-        config.tileHeight,
+        this.tilesetSourceCellWidth,
+        this.tilesetSourceCellHeight,
         x,
         y,
         TILE_SIZE,
@@ -1894,12 +2673,15 @@ export class GameRuntime {
     ctx.save();
     ctx.translate(x + TILE_SIZE / 2, y + TILE_SIZE / 2);
     ctx.rotate((Math.PI / 2) * rotation);
+    if (decodedTransform.mirrorHorizontal) {
+      ctx.scale(-1, 1);
+    }
     ctx.drawImage(
       this.tilesetImage,
       sourceX,
       sourceY,
-      config.tileWidth,
-      config.tileHeight,
+      this.tilesetSourceCellWidth,
+      this.tilesetSourceCellHeight,
       -TILE_SIZE / 2,
       -TILE_SIZE / 2,
       TILE_SIZE,
@@ -1970,22 +2752,26 @@ export class GameRuntime {
         columns: 0,
       };
     };
-    image.src = sprite.url;
+    image.src = resolveAssetUrl(sprite.url);
   }
 
   private ensureNpcSpriteLoaded(npc: NpcDefinition): void {
-    const sprite = npc.sprite;
-    if (!sprite?.url) {
+    this.ensureNpcSpriteSheetLoaded(npc.sprite);
+  }
+
+  private ensureNpcSpriteSheetLoaded(sprite: NpcSpriteConfig | null | undefined): void {
+    const spriteUrl = sprite?.url?.trim();
+    if (!sprite || !spriteUrl) {
       return;
     }
 
-    const existing = this.npcSpriteSheets[sprite.url];
+    const existing = this.npcSpriteSheets[spriteUrl];
     if (existing) {
       return;
     }
 
     const image = new Image();
-    this.npcSpriteSheets[sprite.url] = {
+    this.npcSpriteSheets[spriteUrl] = {
       status: 'loading',
       image: null,
       columns: 0,
@@ -1995,7 +2781,7 @@ export class GameRuntime {
       const atlasCellWidth = Math.max(1, sprite.atlasCellWidth ?? sprite.frameWidth);
       const columns = Math.floor(image.width / atlasCellWidth);
       const setReady = () => {
-        this.npcSpriteSheets[sprite.url] = {
+        this.npcSpriteSheets[spriteUrl] = {
           status: columns > 0 ? 'ready' : 'error',
           image: columns > 0 ? image : null,
           columns: Math.max(0, columns),
@@ -2008,13 +2794,13 @@ export class GameRuntime {
       }
     };
     image.onerror = () => {
-      this.npcSpriteSheets[sprite.url] = {
+      this.npcSpriteSheets[spriteUrl] = {
         status: 'error',
         image: null,
         columns: 0,
       };
     };
-    image.src = sprite.url;
+    image.src = resolveAssetUrl(spriteUrl);
   }
 
   private getNpcRuntimeState(npc: NpcDefinition): NpcRuntimeState {
@@ -2272,6 +3058,11 @@ export class GameRuntime {
       return;
     }
 
+    const cancelledFishingCast = this.fishingSession !== null;
+    this.clearFishingSession();
+    if (cancelledFishingCast) {
+      this.showMessage('Cancelled Cast', 1000);
+    }
     this.moveStep = {
       from: { ...this.playerPosition },
       to: { x: targetX, y: targetY },
@@ -2337,13 +3128,17 @@ export class GameRuntime {
         if (!this.doesNpcMovementGuardMatchTarget(guard, targetX, targetY)) {
           continue;
         }
-        if (Array.isArray(npc.battleTeamIds) && npc.battleTeamIds.length > 0) {
+        const battleTeamIds =
+          Array.isArray(guard.battleTeamIds) && guard.battleTeamIds.length > 0
+            ? guard.battleTeamIds
+            : npc.battleTeamIds;
+        if (Array.isArray(battleTeamIds) && battleTeamIds.length > 0) {
           const npcState = this.getNpcRuntimeState(npc);
           npcState.facing = oppositeDirection(this.facing);
-          const preBattleLines = (npc.dialogueLines && npc.dialogueLines.length > 0
-            ? npc.dialogueLines
-            : Array.isArray(guard.dialogueLines)
-              ? guard.dialogueLines.filter((line): line is string => typeof line === 'string' && line.trim().length > 0)
+          const preBattleLines = (Array.isArray(guard.dialogueLines) && guard.dialogueLines.length > 0
+            ? guard.dialogueLines.filter((line): line is string => typeof line === 'string' && line.trim().length > 0)
+            : npc.dialogueLines && npc.dialogueLines.length > 0
+              ? npc.dialogueLines
               : []
           ) as string[];
           if (preBattleLines.length > 0) {
@@ -2355,7 +3150,7 @@ export class GameRuntime {
             this.startDialogue(speaker, preBattleLines);
             return false;
           }
-          this.startMovementGuardBattle(npc, guard);
+          this.startMovementGuardBattle(npc, guard, battleTeamIds);
           return false;
         }
         if (!this.dialogue) {
@@ -2377,7 +3172,8 @@ export class GameRuntime {
       return false;
     }
     const defeatedFlag = typeof guard.defeatedFlag === 'string' ? guard.defeatedFlag.trim() : '';
-    if (defeatedFlag && this.flags[defeatedFlag]) {
+    const battleRepeatable = Boolean(guard.battleRepeatable);
+    if (defeatedFlag && this.flags[defeatedFlag] && !battleRepeatable) {
       return false;
     }
     return true;
@@ -2512,6 +3308,7 @@ export class GameRuntime {
       this.advanceDialogue();
       return;
     }
+    this.clearFishingSession();
 
     const interactWarp = this.findInteractWarpAtPlayer();
     if (interactWarp) {
@@ -2534,13 +3331,47 @@ export class GameRuntime {
 
     const interaction = this.findInteractionAt(target.x, target.y);
     if (interaction) {
-      this.startDialogue(interaction.speaker ?? 'Note', interaction.lines, interaction.setFlag);
+      if (this.resolveInteractionKind(interaction) === 'heal_tile') {
+        this.startHealTilePrompt(interaction);
+      } else {
+        this.startDialogue(interaction.speaker ?? 'Note', interaction.lines, interaction.setFlag);
+      }
       return;
     }
 
     if (tileAt(map, target.x, target.y) === 'D') {
       this.startDialogue('Door', ['It is locked.']);
     }
+  }
+
+  private startHealTilePrompt(interaction: InteractionDefinition): void {
+    const promptText =
+      interaction.lines.find((entry) => typeof entry === 'string' && entry.trim().length > 0)?.trim() ??
+      'Would you like to heal your Critters?';
+    this.heldDirections = [];
+    this.healPrompt = {
+      speaker: this.formatStoryText(interaction.speaker ?? 'Healer'),
+      text: this.formatStoryText(promptText),
+    };
+  }
+
+  private resolveHealPromptChoice(shouldHeal: boolean): boolean {
+    if (!this.healPrompt) {
+      return false;
+    }
+
+    const speaker = this.healPrompt.speaker;
+    this.healPrompt = null;
+    if (shouldHeal) {
+      this.healSquadToFull();
+      this.updateRespawnPointToCurrentPosition();
+      this.markProgressDirty();
+      this.startDialogue(speaker, ['Your Squad has been healed.', 'Thank you for stopping by!']);
+      return true;
+    }
+
+    this.startDialogue(speaker, ['Your squad was not healed.', 'Thank you for stopping by!']);
+    return true;
   }
 
   private startNpcDialogue(npc: NpcDefinition): void {
@@ -2557,16 +3388,33 @@ export class GameRuntime {
       this.markProgressDirty();
     }
 
-    const firstInteractBattleFlagKey = this.getFirstInteractBattleFlagKey(npc);
-    if (
-      npc.firstInteractBattle &&
-      firstInteractBattleFlagKey &&
-      !this.flags[firstInteractBattleFlagKey] &&
-      this.startNpcBattle(npc)
-    ) {
-      this.flags[firstInteractBattleFlagKey] = true;
-      this.markProgressDirty();
-      return;
+    const interactionBattleDefeatedFlag =
+      typeof npc.interactBattleDefeatedFlag === 'string' ? npc.interactBattleDefeatedFlag.trim() : '';
+    let interactionBattleRewards = this.normalizeNpcItemRewards(npc.battleRewards);
+    const interactionBattleRepeatable = Boolean(npc.interactBattleRepeatable);
+    if (npc.firstInteractBattle) {
+      if (interactionBattleRewards.length === 0 && this.itemById.lume?.isActive) {
+        interactionBattleRewards = this.normalizeNpcItemRewards([{ itemId: 'lume', quantity: 25 }]);
+      }
+      if (!interactionBattleDefeatedFlag) {
+        this.showMessage(`${npc.name} battle is missing a Defeat Flag. Configure this battler in NPC Studio.`, 2600);
+        return;
+      }
+      if (interactionBattleRewards.length === 0) {
+        this.showMessage(`${npc.name} battle is missing rewards. Add at least one reward item in NPC Studio.`, 2600);
+        return;
+      }
+      const hasDefeated = Boolean(this.flags[interactionBattleDefeatedFlag]);
+      if (interactionBattleRepeatable || !hasDefeated) {
+        const preBattleDialogue = this.resolveNpcDialogueForInteraction(npc);
+        this.pendingNpcInteractBattleStart = {
+          npc,
+          defeatedFlag: interactionBattleDefeatedFlag,
+          rewards: interactionBattleRewards,
+        };
+        this.startDialogue(preBattleDialogue.speaker, preBattleDialogue.lines, preBattleDialogue.setFlag);
+        return;
+      }
     }
 
     const postDuel = this.getPostDuelGuardDialogue(npc);
@@ -2574,6 +3422,18 @@ export class GameRuntime {
       this.startDialogue(postDuel.speaker, postDuel.lines, postDuel.setFlag);
       return;
     }
+
+    const interactionRewards = this.normalizeNpcItemRewards(npc.interactionRewards);
+    const interactionRewardSetFlag =
+      typeof npc.interactionRewardSetFlag === 'string' ? npc.interactionRewardSetFlag.trim() : '';
+    const shouldGrantInteractionRewards =
+      interactionRewards.length > 0 && (!interactionRewardSetFlag || !this.flags[interactionRewardSetFlag]);
+    const interactionRewardLines = shouldGrantInteractionRewards
+      ? this.buildRewardDialogueLines(interactionRewards, {
+          intro: `${npc.name} handed you something.`,
+          fallback: `${npc.name} gave you an item.`,
+        })
+      : [];
 
     if (npc.id === UNCLE_HANK_NPC_ID && !this.flags[FLAG_SELECTED_STARTER] && !this.flags[FLAG_DEMO_DONE]) {
       this.pendingStoryAction = 'open-starter-selection';
@@ -2583,7 +3443,14 @@ export class GameRuntime {
             'Hey <player-name>! How are you doing?',
             "Here for Critter pickup? I've got three right here that need a new home.",
           ];
-      this.startDialogue(npc.dialogueSpeaker ?? npc.name, starterLines, npc.dialogueSetFlag);
+      this.startDialogue(
+        npc.dialogueSpeaker ?? npc.name,
+        [...starterLines, ...interactionRewardLines],
+        npc.dialogueSetFlag,
+        undefined,
+        shouldGrantInteractionRewards ? interactionRewards : undefined,
+        shouldGrantInteractionRewards ? interactionRewardSetFlag || undefined : undefined,
+      );
       return;
     }
 
@@ -2593,29 +3460,38 @@ export class GameRuntime {
     }
 
     if (npc.dialogueLines && npc.dialogueLines.length > 0) {
-      this.startDialogue(npc.dialogueSpeaker ?? npc.name, npc.dialogueLines, npc.dialogueSetFlag, npc.healer);
+      this.startDialogue(
+        npc.dialogueSpeaker ?? npc.name,
+        [...npc.dialogueLines, ...interactionRewardLines],
+        npc.dialogueSetFlag,
+        npc.healer,
+        shouldGrantInteractionRewards ? interactionRewards : undefined,
+        shouldGrantInteractionRewards ? interactionRewardSetFlag || undefined : undefined,
+      );
       return;
     }
 
     const script = DIALOGUES[npc.dialogueId];
     if (!script) {
-      this.startDialogue(npc.name, ['...'], undefined, npc.healer);
+      this.startDialogue(
+        npc.name,
+        ['...', ...interactionRewardLines],
+        undefined,
+        npc.healer,
+        shouldGrantInteractionRewards ? interactionRewards : undefined,
+        shouldGrantInteractionRewards ? interactionRewardSetFlag || undefined : undefined,
+      );
       return;
     }
 
-    this.startDialogue(script.speaker, script.lines, script.setFlag, npc.healer);
-  }
-
-  private getFirstInteractBattleFlagKey(npc: NpcDefinition): string | null {
-    if (!npc.firstInteractBattle) {
-      return null;
-    }
-    const resolvedNpc = npc as ResolvedNpcDefinition;
-    const instanceKey = typeof resolvedNpc.__instanceKey === 'string' ? resolvedNpc.__instanceKey.trim() : '';
-    if (instanceKey) {
-      return `npc-first-interact-battle:${instanceKey}`;
-    }
-    return `npc-first-interact-battle:${this.currentMapId}:${npc.id}:${npc.position.x},${npc.position.y}`;
+    this.startDialogue(
+      script.speaker,
+      [...script.lines, ...interactionRewardLines],
+      script.setFlag,
+      npc.healer,
+      shouldGrantInteractionRewards ? interactionRewards : undefined,
+      shouldGrantInteractionRewards ? interactionRewardSetFlag || undefined : undefined,
+    );
   }
 
   private getPostDuelGuardDialogue(
@@ -2643,19 +3519,48 @@ export class GameRuntime {
     return null;
   }
 
-  private startMovementGuardBattle(npc: NpcDefinition, guard: NpcMovementGuardDefinition): void {
+  private startMovementGuardBattle(
+    npc: NpcDefinition,
+    guard: NpcMovementGuardDefinition,
+    teamIdsOverride?: string[],
+  ): void {
     const playerTeam = this.buildPlayerBattleTeam();
-    if (playerTeam.length === 0) {
-      this.performBlackout();
+    if (!this.hasBattleReadyCritter(playerTeam)) {
+      this.handleEmptyPlayerBattleTeam();
       return;
     }
-    const opponentTeam = this.buildNpcBattleTeam(npc.battleTeamIds ?? []);
+    const guardBattleTeamIds =
+      Array.isArray(teamIdsOverride) && teamIdsOverride.length > 0
+        ? teamIdsOverride
+        : Array.isArray(guard.battleTeamIds) && guard.battleTeamIds.length > 0
+          ? guard.battleTeamIds
+          : npc.battleTeamIds ?? [];
+    const opponentTeam = this.buildNpcBattleTeam(guardBattleTeamIds);
     if (opponentTeam.length === 0) {
+      return;
+    }
+    const defeatedFlag = typeof guard.defeatedFlag === 'string' && guard.defeatedFlag.trim() ? guard.defeatedFlag.trim() : '';
+    if (!defeatedFlag) {
+      this.showMessage(`${npc.name} guard battle is missing a Defeat Flag. Configure this battler in NPC Studio.`, 2600);
+      return;
+    }
+    let rewards = this.normalizeNpcItemRewards(guard.battleRewards ?? npc.battleRewards);
+    if (rewards.length === 0 && this.itemById.lume?.isActive) {
+      rewards = this.normalizeNpcItemRewards([{ itemId: 'lume', quantity: 25 }]);
+    }
+    if (rewards.length === 0) {
+      this.showMessage(`${npc.name} guard battle is missing rewards. Add at least one reward item in NPC Studio.`, 2600);
       return;
     }
     const npcState = this.getNpcRuntimeState(npc);
     npcState.facing = oppositeDirection(this.facing);
-    this.pendingGuardDefeat = { guard };
+    this.pendingGuardDefeat = {
+      npc,
+      guard,
+      defeatedFlag,
+      rewards,
+    };
+    this.pendingNpcInteractBattleDefeat = null;
     this.startBattle(
       {
         type: 'npc',
@@ -2669,10 +3574,16 @@ export class GameRuntime {
     );
   }
 
-  private startNpcBattle(npc: NpcDefinition): boolean {
+  private startNpcBattle(
+    npc: NpcDefinition,
+    options?: {
+      defeatedFlag?: string;
+      rewards?: NpcItemRewardDefinition[];
+    },
+  ): boolean {
     const playerTeam = this.buildPlayerBattleTeam();
-    if (playerTeam.length === 0) {
-      this.performBlackout();
+    if (!this.hasBattleReadyCritter(playerTeam)) {
+      this.handleEmptyPlayerBattleTeam();
       return false;
     }
 
@@ -2681,6 +3592,16 @@ export class GameRuntime {
       this.showMessage(`${npc.name} is not ready to battle yet.`, 2200);
       return false;
     }
+
+    const rewards = this.normalizeNpcItemRewards(options?.rewards);
+    this.pendingNpcInteractBattleDefeat =
+      typeof options?.defeatedFlag === 'string' && options.defeatedFlag.trim()
+        ? {
+            npc,
+            defeatedFlag: options.defeatedFlag.trim(),
+            rewards,
+          }
+        : null;
 
     this.startBattle(
       {
@@ -2696,7 +3617,41 @@ export class GameRuntime {
     return true;
   }
 
-  private startDialogue(speaker: string, lines: string[], setFlag?: string, healSquad?: boolean): void {
+  private resolveNpcDialogueForInteraction(
+    npc: NpcDefinition,
+  ): { speaker: string; lines: string[]; setFlag?: string } {
+    const dialogueLines = Array.isArray(npc.dialogueLines)
+      ? npc.dialogueLines.filter((line): line is string => typeof line === 'string' && line.trim().length > 0)
+      : [];
+    if (dialogueLines.length > 0) {
+      return {
+        speaker: npc.dialogueSpeaker ?? npc.name,
+        lines: dialogueLines,
+        setFlag: npc.dialogueSetFlag?.trim() || undefined,
+      };
+    }
+    const script = DIALOGUES[npc.dialogueId];
+    if (script && Array.isArray(script.lines) && script.lines.length > 0) {
+      return {
+        speaker: script.speaker,
+        lines: script.lines,
+        setFlag: script.setFlag,
+      };
+    }
+    return {
+      speaker: npc.dialogueSpeaker ?? npc.name,
+      lines: ['...'],
+    };
+  }
+
+  private startDialogue(
+    speaker: string,
+    lines: string[],
+    setFlag?: string,
+    healSquad?: boolean,
+    rewardItems?: NpcItemRewardDefinition[],
+    rewardSetFlag?: string,
+  ): void {
     const parsedLines = lines.map((line) => this.formatStoryText(line));
     this.heldDirections = [];
     this.dialogue = {
@@ -2705,6 +3660,8 @@ export class GameRuntime {
       index: 0,
       setFlag,
       healSquad: Boolean(healSquad),
+      rewardItems: rewardItems && rewardItems.length > 0 ? rewardItems.map((entry) => ({ ...entry })) : undefined,
+      rewardSetFlag: rewardSetFlag?.trim() || undefined,
     };
   }
 
@@ -2724,7 +3681,15 @@ export class GameRuntime {
     }
     if (this.dialogue.healSquad) {
       this.healSquadToFull();
+      this.updateRespawnPointToCurrentPosition();
       this.showMessage('Your squad was healed to full!', 2200);
+      this.markProgressDirty();
+    }
+    if (this.dialogue.rewardItems && this.dialogue.rewardItems.length > 0) {
+      this.grantNpcItemRewards(this.dialogue.rewardItems);
+    }
+    if (this.dialogue.rewardSetFlag) {
+      this.flags[this.dialogue.rewardSetFlag] = true;
       this.markProgressDirty();
     }
 
@@ -2733,6 +3698,15 @@ export class GameRuntime {
       const { npc, guard } = this.pendingGuardBattle;
       this.pendingGuardBattle = null;
       this.startMovementGuardBattle(npc, guard);
+      return;
+    }
+    if (this.pendingNpcInteractBattleStart) {
+      const pending = this.pendingNpcInteractBattleStart;
+      this.pendingNpcInteractBattleStart = null;
+      this.startNpcBattle(pending.npc, {
+        defeatedFlag: pending.defeatedFlag,
+        rewards: pending.rewards,
+      });
       return;
     }
     if (this.pendingStoryAction === 'open-starter-selection') {
@@ -2797,28 +3771,476 @@ export class GameRuntime {
     if (!encounterEntry) {
       return;
     }
-    const critter = this.critterLookup[encounterEntry.critterId];
-    if (!critter) {
+    this.resolveEncounterEntryOutcome(map.id, group.id, encounterEntry, 'walk');
+  }
+
+  private tryUseToolItem(item: GameItemDefinition): boolean {
+    const effect = item.effectConfig as { actionId?: string; successText?: string };
+    const actionId = typeof effect.actionId === 'string' ? effect.actionId.trim().toLowerCase() : '';
+    if (actionId === 'fishing') {
+      return this.tryUseFishingTool(item);
+    }
+    this.showMessage(this.resolveItemSuccessText(item, effect.successText?.trim() || `${item.name} used.`), 2000);
+    return true;
+  }
+
+  private tryUseFishingTool(item: GameItemDefinition): boolean {
+    const fishingContext = this.getFishingContextForFacingTile();
+    if (!fishingContext) {
+      this.showItemMisuse(item, 'There is nothing to fish here.');
+      return false;
+    }
+
+    const power = this.resolveFishingPower(item);
+    this.fishingSession = {
+      mapId: fishingContext.map.id,
+      groupId: fishingContext.group.id,
+      tableId: fishingContext.table.id,
+      fishFrequency: clamp(fishingContext.group.fishFrequency, 0, 1),
+      targetTile: { ...fishingContext.targetTile },
+      itemId: item.id,
+      itemName: item.name,
+      power,
+      hasPendingBite: false,
+      waitDurationMs: this.resolveFishingBiteWaitMs(power),
+      waitRemainingMs: 0,
+      biteWindowRemainingMs: 0,
+      biteWindowDurationMs: 0,
+    };
+    this.fishingSession.waitRemainingMs = this.fishingSession.waitDurationMs;
+    return true;
+  }
+
+  private tryHandleFishingInputKey(key: string): boolean {
+    const isFishingKey = key === 'f' || key === 'F';
+    const canReelWithInteract = isInteractKey(key) && this.fishingSession?.hasPendingBite;
+    if (!isFishingKey && !canReelWithInteract) {
+      return false;
+    }
+
+    if (canReelWithInteract) {
+      this.resolveFishingReelIn();
+      return true;
+    }
+
+    if (this.fishingSession) {
+      if (this.fishingSession.hasPendingBite) {
+        this.resolveFishingReelIn();
+      }
+      return true;
+    }
+
+    const fishingTool = this.getHotkeyFishingToolItem();
+    if (!fishingTool) {
+      return false;
+    }
+    this.tryUseFishingTool(fishingTool);
+    return true;
+  }
+
+  private tickFishing(deltaMs: number): void {
+    const session = this.fishingSession;
+    if (!session) {
       return;
     }
 
-    this.startWildBattle(map.id, group.id, critter, encounterEntry);
+    if (session.mapId !== this.currentMapId || this.activeBattle) {
+      this.clearFishingSession();
+      return;
+    }
+
+    if (session.hasPendingBite) {
+      session.biteWindowRemainingMs = Math.max(0, session.biteWindowRemainingMs - deltaMs);
+      if (session.biteWindowRemainingMs <= 0) {
+        this.clearFishingSession();
+        this.showMessage('The fish got away...', 1600);
+      }
+      return;
+    }
+
+    session.waitRemainingMs = Math.max(0, session.waitRemainingMs - deltaMs);
+    if (session.waitRemainingMs > 0) {
+      return;
+    }
+
+    if (Math.random() >= session.fishFrequency) {
+      this.clearFishingSession();
+      this.startDialogue('Fishing', ['No bites right now.']);
+      return;
+    }
+
+    const biteWindowMs = this.resolveFishingBiteWindowMs(session.power);
+    session.hasPendingBite = true;
+    session.biteWindowDurationMs = biteWindowMs;
+    session.biteWindowRemainingMs = biteWindowMs;
+    this.ensureFishingBiteIconLoaded();
+  }
+
+  private clearFishingSession(): void {
+    this.fishingSession = null;
+  }
+
+  private getHotkeyFishingToolItem(): GameItemDefinition | null {
+    for (const item of this.itemDatabase) {
+      if (!item.isActive || item.effectType !== 'tool_action') {
+        continue;
+      }
+      const effect = item.effectConfig as { actionId?: string };
+      const actionId = typeof effect.actionId === 'string' ? effect.actionId.trim().toLowerCase() : '';
+      if (actionId !== 'fishing') {
+        continue;
+      }
+      if (getItemInventoryQuantity(this.playerItemInventory, item.id) <= 0) {
+        continue;
+      }
+      return item;
+    }
+    return null;
+  }
+
+  private getFishingContextForFacingTile(): {
+    map: WorldMap;
+    group: WorldMap['encounterGroups'][number];
+    table: EncounterTableDefinition;
+    targetTile: Vector2;
+  } | null {
+    const map = this.getCurrentMap();
+    const targetTile = this.getFacingTile();
+    if (!isInsideMap(map, targetTile.x, targetTile.y)) {
+      return null;
+    }
+
+    const group = map.encounterGroups.find(
+      (entry) =>
+        Boolean(entry.fishEncounterTableId) &&
+        entry.fishFrequency > 0 &&
+        entry.tilePositions.some((position) => position.x === targetTile.x && position.y === targetTile.y),
+    );
+    if (!group?.fishEncounterTableId) {
+      return null;
+    }
+    const table = this.encounterTableLookup[group.fishEncounterTableId];
+    if (!table || table.entries.length === 0) {
+      return null;
+    }
+    return {
+      map,
+      group,
+      table,
+      targetTile,
+    };
+  }
+
+  private resolveFishingPower(item: GameItemDefinition): number {
+    const effect = item.effectConfig as { power?: number };
+    const raw =
+      typeof effect.power === 'number' && Number.isFinite(effect.power)
+        ? effect.power
+        : typeof item.value === 'number' && Number.isFinite(item.value)
+          ? item.value
+          : DEFAULT_FISHING_POWER;
+    return clamp(raw, FISHING_POWER_MIN, FISHING_POWER_MAX);
+  }
+
+  private resolveFishingBiteWaitMs(power: number): number {
+    const clampedPower = clamp(power, FISHING_POWER_MIN, FISHING_POWER_MAX);
+    const minWait = Math.round(lerp(2400, FISHING_MIN_BITE_WAIT_MS, clampedPower));
+    const maxWait = Math.round(lerp(FISHING_MAX_BITE_WAIT_MS, 1600, clampedPower));
+    return randomInt(Math.max(300, Math.min(minWait, maxWait)), Math.max(minWait, maxWait));
+  }
+
+  private resolveFishingBiteWindowMs(power: number): number {
+    const clampedPower = clamp(power, FISHING_POWER_MIN, FISHING_POWER_MAX);
+    const minWindow = Math.round(lerp(FISHING_MIN_BITE_WINDOW_MS, 5000, clampedPower));
+    const maxWindow = Math.round(lerp(2000, FISHING_MAX_BITE_WINDOW_MS, clampedPower));
+    return randomInt(Math.max(500, Math.min(minWindow, maxWindow)), Math.max(minWindow, maxWindow));
+  }
+
+  private resolveFishingReelIn(): void {
+    const session = this.fishingSession;
+    if (!session || !session.hasPendingBite) {
+      return;
+    }
+
+    const table = this.encounterTableLookup[session.tableId];
+    if (!table || table.entries.length === 0) {
+      this.clearFishingSession();
+      this.showMessage('The water seems quiet.', 1600);
+      return;
+    }
+
+    const encounterEntry = sampleEncounterEntry(table.entries);
+    this.clearFishingSession();
+    if (!encounterEntry) {
+      this.showMessage('The water seems quiet.', 1600);
+      return;
+    }
+    this.resolveEncounterEntryOutcome(session.mapId, session.groupId, encounterEntry, 'fishing');
+  }
+
+  private resolveEncounterEntryOutcome(
+    mapId: string,
+    groupId: string,
+    encounterEntry: EncounterTableEntry,
+    source: 'walk' | 'fishing',
+  ): void {
+    if (isCritterEncounterEntry(encounterEntry)) {
+      const critter = this.critterLookup[encounterEntry.critterId];
+      if (!critter) {
+        if (source === 'fishing') {
+          this.showMessage('The fish escaped.', 1600);
+        }
+        return;
+      }
+      this.startWildBattle(mapId, groupId, critter, encounterEntry);
+      return;
+    }
+
+    const item = this.itemById[encounterEntry.itemId];
+    if (!item?.isActive) {
+      this.showMessage(source === 'fishing' ? 'You reeled in nothing.' : 'You found nothing.', 1600);
+      return;
+    }
+    const quantity = this.resolveEncounterItemAmount(encounterEntry);
+    const granted = this.grantNpcItemRewards([{ itemId: item.id, quantity }]);
+    if (granted.length === 0) {
+      this.showMessage(source === 'fishing' ? 'You reeled in nothing.' : 'You found nothing.', 1600);
+      return;
+    }
+    const reward = granted[0];
+    if (source === 'fishing') {
+      this.showMessage(`You fished up ${reward.quantity}x ${reward.itemName}!`, 2200);
+      return;
+    }
+    this.showMessage(`You found ${reward.quantity}x ${reward.itemName}!`, 2200);
+  }
+
+  private resolveEncounterItemAmount(entry: EncounterTableItemEntry): number {
+    const hasMin = typeof entry.minAmount === 'number' && Number.isFinite(entry.minAmount);
+    const hasMax = typeof entry.maxAmount === 'number' && Number.isFinite(entry.maxAmount);
+    const min = hasMin ? clamp(Math.floor(entry.minAmount as number), 1, 9999) : null;
+    const max = hasMax ? clamp(Math.floor(entry.maxAmount as number), 1, 9999) : null;
+    if (min !== null && max !== null) {
+      return randomInt(Math.min(min, max), Math.max(min, max));
+    }
+    if (min !== null) {
+      return min;
+    }
+    if (max !== null) {
+      return max;
+    }
+    return 1;
+  }
+
+  private tryUseHealingItem(item: GameItemDefinition, squadSlotIndex: number | null): boolean {
+    if (squadSlotIndex === null || !Number.isInteger(squadSlotIndex)) {
+      this.showItemMisuse(item, 'Choose a squad critter to heal.');
+      return false;
+    }
+    const slotLimit = this.getUnlockedSquadSlotLimit();
+    if (squadSlotIndex < 0 || squadSlotIndex >= slotLimit) {
+      this.showItemMisuse(item, 'Choose a valid squad slot.');
+      return false;
+    }
+    const critterId = this.playerCritterProgress.squad[squadSlotIndex];
+    if (critterId === null) {
+      this.showItemMisuse(item, 'Choose a squad critter to heal.');
+      return false;
+    }
+    const critter = this.critterLookup[critterId];
+    const progress = this.playerCritterProgress.collection.find((entry) => entry.critterId === critterId);
+    if (!critter || !progress?.unlocked) {
+      this.showItemMisuse(item, 'Choose a squad critter to heal.');
+      return false;
+    }
+
+    const maxHp = Math.max(1, progress.effectiveStats.hp);
+    const currentHp = clamp(progress.currentHp, 0, maxHp);
+    if (currentHp <= 0) {
+      this.showItemMisuse(item, 'Cannot heal a knocked out critter this way. Please use a healer.');
+      return false;
+    }
+    if (currentHp >= maxHp) {
+      this.showItemMisuse(item, `${critter.name} is already at full HP.`);
+      return false;
+    }
+
+    const effect = item.effectConfig as { healAmount?: number; healPercent?: number; curesStatus?: boolean };
+    const value = typeof item.value === 'number' && Number.isFinite(item.value) ? item.value : undefined;
+    const healAmountFromFlat =
+      item.effectType === 'heal_flat'
+        ? clamp(
+            typeof value === 'number'
+              ? Math.floor(value)
+              : typeof effect.healAmount === 'number'
+                ? Math.floor(effect.healAmount)
+                : 20,
+            1,
+            9999,
+          )
+        : 0;
+    const healAmountFromPercent =
+      item.effectType === 'heal_percent'
+        ? Math.max(
+            1,
+            Math.floor(
+              maxHp *
+                clamp(
+                  typeof value === 'number'
+                    ? value
+                    : typeof effect.healPercent === 'number'
+                      ? effect.healPercent
+                      : 0.25,
+                  0.01,
+                  1,
+                ),
+            ),
+          )
+        : 0;
+    const requestedHeal = Math.max(healAmountFromFlat, healAmountFromPercent, 1);
+    const appliedHeal = Math.min(requestedHeal, Math.max(0, maxHp - currentHp));
+    if (appliedHeal <= 0) {
+      this.showItemMisuse(item, `${critter.name} cannot be healed right now.`);
+      return false;
+    }
+
+    progress.currentHp = currentHp + appliedHeal;
+    this.markProgressDirty();
+    const fallbackText = effect.curesStatus
+      ? `${critter.name} recovered ${appliedHeal} HP and feels refreshed.`
+      : `${critter.name} recovered ${appliedHeal} HP.`;
+    this.showMessage(
+      this.resolveItemSuccessText(item, fallbackText, {
+        critterName: critter.name,
+        value: appliedHeal,
+      }),
+      2200,
+    );
+    return true;
+  }
+
+  private resolveItemSuccessText(
+    item: GameItemDefinition,
+    fallback: string,
+    context?: { critterName?: string; value?: number },
+  ): string {
+    const success = (item.successText ?? '').trim();
+    let text = success || fallback;
+    if (context?.critterName) {
+      text = text.replace(/<Critter>/g, context.critterName).replace(/\{critter\}/gi, context.critterName);
+    }
+    if (typeof context?.value === 'number' && Number.isFinite(context.value)) {
+      const valueLabel = String(Math.max(0, Math.floor(context.value)));
+      text = text.replace(/<X>/g, valueLabel).replace(/\bX\b/g, valueLabel);
+    }
+    return text.trim() || fallback;
+  }
+
+  private showItemMisuse(item: GameItemDefinition, fallback: string): void {
+    const text = item.misuseText.trim() || fallback;
+    if (!text) {
+      return;
+    }
+    this.showMessage(text, 2200);
+  }
+
+  private normalizeNpcItemRewards(rewards: NpcItemRewardDefinition[] | undefined): NpcItemRewardDefinition[] {
+    if (!Array.isArray(rewards) || rewards.length === 0) {
+      return [];
+    }
+    const merged = new Map<string, number>();
+    for (const entry of rewards) {
+      const itemId = typeof entry?.itemId === 'string' ? entry.itemId.trim() : '';
+      const quantity =
+        typeof entry?.quantity === 'number' && Number.isFinite(entry.quantity) ? Math.max(0, Math.floor(entry.quantity)) : 0;
+      if (!itemId || quantity <= 0) {
+        continue;
+      }
+      const item = this.itemById[itemId];
+      if (!item || !item.isActive) {
+        continue;
+      }
+      merged.set(itemId, (merged.get(itemId) ?? 0) + quantity);
+    }
+    return [...merged.entries()].map(([itemId, quantity]) => ({ itemId, quantity }));
+  }
+
+  private grantNpcItemRewards(
+    rewards: NpcItemRewardDefinition[],
+  ): Array<{ itemId: string; itemName: string; quantity: number }> {
+    const normalized = this.normalizeNpcItemRewards(rewards);
+    if (normalized.length === 0) {
+      return [];
+    }
+    const granted: Array<{ itemId: string; itemName: string; quantity: number }> = [];
+    let nextInventory = this.playerItemInventory;
+    for (const entry of normalized) {
+      const item = this.itemById[entry.itemId];
+      if (!item || !item.isActive) {
+        continue;
+      }
+      const before = getItemInventoryQuantity(nextInventory, item.id);
+      nextInventory = setItemInventoryQuantity(nextInventory, this.itemDatabase, item.id, before + entry.quantity);
+      const after = getItemInventoryQuantity(nextInventory, item.id);
+      const grantedQuantity = Math.max(0, after - before);
+      if (grantedQuantity <= 0) {
+        continue;
+      }
+      granted.push({
+        itemId: item.id,
+        itemName: item.name,
+        quantity: grantedQuantity,
+      });
+    }
+    if (granted.length > 0) {
+      this.playerItemInventory = nextInventory;
+      this.markProgressDirty();
+    }
+    return granted;
+  }
+
+  private buildRewardDialogueLines(
+    rewards: NpcItemRewardDefinition[],
+    options?: {
+      intro?: string;
+      fallback?: string;
+    },
+  ): string[] {
+    const normalized = this.normalizeNpcItemRewards(rewards);
+    const lines: string[] = [];
+    if (options?.intro?.trim()) {
+      lines.push(options.intro.trim());
+    }
+    for (const reward of normalized) {
+      const item = this.itemById[reward.itemId];
+      if (!item) {
+        continue;
+      }
+      lines.push(`You received ${reward.quantity} ${item.name}.`);
+    }
+    if (lines.length === 0 && options?.fallback?.trim()) {
+      lines.push(options.fallback.trim());
+    }
+    return lines;
   }
 
   private startWildBattle(
     mapId: string,
     groupId: string,
     critter: CritterDefinition,
-    encounterEntry: EncounterTableDefinition['entries'][number] | null = null,
+    encounterEntry: EncounterTableCritterEntry | null = null,
   ): void {
     const playerTeam = this.buildPlayerBattleTeam();
-    if (playerTeam.length === 0) {
-      this.performBlackout();
+    if (!this.hasBattleReadyCritter(playerTeam)) {
+      this.handleEmptyPlayerBattleTeam();
       return;
     }
 
     const encounterLevel = this.resolveEncounterLevel(critter, encounterEntry);
     const opponent = this.buildWildBattleCritter(critter, encounterLevel);
+    this.pendingNpcInteractBattleStart = null;
+    this.pendingNpcInteractBattleDefeat = null;
+    this.pendingBattleRewardDialogue = null;
     this.lastEncounter = {
       mapId,
       groupId,
@@ -2850,6 +4272,8 @@ export class GameRuntime {
     }
 
     const transitionDurationMs = 760;
+    this.clearFishingSession();
+    this.pendingNpcInteractBattleStart = null;
     this.moveStep = null;
     this.heldDirections = [];
     this.activeBattle = {
@@ -2865,11 +4289,15 @@ export class GameRuntime {
       playerTeam,
       opponentTeam,
       playerActiveIndex: null,
-      opponentActiveIndex: 0,
+      opponentActiveIndex: source.type === 'wild' ? 0 : null,
+      pendingOpponentSwitchIndex: null,
+      pendingOpponentSwitchDelayMs: 0,
+      pendingOpponentSwitchAnnouncementShown: false,
       pendingForcedSwap: false,
       narrationQueue: [],
       activeNarration: null,
       activeAnimation: null,
+      pendingKnockoutResolution: null,
       nextAnimationToken: 1,
     };
     this.nextBattleId += 1;
@@ -2888,6 +4316,9 @@ export class GameRuntime {
       }
     }
 
+    this.updatePendingKnockoutResolution(battle, deltaMs);
+    this.updatePendingOpponentSwitchAnnouncement(battle, deltaMs);
+
     if (battle.phase !== 'transition') {
       return;
     }
@@ -2898,7 +4329,86 @@ export class GameRuntime {
     }
 
     battle.phase = 'choose-starter';
-    battle.logLine = `${battle.source.label} appeared. Choose your lead critter.`;
+    battle.logLine =
+      battle.source.type === 'wild'
+        ? `${battle.source.label} appeared. Choose your lead critter.`
+        : 'Choose your lead critter.';
+  }
+
+  private updatePendingKnockoutResolution(battle: BattleRuntimeState, deltaMs: number): void {
+    const pending = battle.pendingKnockoutResolution;
+    if (!pending) {
+      return;
+    }
+
+    pending.remainingMs = Math.max(0, pending.remainingMs - deltaMs);
+    if (pending.remainingMs > 0) {
+      return;
+    }
+
+    battle.pendingKnockoutResolution = null;
+    if (battle.result !== 'ongoing') {
+      return;
+    }
+
+    if (pending.defenderTeam === 'opponent') {
+      this.handleOpponentKnockout(battle, pending.playerAttackerCritterId);
+      return;
+    }
+    this.handlePlayerKnockout(battle);
+  }
+
+  private updatePendingOpponentSwitchAnnouncement(battle: BattleRuntimeState, deltaMs: number): void {
+    if (battle.result !== 'ongoing' || battle.pendingOpponentSwitchIndex === null) {
+      return;
+    }
+    if (battle.pendingOpponentSwitchAnnouncementShown) {
+      if (battle.activeNarration || battle.narrationQueue.length > 0) {
+        return;
+      }
+      const nextIndex = battle.pendingOpponentSwitchIndex;
+      if (nextIndex < 0 || nextIndex >= battle.opponentTeam.length) {
+        battle.pendingOpponentSwitchIndex = null;
+        battle.pendingOpponentSwitchDelayMs = 0;
+        battle.pendingOpponentSwitchAnnouncementShown = false;
+        return;
+      }
+      battle.opponentActiveIndex = nextIndex;
+      battle.pendingOpponentSwitchIndex = null;
+      battle.pendingOpponentSwitchDelayMs = 0;
+      battle.pendingOpponentSwitchAnnouncementShown = false;
+      battle.activeAnimation = {
+        attacker: 'opponent',
+        remainingMs: 320,
+        durationMs: 320,
+        token: battle.nextAnimationToken,
+      };
+      battle.nextAnimationToken += 1;
+      if (battle.phase === 'player-turn') {
+        battle.logLine = 'Choose your move.';
+      }
+      return;
+    }
+    if (battle.activeNarration || battle.narrationQueue.length > 0) {
+      return;
+    }
+    battle.pendingOpponentSwitchDelayMs = Math.max(0, battle.pendingOpponentSwitchDelayMs - deltaMs);
+    if (battle.pendingOpponentSwitchDelayMs > 0) {
+      return;
+    }
+    const nextIndex = battle.pendingOpponentSwitchIndex;
+    if (nextIndex < 0 || nextIndex >= battle.opponentTeam.length) {
+      battle.pendingOpponentSwitchIndex = null;
+      return;
+    }
+    const next = battle.opponentTeam[nextIndex];
+    battle.pendingOpponentSwitchAnnouncementShown = true;
+    battle.activeNarration = {
+      message: `${battle.source.label} selected ${next.name}.`,
+      attacker: null,
+    };
+    battle.logLine = battle.activeNarration.message;
+    battle.activeAnimation = null;
   }
 
   private buildPlayerBattleTeam(): BattleCritterState[] {
@@ -2931,9 +4441,6 @@ export class GameRuntime {
       const effectiveStats = progress.effectiveStats ?? derived.effectiveStats;
       const maxHp = Math.max(1, effectiveStats.hp);
       const currentHp = clamp(progress.currentHp, 0, maxHp);
-      if (currentHp <= 0) {
-        continue;
-      }
       team.push({
         slotIndex: index,
         critterId: critter.id,
@@ -2946,7 +4453,7 @@ export class GameRuntime {
         attack: Math.max(1, effectiveStats.attack),
         defense: Math.max(1, effectiveStats.defense),
         speed: Math.max(1, effectiveStats.speed),
-        fainted: false,
+        fainted: currentHp <= 0,
         knockoutProgressCounted: false,
         attackModifier: 1,
         defenseModifier: 1,
@@ -2960,9 +4467,13 @@ export class GameRuntime {
     return team;
   }
 
+  private hasBattleReadyCritter(team: BattleCritterState[]): boolean {
+    return team.some((entry) => !entry.fainted && entry.currentHp > 0);
+  }
+
   private resolveEncounterLevel(
     critter: CritterDefinition,
-    encounterEntry: EncounterTableDefinition['entries'][number] | null,
+    encounterEntry: EncounterTableCritterEntry | null,
   ): number | null {
     if (!encounterEntry) {
       return null;
@@ -3332,7 +4843,7 @@ export class GameRuntime {
           ? `The wild ${defeated?.name ?? 'critter'} fainted. You won the battle.`
           : `${battle.source.label}'s ${defeated?.name ?? 'critter'} fainted. You won the battle.`;
       }
-      return `${battle.source.label} sent out ${team[nextIndex].name}.`;
+      return `${battle.source.label}'s ${defeated?.name ?? 'critter'} fainted.`;
     }
     if (nextIndex < 0) {
       return `Your ${defeated?.name ?? 'critter'} fainted. You blacked out.`;
@@ -3376,7 +4887,12 @@ export class GameRuntime {
         ? `The wild ${defeated.name} fainted. You won the battle.`
         : `${battle.source.label}'s ${defeated.name} fainted. You won the battle.`;
     }
-
+    if (battle.source.type === 'npc') {
+      battle.pendingOpponentSwitchIndex = nextIndex;
+      battle.pendingOpponentSwitchDelayMs = 360;
+      battle.pendingOpponentSwitchAnnouncementShown = false;
+      return `${battle.source.label}'s ${defeated.name} fainted.`;
+    }
     battle.opponentActiveIndex = nextIndex;
     return `${battle.source.label} sent out ${battle.opponentTeam[nextIndex].name}.`;
   }
@@ -3476,13 +4992,15 @@ export class GameRuntime {
         defender.currentHp = Math.max(0, defender.currentHp - next.applyDamageAmount);
         defender.fainted = defender.currentHp <= 0;
         if (defender.fainted) {
-          if (next.applyDamageDefender === 'opponent') {
-            const playerAttackerCritterId =
-              battle.playerActiveIndex !== null ? battle.playerTeam[battle.playerActiveIndex]?.critterId ?? null : null;
-            this.handleOpponentKnockout(battle, playerAttackerCritterId);
-          } else {
-            this.handlePlayerKnockout(battle);
-          }
+          const playerAttackerCritterId =
+            next.applyDamageDefender === 'opponent' && battle.playerActiveIndex !== null
+              ? battle.playerTeam[battle.playerActiveIndex]?.critterId ?? null
+              : null;
+          battle.pendingKnockoutResolution = {
+            defenderTeam: next.applyDamageDefender,
+            remainingMs: BATTLE_KNOCKOUT_RESOLUTION_DELAY_MS,
+            playerAttackerCritterId,
+          };
         }
       }
     }
@@ -3513,24 +5031,81 @@ export class GameRuntime {
     return -1;
   }
 
+  private findFirstAliveTeamIndex(team: BattleCritterState[]): number {
+    for (let index = 0; index < team.length; index += 1) {
+      const entry = team[index];
+      if (!entry.fainted && entry.currentHp > 0) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
   private setBattleResult(battle: BattleRuntimeState, result: BattleResult, message: string): void {
     battle.result = result;
     battle.phase = 'result';
+    battle.pendingOpponentSwitchIndex = null;
+    battle.pendingOpponentSwitchDelayMs = 0;
+    battle.pendingOpponentSwitchAnnouncementShown = false;
     battle.pendingForcedSwap = false;
+    battle.pendingKnockoutResolution = null;
     battle.logLine = message;
     const wasGuardBattle = this.pendingGuardDefeat !== null;
     if (this.pendingGuardDefeat) {
       if (result === 'won') {
-        const guard = this.pendingGuardDefeat.guard;
-        const defeatedFlag = typeof guard.defeatedFlag === 'string' ? guard.defeatedFlag.trim() : '';
+        const defeatedFlag = this.pendingGuardDefeat.defeatedFlag?.trim() ?? '';
         if (defeatedFlag) {
           this.flags[defeatedFlag] = true;
           this.markProgressDirty();
         }
+        const rewards = this.normalizeNpcItemRewards(this.pendingGuardDefeat.rewards);
+        if (rewards.length > 0) {
+          const rewardSpeaker =
+            this.pendingGuardDefeat.guard.postDuelDialogueSpeaker?.trim() ||
+            this.pendingGuardDefeat.npc.dialogueSpeaker ||
+            this.pendingGuardDefeat.npc.name;
+          this.pendingBattleRewardDialogue = {
+            speaker: rewardSpeaker,
+            lines: this.buildRewardDialogueLines(rewards, {
+              intro: `You defeated ${this.pendingGuardDefeat.npc.name}.`,
+              fallback: `${this.pendingGuardDefeat.npc.name} gave you a reward.`,
+            }),
+            rewards,
+          };
+        }
       }
       this.pendingGuardDefeat = null;
     }
-    if (battle.source.type === 'npc' && battle.source.npcId === JACOB_NPC_ID && !wasGuardBattle) {
+    if (this.pendingNpcInteractBattleDefeat) {
+      if (result === 'won') {
+        const defeatedFlag = this.pendingNpcInteractBattleDefeat.defeatedFlag.trim();
+        if (defeatedFlag) {
+          this.flags[defeatedFlag] = true;
+          this.markProgressDirty();
+        }
+        const rewards = this.normalizeNpcItemRewards(this.pendingNpcInteractBattleDefeat.rewards);
+        if (rewards.length > 0) {
+          this.pendingBattleRewardDialogue = {
+            speaker: this.pendingNpcInteractBattleDefeat.npc.dialogueSpeaker ?? this.pendingNpcInteractBattleDefeat.npc.name,
+            lines: this.buildRewardDialogueLines(rewards, {
+              intro: `You defeated ${this.pendingNpcInteractBattleDefeat.npc.name}.`,
+              fallback: `${this.pendingNpcInteractBattleDefeat.npc.name} gave you a reward.`,
+            }),
+            rewards,
+          };
+        }
+      }
+      this.pendingNpcInteractBattleDefeat = null;
+    }
+    if (battle.source.type === 'npc' && battle.source.npcId === JACOB_NPC_ID && !wasGuardBattle && result === 'won') {
+      const jacobNpc = this.getNpcsForMap(battle.source.mapId).find((entry) => entry.id === JACOB_NPC_ID);
+      const jacobBattleFlag =
+        typeof jacobNpc?.interactBattleDefeatedFlag === 'string' && jacobNpc.interactBattleDefeatedFlag.trim()
+          ? jacobNpc.interactBattleDefeatedFlag.trim()
+          : FLAG_JACOB_BATTLE_WON;
+      this.flags[jacobBattleFlag] = true;
+      this.flags[FLAG_JACOB_BATTLE_WON] = true;
+      this.markProgressDirty();
       this.handleJacobBattleComplete();
     }
     if (this.syncPlayerBattleHealthToProgress(battle)) {
@@ -3649,7 +5224,13 @@ export class GameRuntime {
     }
 
     const narrationActive = Boolean(battle.activeNarration);
-    const canUseActions = battle.phase === 'player-turn' && battle.result === 'ongoing' && !narrationActive;
+    const knockoutResolutionPending = battle.pendingKnockoutResolution !== null;
+    const canUseActions =
+      battle.phase === 'player-turn' &&
+      battle.result === 'ongoing' &&
+      !narrationActive &&
+      !knockoutResolutionPending &&
+      battle.pendingOpponentSwitchIndex === null;
     return {
       id: battle.id,
       phase: battle.phase,
@@ -3676,7 +5257,7 @@ export class GameRuntime {
       canSwap: canUseActions && this.hasAvailableSwapTarget(battle),
       canRetreat: canUseActions && battle.source.type === 'wild',
       canCancelSwap: battle.phase === 'choose-swap' && !battle.pendingForcedSwap && !narrationActive,
-      canAdvanceNarration: narrationActive,
+      canAdvanceNarration: narrationActive && !knockoutResolutionPending,
       playerActiveSkillSlots: this.getPlayerActiveSkillSlots(battle),
       activeAnimation: battle.activeAnimation
         ? {
@@ -3686,6 +5267,29 @@ export class GameRuntime {
         : null,
       requiresStarterSelection: battle.phase === 'choose-starter',
       requiresSwapSelection: battle.phase === 'choose-swap',
+    };
+  }
+
+  private getFishingSnapshot(): RuntimeSnapshot['fishing'] {
+    const session = this.fishingSession;
+    if (!session) {
+      return {
+        isCasting: false,
+        biteReady: false,
+        targetTile: null,
+        remainingMs: null,
+        power: null,
+      };
+    }
+    const remainingMs = session.hasPendingBite
+      ? session.biteWindowRemainingMs
+      : session.waitRemainingMs;
+    return {
+      isCasting: true,
+      biteReady: session.hasPendingBite,
+      targetTile: { ...session.targetTile },
+      remainingMs: Math.max(0, Math.floor(remainingMs)),
+      power: session.power,
     };
   }
 
@@ -3721,6 +5325,8 @@ export class GameRuntime {
     this.facing = warp.toFacing ?? this.facing;
     this.moveStep = null;
     this.ensureNpcRuntimeState();
+    this.preloadMapVisualAssets(this.currentMapId);
+    this.preloadNeighborMapVisualAssets(this.currentMapId);
     this.warpCooldownMs = WARP_COOLDOWN_MS;
     this.warpHintLabel = null;
     this.showMessage(this.getCurrentMap().name);
@@ -3791,7 +5397,7 @@ export class GameRuntime {
   }
 
   private updateWarpHint(): void {
-    if (this.dialogue) {
+    if (this.dialogue || this.healPrompt) {
       this.warpHintLabel = null;
       return;
     }
@@ -3830,7 +5436,25 @@ export class GameRuntime {
   }
 
   private isPlayerControlLocked(): boolean {
-    return Boolean(this.dialogue || this.activeCutscene || this.starterSelection || this.activeScriptedScene);
+    this.preloadMapVisualAssets(this.currentMapId);
+    return Boolean(
+      this.dialogue ||
+      this.healPrompt ||
+      this.activeCutscene ||
+      this.starterSelection ||
+      this.activeScriptedScene ||
+      !this.areMapVisualAssetsReady(this.currentMapId),
+    );
+  }
+
+  private getHealPromptSnapshot(): RuntimeSnapshot['story']['healPrompt'] {
+    if (!this.healPrompt) {
+      return null;
+    }
+    return {
+      speaker: this.healPrompt.speaker,
+      text: this.healPrompt.text,
+    };
   }
 
   private getStarterSelectionSnapshot(): RuntimeSnapshot['story']['starterSelection'] {
@@ -3910,6 +5534,44 @@ export class GameRuntime {
         const lines = Array.isArray(step.lines) ? step.lines.filter((line) => typeof line === 'string' && line.trim().length > 0) : [];
         if (lines.length > 0) {
           this.startDialogue(step.speaker ?? npc.name, lines, step.setFlag);
+        }
+        scene.stepStarted = true;
+        return;
+      }
+      if (this.dialogue) {
+        return;
+      }
+      scene.stepIndex += 1;
+      scene.stepStarted = false;
+      return;
+    }
+
+    if (step.type === 'give_item') {
+      const rawItemId = typeof step.itemId === 'string' ? step.itemId.trim() : '';
+      const quantity =
+        typeof step.quantity === 'number' && Number.isFinite(step.quantity)
+          ? Math.max(0, Math.floor(step.quantity))
+          : 0;
+      const rewards =
+        rawItemId && quantity > 0
+          ? this.normalizeNpcItemRewards([{ itemId: rawItemId, quantity }])
+          : [];
+      if (!scene.stepStarted) {
+        const customMessage = typeof step.message === 'string' ? step.message.trim() : '';
+        const lines = customMessage
+          ? [customMessage]
+          : this.buildRewardDialogueLines(rewards, {
+              intro: `${npc.name} gave you an item.`,
+              fallback: `${npc.name} gave you an item.`,
+            });
+        if (lines.length > 0) {
+          this.startDialogue(
+            npc.dialogueSpeaker ?? npc.name,
+            lines,
+            typeof step.setFlag === 'string' && step.setFlag.trim() ? step.setFlag.trim() : undefined,
+            undefined,
+            rewards,
+          );
         }
         scene.stepStarted = true;
         return;
@@ -4010,7 +5672,7 @@ export class GameRuntime {
       this.startDialogue('Uncle Hank', ['Hmm... I need to restock my starter critters.']);
       return;
     }
-    const optionCritterIds = [...new Set(table.entries.map((entry) => entry.critterId))]
+    const optionCritterIds = [...new Set(table.entries.filter(isCritterEncounterEntry).map((entry) => entry.critterId))]
       .filter((critterId) => Boolean(this.critterLookup[critterId]))
       .slice(0, 3);
     if (optionCritterIds.length === 0) {
@@ -4135,9 +5797,9 @@ export class GameRuntime {
 
   private startJacobBattle(): void {
     const playerTeam = this.buildPlayerBattleTeam();
-    if (playerTeam.length === 0) {
+    if (!this.hasBattleReadyCritter(playerTeam)) {
       this.activeCutscene = null;
-      this.performBlackout();
+      this.handleEmptyPlayerBattleTeam();
       return;
     }
 
@@ -4167,8 +5829,19 @@ export class GameRuntime {
     if (this.activeCutscene?.id === 'jacob-duel-intro') {
       this.activeCutscene.phase = 'post-battle-dialogue';
     }
+    const jacobNpc = this.getNpcsForMap(this.currentMapId).find((entry) => entry.id === JACOB_NPC_ID);
+    let rewards = this.normalizeNpcItemRewards(jacobNpc?.battleRewards);
+    if (rewards.length === 0 && this.itemById.lume?.isActive) {
+      rewards = this.normalizeNpcItemRewards([{ itemId: 'lume', quantity: 25 }]);
+    }
+    const rewardLines = rewards.length > 0
+      ? this.buildRewardDialogueLines(rewards, {
+          intro: 'That duel was fun! Thanks <player-name>!',
+          fallback: 'That duel was fun! Thanks <player-name>!',
+        })
+      : ['That duel was fun! Thanks <player-name>!'];
     this.pendingStoryAction = 'start-jacob-exit';
-    this.startDialogue('Jacob', ['That duel was fun! Thanks <player-name>!']);
+    this.startDialogue('Jacob', rewardLines, undefined, undefined, rewards.length > 0 ? rewards : undefined);
   }
 
   private startJacobExitCutscene(): void {
@@ -4413,10 +6086,21 @@ export class GameRuntime {
       if (!levelRow) {
         continue;
       }
+      const levelLockedByStoryFlag = this.hasPendingStoryFlagMission(
+        levelRow.missions,
+        levelRow.level,
+        progress.missionProgress,
+      );
 
       let updatedCritter = false;
       for (const mission of levelRow.missions) {
         if (mission.type !== 'opposing_knockouts') {
+          continue;
+        }
+        if (levelLockedByStoryFlag) {
+          if (this.syncKnockoutChallengeProgress(critter.id, levelRow.level, mission, 0, nowIso)) {
+            updatedCritter = true;
+          }
           continue;
         }
         if (!this.matchesOpposingKnockoutMission(mission, opposingCritterId, opposingCritter.element)) {
@@ -4518,7 +6202,12 @@ export class GameRuntime {
 
       const requiredMissionCount = Math.min(levelRow.requiredMissionCount, levelRow.missions.length);
       const completedMissionCount = levelRow.missions.reduce((count, mission) => {
-        const currentValue = this.getMissionCurrentValue(mission, levelRow.level, progress.missionProgress);
+        const currentValue = this.getMissionCurrentValue(
+          mission,
+          levelRow.level,
+          progress.missionProgress,
+          levelRow.missions,
+        );
         return count + (currentValue >= mission.targetValue ? 1 : 0);
       }, 0);
       if (completedMissionCount < requiredMissionCount) {
@@ -4591,7 +6280,12 @@ export class GameRuntime {
       const maxLevel = Math.max(1, ...critter.levels.map((entry) => entry.level));
       const levelProgress = critter.levels.map((levelRow) => {
         const missions = levelRow.missions.map((mission) => {
-          const currentValue = this.getMissionCurrentValue(mission, levelRow.level, progress?.missionProgress ?? {});
+          const currentValue = this.getMissionCurrentValue(
+            mission,
+            levelRow.level,
+            progress?.missionProgress ?? {},
+            levelRow.missions,
+          );
           const missionCompleted = currentValue >= mission.targetValue;
           const ascendsFromCritter = mission.ascendsFromCritterId
             ? this.critterLookup[mission.ascendsFromCritterId]
@@ -4633,6 +6327,12 @@ export class GameRuntime {
         ? (level === 0 ? 'Unlock' : 'Level Up')
         : null;
       const availableAbilityIds = new Set(progress?.unlockedAbilityIds ?? derived.unlockedAbilityIds);
+      const effectiveStats = progress?.effectiveStats ?? derived.effectiveStats;
+      const maxHp = unlocked ? Math.max(1, effectiveStats.hp) : null;
+      const currentHp =
+        unlocked && maxHp !== null
+          ? clamp(progress?.currentHp ?? maxHp, 0, maxHp)
+          : null;
 
       return {
         critterId: critter.id,
@@ -4643,12 +6343,14 @@ export class GameRuntime {
         unlocked,
         level,
         maxLevel,
+        currentHp,
+        maxHp,
         canAdvance,
         advanceActionLabel,
         missionCompletions: unlocked ? this.getCompletedMissionCount(critter, progress?.missionProgress ?? {}) : null,
         baseStats: { ...critter.baseStats },
         statBonus: progress?.statBonus ?? derived.statBonus,
-        effectiveStats: progress?.effectiveStats ?? derived.effectiveStats,
+        effectiveStats,
         abilities: critter.abilities.map((ability) => ({
           id: ability.id,
           name: ability.name,
@@ -4708,6 +6410,40 @@ export class GameRuntime {
     };
   }
 
+  private getBackpackSummary(): RuntimeSnapshot['backpack'] {
+    const allItems = [...this.itemDatabase]
+      .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }))
+      .map((item) => {
+        const quantityOwned = getItemInventoryQuantity(this.playerItemInventory, item.id);
+        const hasUseAction = item.category !== 'material';
+        return {
+          itemId: item.id,
+          name: item.name,
+          category: item.category,
+          description: item.description,
+          imageUrl: item.imageUrl,
+          misuseText: item.misuseText,
+          effectType: item.effectType,
+          effectSummary: describeItemEffect(item),
+          consumable: item.consumable,
+          isActive: item.isActive,
+          quantityOwned,
+          hasUseAction,
+          canUse: hasUseAction && item.isActive && quantityOwned > 0,
+        };
+      });
+    const items = allItems.filter((item) => item.quantityOwned > 0);
+    const categories = [...new Set(items.map((item) => item.category))].sort((left, right) =>
+      left.localeCompare(right, undefined, { sensitivity: 'base' }),
+    );
+    return {
+      totalOwnedKinds: items.length,
+      totalOwnedCount: items.reduce((sum, item) => sum + item.quantityOwned, 0),
+      categories,
+      items,
+    };
+  }
+
   private persistNow(): void {
     const save: SaveProfile = {
       id: 'slot-1',
@@ -4720,6 +6456,14 @@ export class GameRuntime {
         facing: this.facing,
       },
       selectedStarterId: this.selectedStarterId,
+      respawnPoint: {
+        mapId: this.respawnMapId,
+        position: {
+          x: this.respawnPosition.x,
+          y: this.respawnPosition.y,
+        },
+        facing: this.respawnFacing,
+      },
       playerCritterProgress: {
         ...this.playerCritterProgress,
         squad: [...this.playerCritterProgress.squad],
@@ -4729,6 +6473,13 @@ export class GameRuntime {
           statBonus: { ...entry.statBonus },
           effectiveStats: { ...entry.effectiveStats },
           unlockedAbilityIds: [...entry.unlockedAbilityIds],
+        })),
+      },
+      playerItemInventory: {
+        ...this.playerItemInventory,
+        entries: this.playerItemInventory.entries.map((entry) => ({
+          itemId: entry.itemId,
+          quantity: entry.quantity,
         })),
       },
       progressTracking: {
@@ -4754,7 +6505,7 @@ export class GameRuntime {
     let completed = 0;
     for (const levelRow of critter.levels) {
       for (const mission of levelRow.missions) {
-        const currentValue = this.getMissionCurrentValue(mission, levelRow.level, progress);
+        const currentValue = this.getMissionCurrentValue(mission, levelRow.level, progress, levelRow.missions);
         if (currentValue >= mission.targetValue) {
           completed += 1;
         }
@@ -4763,7 +6514,24 @@ export class GameRuntime {
     return completed;
   }
 
-  private getMissionCurrentValue(
+  private hasPendingStoryFlagMission(
+    missions: CritterLevelMissionRequirement[],
+    level: number,
+    progress: Record<string, number>,
+  ): boolean {
+    for (const mission of missions) {
+      if (mission.type !== 'story_flag') {
+        continue;
+      }
+      const currentValue = this.getMissionRawCurrentValue(mission, level, progress);
+      if (currentValue < mission.targetValue) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private getMissionRawCurrentValue(
     mission: CritterLevelMissionRequirement,
     level: number,
     progress: Record<string, number>,
@@ -4789,6 +6557,23 @@ export class GameRuntime {
 
     const key = missionProgressKey(level, mission.id);
     return Math.max(0, progress[key] ?? 0);
+  }
+
+  private getMissionCurrentValue(
+    mission: CritterLevelMissionRequirement,
+    level: number,
+    progress: Record<string, number>,
+    levelMissions?: CritterLevelMissionRequirement[],
+  ): number {
+    const currentValue = this.getMissionRawCurrentValue(mission, level, progress);
+    if (mission.type === 'story_flag') {
+      return currentValue;
+    }
+    const missions = Array.isArray(levelMissions) ? levelMissions : [];
+    if (missions.length > 0 && this.hasPendingStoryFlagMission(missions, level, progress)) {
+      return 0;
+    }
+    return currentValue;
   }
 
   private tryAutoAssignFirstUnlockedCritter(unlockedCritterId: number): boolean {
@@ -4860,6 +6645,71 @@ export class GameRuntime {
     return Math.min(this.playerCritterProgress.unlockedSquadSlots, this.playerCritterProgress.squad.length);
   }
 
+  private handleEmptyPlayerBattleTeam(): void {
+    if (this.hasAnyUnlockedCritter()) {
+      this.performBlackout();
+      return;
+    }
+    this.showMessage('You need to unlock a critter before battling.', 2600);
+  }
+
+  private resolveFallbackRespawnMapId(candidateMapId: string): string {
+    const preferred = candidateMapId.trim();
+    if (preferred && this.mapRegistry[preferred]) {
+      return preferred;
+    }
+    if (this.mapRegistry[DEFAULT_RESPAWN_MAP_ID]) {
+      return DEFAULT_RESPAWN_MAP_ID;
+    }
+    return 'spawn';
+  }
+
+  private clampPositionToMap(position: Vector2, map: WorldMap, fallbackPosition?: Vector2): Vector2 {
+    const fallback = fallbackPosition ?? { x: 0, y: 0 };
+    const rawX = Number.isFinite(position.x) ? Math.floor(position.x) : fallback.x;
+    const rawY = Number.isFinite(position.y) ? Math.floor(position.y) : fallback.y;
+    return {
+      x: Math.max(0, Math.min(Math.max(0, map.width - 1), rawX)),
+      y: Math.max(0, Math.min(Math.max(0, map.height - 1), rawY)),
+    };
+  }
+
+  private resolveRespawnPoint(rawRespawnPoint: SaveProfile['respawnPoint'] | undefined): SaveProfile['respawnPoint'] {
+    const mapId = this.resolveFallbackRespawnMapId(rawRespawnPoint?.mapId ?? DEFAULT_RESPAWN_MAP_ID);
+    const map = this.mapRegistry[mapId];
+    const preferredPosition = rawRespawnPoint?.position ?? {
+      x: DEFAULT_RESPAWN_POSITION.x,
+      y: DEFAULT_RESPAWN_POSITION.y,
+    };
+    const defaultMapPosition =
+      mapId === DEFAULT_RESPAWN_MAP_ID ? { x: DEFAULT_RESPAWN_POSITION.x, y: DEFAULT_RESPAWN_POSITION.y } : { x: 0, y: 0 };
+    const position = map
+      ? this.clampPositionToMap(preferredPosition, map, defaultMapPosition)
+      : defaultMapPosition;
+    const facing =
+      rawRespawnPoint?.facing === 'up' ||
+      rawRespawnPoint?.facing === 'down' ||
+      rawRespawnPoint?.facing === 'left' ||
+      rawRespawnPoint?.facing === 'right'
+        ? rawRespawnPoint.facing
+        : DEFAULT_RESPAWN_FACING;
+    return {
+      mapId,
+      position,
+      facing,
+    };
+  }
+
+  private updateRespawnPointToCurrentPosition(): void {
+    const map = this.mapRegistry[this.currentMapId];
+    if (!map) {
+      return;
+    }
+    this.respawnMapId = map.id;
+    this.respawnPosition = this.clampPositionToMap(this.playerPosition, map);
+    this.respawnFacing = this.facing;
+  }
+
   private markDirty(): void {
     this.dirty = true;
   }
@@ -4880,17 +6730,30 @@ export class GameRuntime {
 
   /** Warp player to user-house (5,7) facing down and heal all squad critters to full. */
   private performBlackout(): void {
-    const mapId = this.mapRegistry[BLACKOUT_MAP_ID] ? BLACKOUT_MAP_ID : 'spawn';
+    const mapId = this.resolveFallbackRespawnMapId(this.respawnMapId);
+    const map = this.mapRegistry[mapId];
+    const fallbackPosition =
+      mapId === DEFAULT_RESPAWN_MAP_ID
+        ? { x: DEFAULT_RESPAWN_POSITION.x, y: DEFAULT_RESPAWN_POSITION.y }
+        : { x: 0, y: 0 };
+    const position = map ? this.clampPositionToMap(this.respawnPosition, map, fallbackPosition) : fallbackPosition;
     this.currentMapId = mapId;
-    this.playerPosition = { x: BLACKOUT_POSITION.x, y: BLACKOUT_POSITION.y };
-    this.facing = BLACKOUT_FACING;
+    this.playerPosition = position;
+    this.facing = this.respawnFacing;
     this.moveStep = null;
+    this.preloadMapVisualAssets(this.currentMapId);
+    this.preloadNeighborMapVisualAssets(this.currentMapId);
     this.heldDirections = [];
     this.dialogue = null;
+    this.healPrompt = null;
     this.pendingGuardBattle = null;
+    this.pendingNpcInteractBattleStart = null;
+    this.pendingGuardDefeat = null;
+    this.pendingNpcInteractBattleDefeat = null;
+    this.pendingBattleRewardDialogue = null;
 
     this.healSquadToFull();
-    this.showMessage('You blacked out and woke up at home. Your squad was healed.', 3200);
+    this.showMessage('You blacked out and woke up at your last healing spot. Your squad was healed.', 3200);
     this.markProgressDirty();
   }
 
@@ -4927,6 +6790,14 @@ export class GameRuntime {
     }
 
     return true;
+  }
+
+  private resolveInteractionKind(interaction: InteractionDefinition): 'dialogue' | 'heal_tile' {
+    const rawKind = typeof interaction.kind === 'string' ? interaction.kind.trim().toLowerCase() : '';
+    if (rawKind === 'heal_tile' || rawKind === 'heal') {
+      return 'heal_tile';
+    }
+    return 'dialogue';
   }
 
   private getObjectiveText(): string {
@@ -5000,7 +6871,7 @@ export class GameRuntime {
   ): void {
     const sprite = npc.sprite;
     if (sprite?.url) {
-      const sheet = this.npcSpriteSheets[sprite.url];
+      const sheet = this.npcSpriteSheets[sprite.url.trim()];
       if (sheet?.status === 'ready' && sheet.image && sheet.columns > 0) {
         const frameIndex = this.getNpcFrameIndex(npc, facing, isMoving);
         if (frameIndex >= 0 && this.drawSpriteFrame(ctx, sprite, sheet, frameIndex, position, cameraX, cameraY)) {
@@ -5309,6 +7180,45 @@ function buildEncounterTableLookup(tables: EncounterTableDefinition[]): Record<s
   return lookup;
 }
 
+function buildItemLookup(items: GameItemDefinition[]): Record<string, GameItemDefinition> {
+  return items.reduce<Record<string, GameItemDefinition>>((registry, item) => {
+    registry[item.id] = item;
+    return registry;
+  }, {});
+}
+
+function describeItemEffect(item: GameItemDefinition): string {
+  if (item.effectType === 'tool_action') {
+    const effect = item.effectConfig as { actionId?: string };
+    if (typeof effect.actionId === 'string' && effect.actionId.trim()) {
+      return `Tool action: ${effect.actionId.trim()}`;
+    }
+    return 'Tool action';
+  }
+  if (item.effectType === 'equip_stub') {
+    return 'Equipment (coming soon)';
+  }
+  if (item.effectType === 'heal_flat') {
+    const effect = item.effectConfig as { healAmount?: number };
+    const amount = typeof effect.healAmount === 'number' && Number.isFinite(effect.healAmount)
+      ? Math.max(1, Math.floor(effect.healAmount))
+      : 20;
+    return `Heals ${amount} HP`;
+  }
+  if (item.effectType === 'heal_percent') {
+    const effect = item.effectConfig as { healPercent?: number };
+    const percent = typeof effect.healPercent === 'number' && Number.isFinite(effect.healPercent)
+      ? Math.max(1, Math.round(clamp(effect.healPercent, 0.01, 1) * 100))
+      : 25;
+    return `Heals ${percent}% HP`;
+  }
+  const effect = item.effectConfig as { actionId?: string };
+  if (typeof effect.actionId === 'string' && effect.actionId.trim()) {
+    return `Special: ${effect.actionId.trim()}`;
+  }
+  return 'Special item';
+}
+
 function sanitizeRuntimeNpcSpriteLibrary(raw: unknown): NpcSpriteLibraryEntry[] {
   if (!Array.isArray(raw)) {
     return [];
@@ -5416,14 +7326,31 @@ function sanitizeRuntimeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateE
             : undefined,
         firstInteractBattle:
           typeof stateRecord.firstInteractBattle === 'boolean' ? stateRecord.firstInteractBattle : undefined,
+        interactBattleRepeatable:
+          typeof stateRecord.interactBattleRepeatable === 'boolean' ? stateRecord.interactBattleRepeatable : undefined,
+        interactBattleDefeatedFlag:
+          typeof stateRecord.interactBattleDefeatedFlag === 'string' && stateRecord.interactBattleDefeatedFlag.trim()
+            ? stateRecord.interactBattleDefeatedFlag.trim()
+            : typeof stateRecord.postDefeatSetFlag === 'string' && stateRecord.postDefeatSetFlag.trim()
+              ? stateRecord.postDefeatSetFlag.trim()
+            : undefined,
+        battleRewards: sanitizeRuntimeNpcItemRewards(stateRecord.battleRewards),
         healer: typeof stateRecord.healer === 'boolean' ? stateRecord.healer : undefined,
+        interactionRewards: sanitizeRuntimeNpcItemRewards(stateRecord.interactionRewards),
+        interactionRewardSetFlag:
+          typeof stateRecord.interactionRewardSetFlag === 'string' && stateRecord.interactionRewardSetFlag.trim()
+            ? stateRecord.interactionRewardSetFlag.trim()
+            : undefined,
         dialogueLines: Array.isArray(stateRecord.dialogueLines)
           ? stateRecord.dialogueLines.filter((line): line is string => typeof line === 'string')
           : undefined,
         battleTeamIds: Array.isArray(stateRecord.battleTeamIds)
-          ? stateRecord.battleTeamIds.filter((team): team is string => typeof team === 'string')
+          ? stateRecord.battleTeamIds
+              .filter((team): team is string => typeof team === 'string' && team.trim().length > 0)
+              .map((team) => team.trim())
           : undefined,
         movementGuards: sanitizeRuntimeNpcMovementGuards(stateRecord.movementGuards),
+        interactionScript: sanitizeRuntimeNpcInteractionScript(stateRecord.interactionScript),
       });
     }
     merged.set(id, {
@@ -5436,8 +7363,28 @@ function sanitizeRuntimeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateE
           ? record.firstInteractionSetFlag.trim()
           : undefined,
       firstInteractBattle: typeof record.firstInteractBattle === 'boolean' ? record.firstInteractBattle : undefined,
+      interactBattleRepeatable:
+        typeof record.interactBattleRepeatable === 'boolean' ? record.interactBattleRepeatable : undefined,
+      interactBattleDefeatedFlag:
+        typeof record.interactBattleDefeatedFlag === 'string' && record.interactBattleDefeatedFlag.trim()
+          ? record.interactBattleDefeatedFlag.trim()
+          : typeof record.postDefeatSetFlag === 'string' && record.postDefeatSetFlag.trim()
+            ? record.postDefeatSetFlag.trim()
+          : undefined,
+      battleRewards: sanitizeRuntimeNpcItemRewards(record.battleRewards),
       healer: typeof record.healer === 'boolean' ? record.healer : undefined,
+      interactionRewards: sanitizeRuntimeNpcItemRewards(record.interactionRewards),
+      interactionRewardSetFlag:
+        typeof record.interactionRewardSetFlag === 'string' && record.interactionRewardSetFlag.trim()
+          ? record.interactionRewardSetFlag.trim()
+          : undefined,
+      battleTeamIds: Array.isArray(record.battleTeamIds)
+        ? record.battleTeamIds
+            .filter((team): team is string => typeof team === 'string' && team.trim().length > 0)
+            .map((team) => team.trim())
+        : undefined,
       movementGuards: sanitizeRuntimeNpcMovementGuards(record.movementGuards),
+      interactionScript: sanitizeRuntimeNpcInteractionScript(record.interactionScript),
       storyStates,
     });
   }
@@ -5486,7 +7433,18 @@ function sanitizeRuntimeNpcMovementGuards(raw: unknown): NpcMovementGuardDefinit
         : undefined,
       setFlag: typeof record.setFlag === 'string' && record.setFlag.trim() ? record.setFlag.trim() : undefined,
       defeatedFlag:
-        typeof record.defeatedFlag === 'string' && record.defeatedFlag.trim() ? record.defeatedFlag.trim() : undefined,
+        typeof record.defeatedFlag === 'string' && record.defeatedFlag.trim()
+          ? record.defeatedFlag.trim()
+          : typeof record.postDefeatSetFlag === 'string' && record.postDefeatSetFlag.trim()
+            ? record.postDefeatSetFlag.trim()
+          : undefined,
+      battleTeamIds: Array.isArray(record.battleTeamIds)
+        ? record.battleTeamIds
+            .filter((teamId): teamId is string => typeof teamId === 'string' && teamId.trim().length > 0)
+            .map((teamId) => teamId.trim())
+        : undefined,
+      battleRewards: sanitizeRuntimeNpcItemRewards(record.battleRewards),
+      battleRepeatable: typeof record.battleRepeatable === 'boolean' ? record.battleRepeatable : undefined,
       postDuelDialogueSpeaker:
         typeof record.postDuelDialogueSpeaker === 'string' && record.postDuelDialogueSpeaker.trim()
           ? record.postDuelDialogueSpeaker.trim()
@@ -5497,6 +7455,121 @@ function sanitizeRuntimeNpcMovementGuards(raw: unknown): NpcMovementGuardDefinit
     });
   }
   return guards.length > 0 ? guards : undefined;
+}
+
+function sanitizeRuntimeNpcItemRewards(raw: unknown): NpcItemRewardDefinition[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const rewards: NpcItemRewardDefinition[] = [];
+  const merged = new Map<string, number>();
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const itemId = typeof record.itemId === 'string' ? record.itemId.trim() : '';
+    const quantity =
+      typeof record.quantity === 'number' && Number.isFinite(record.quantity)
+        ? Math.max(0, Math.floor(record.quantity))
+        : 0;
+    if (!itemId || quantity <= 0) {
+      continue;
+    }
+    merged.set(itemId, (merged.get(itemId) ?? 0) + quantity);
+  }
+  for (const [itemId, quantity] of merged.entries()) {
+    rewards.push({ itemId, quantity });
+  }
+  return rewards.length > 0 ? rewards : undefined;
+}
+
+function sanitizeRuntimeNpcInteractionScript(raw: unknown): NpcInteractionActionDefinition[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const actions: NpcInteractionActionDefinition[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const type = typeof record.type === 'string' ? record.type.trim() : '';
+    if (type === 'dialogue') {
+      const lines = Array.isArray(record.lines)
+        ? record.lines.filter((line): line is string => typeof line === 'string' && line.trim().length > 0)
+        : [];
+      if (lines.length === 0) {
+        continue;
+      }
+      actions.push({
+        type: 'dialogue',
+        speaker: typeof record.speaker === 'string' && record.speaker.trim() ? record.speaker.trim() : undefined,
+        lines,
+        setFlag: typeof record.setFlag === 'string' && record.setFlag.trim() ? record.setFlag.trim() : undefined,
+      });
+      continue;
+    }
+    if (type === 'set_flag') {
+      const flag = typeof record.flag === 'string' ? record.flag.trim() : '';
+      if (!flag) {
+        continue;
+      }
+      actions.push({
+        type: 'set_flag',
+        flag,
+      });
+      continue;
+    }
+    if (type === 'move_to_player') {
+      actions.push({ type: 'move_to_player' });
+      continue;
+    }
+    if (type === 'face_player') {
+      actions.push({ type: 'face_player' });
+      continue;
+    }
+    if (type === 'wait') {
+      const durationMsRaw = typeof record.durationMs === 'number' ? record.durationMs : 0;
+      actions.push({
+        type: 'wait',
+        durationMs: Math.max(0, Math.min(60000, Math.floor(durationMsRaw))),
+      });
+      continue;
+    }
+    if (type === 'move_path') {
+      const directions = Array.isArray(record.directions)
+        ? record.directions.filter((direction): direction is Direction => isDirection(direction))
+        : [];
+      if (directions.length === 0) {
+        continue;
+      }
+      actions.push({
+        type: 'move_path',
+        directions,
+      });
+      continue;
+    }
+    if (type === 'give_item') {
+      const itemId = typeof record.itemId === 'string' ? record.itemId.trim() : '';
+      const quantity =
+        typeof record.quantity === 'number' && Number.isFinite(record.quantity)
+          ? Math.max(0, Math.floor(record.quantity))
+          : 0;
+      if (!itemId || quantity <= 0) {
+        continue;
+      }
+      actions.push({
+        type: 'give_item',
+        itemId,
+        quantity,
+        setFlag: typeof record.setFlag === 'string' && record.setFlag.trim() ? record.setFlag.trim() : undefined,
+        message: typeof record.message === 'string' && record.message.trim() ? record.message.trim() : undefined,
+      });
+      continue;
+    }
+  }
+  return actions.length > 0 ? actions : undefined;
 }
 
 function sampleEncounterEntry(
@@ -5518,6 +7591,31 @@ function sampleEncounterEntry(
     }
   }
   return entries[entries.length - 1] ?? null;
+}
+
+function isCritterEncounterEntry(entry: EncounterTableEntry | null | undefined): entry is EncounterTableCritterEntry {
+  return Boolean(entry && entry.kind === 'critter');
+}
+
+function extractSupabasePublicRoot(rawUrl: string): string | null {
+  const marker = '/storage/v1/object/public/';
+  const trimmed = rawUrl.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    const markerIndex = parsed.pathname.indexOf(marker);
+    if (markerIndex < 0) {
+      return null;
+    }
+    parsed.pathname = parsed.pathname.substring(0, markerIndex) + marker.slice(0, -1);
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString().replace(/\/+$/, '');
+  } catch {
+    return null;
+  }
 }
 
 function buildTileDefinitionsFromSavedPaintTiles(
@@ -5653,13 +7751,25 @@ function randomNumber(min: number, max: number): number {
   return safeMin + Math.random() * (safeMax - safeMin);
 }
 
+function lerp(start: number, end: number, t: number): number {
+  return start + (end - start) * clamp(t, 0, 1);
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function sanitizeRotationQuarter(value: number): number {
+function sanitizeTileTransformValue(value: number): number {
   const intValue = Number.isFinite(value) ? Math.floor(Math.abs(value)) : 0;
-  return intValue % 4;
+  return intValue % 8;
+}
+
+function decodeTileTransform(value: number): { rotationQuarter: number; mirrorHorizontal: boolean } {
+  const normalized = sanitizeTileTransformValue(value);
+  return {
+    rotationQuarter: normalized % 4,
+    mirrorHorizontal: normalized >= 4,
+  };
 }
 
 function oppositeDirection(direction: Direction): Direction {

@@ -1,0 +1,311 @@
+import {
+  ITEM_CORE_CATEGORIES,
+  ITEM_EFFECT_TYPES,
+  PLAYER_ITEM_INVENTORY_VERSION,
+  type GameItemDefinition,
+  type ItemCategory,
+  type ItemEffectConfig,
+  type ItemEffectType,
+  type PlayerItemInventory,
+} from '@/game/items/types';
+
+const CORE_CATEGORY_SET = new Set<string>(ITEM_CORE_CATEGORIES);
+const EFFECT_TYPE_SET = new Set<string>(ITEM_EFFECT_TYPES);
+
+export function sanitizeItemCatalog(raw: unknown): GameItemDefinition[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const parsed: GameItemDefinition[] = [];
+  const seenIds = new Set<string>();
+  for (let index = 0; index < raw.length; index += 1) {
+    const item = sanitizeItemDefinition(raw[index], index);
+    if (!item || seenIds.has(item.id)) {
+      continue;
+    }
+    seenIds.add(item.id);
+    parsed.push(item);
+  }
+  return parsed;
+}
+
+export function sanitizeItemDefinition(raw: unknown, index = 0): GameItemDefinition | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const id = sanitizeIdentifier(record.id, `item-${index + 1}`);
+  const name = sanitizeText(record.name, `Item ${index + 1}`, 60);
+  const category = sanitizeCategory(record.category);
+  const effectType = sanitizeEffectType(record.effectType, category);
+  const effectConfig = sanitizeEffectConfig(effectType, record.effectConfig);
+  const explicitValue = sanitizeOptionalNumber(record.value, -999999, 999999);
+  const derivedValue = deriveValueFromEffectConfig(effectType, effectConfig);
+
+  return {
+    id,
+    name,
+    category,
+    description: sanitizeText(record.description, '', 300),
+    imageUrl: sanitizeText(record.imageUrl, '', 1200),
+    misuseText: sanitizeText(record.misuseText, defaultMisuseText(category), 160),
+    successText: sanitizeOptionalText(record.successText ?? record.success_text, 200),
+    effectType,
+    effectConfig,
+    value: explicitValue ?? derivedValue,
+    consumable:
+      typeof record.consumable === 'boolean'
+        ? record.consumable
+        : defaultConsumableForCategory(category, effectType),
+    maxStack: clampInt(record.maxStack, 1, 9999, 99),
+    isActive: typeof record.isActive === 'boolean' ? record.isActive : true,
+    starterGrantAmount: clampInt(record.starterGrantAmount, 0, 9999, 0),
+  };
+}
+
+export function createDefaultPlayerItemInventory(
+  itemCatalog: GameItemDefinition[] = [],
+): PlayerItemInventory {
+  const entries = itemCatalog
+    .filter((item) => item.starterGrantAmount > 0)
+    .map((item) => ({
+      itemId: item.id,
+      quantity: clampInt(item.starterGrantAmount, 1, item.maxStack, 1),
+    }));
+  return {
+    version: PLAYER_ITEM_INVENTORY_VERSION,
+    entries,
+  };
+}
+
+export function sanitizePlayerItemInventory(
+  raw: unknown,
+  itemCatalog: GameItemDefinition[],
+): PlayerItemInventory {
+  const defaults = createDefaultPlayerItemInventory(itemCatalog);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return defaults;
+  }
+
+  const allowedIds = new Set(itemCatalog.map((item) => item.id));
+  const record = raw as Record<string, unknown>;
+  const rawEntries = Array.isArray(record.entries) ? record.entries : [];
+  const parsedEntries: PlayerItemInventory['entries'] = [];
+  const seenIds = new Set<string>();
+
+  for (const entry of rawEntries) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const entryRecord = entry as Record<string, unknown>;
+    const itemId = sanitizeIdentifier(entryRecord.itemId, '');
+    if (!itemId || seenIds.has(itemId) || !allowedIds.has(itemId)) {
+      continue;
+    }
+    const item = itemCatalog.find((candidate) => candidate.id === itemId);
+    if (!item) {
+      continue;
+    }
+    const quantity = clampInt(entryRecord.quantity, 0, item.maxStack, 0);
+    if (quantity <= 0) {
+      continue;
+    }
+    seenIds.add(itemId);
+    parsedEntries.push({
+      itemId,
+      quantity,
+    });
+  }
+
+  if (parsedEntries.length === 0) {
+    return defaults;
+  }
+
+  return {
+    version: PLAYER_ITEM_INVENTORY_VERSION,
+    entries: parsedEntries,
+  };
+}
+
+export function getItemInventoryQuantity(inventory: PlayerItemInventory, itemId: string): number {
+  const found = inventory.entries.find((entry) => entry.itemId === itemId);
+  return found ? Math.max(0, found.quantity) : 0;
+}
+
+export function setItemInventoryQuantity(
+  inventory: PlayerItemInventory,
+  itemCatalog: GameItemDefinition[],
+  itemId: string,
+  quantity: number,
+): PlayerItemInventory {
+  const item = itemCatalog.find((entry) => entry.id === itemId);
+  if (!item) {
+    return inventory;
+  }
+  const nextQuantity = clampInt(quantity, 0, item.maxStack, 0);
+  const filtered = inventory.entries.filter((entry) => entry.itemId !== itemId);
+  if (nextQuantity > 0) {
+    filtered.push({ itemId, quantity: nextQuantity });
+  }
+  return {
+    version: PLAYER_ITEM_INVENTORY_VERSION,
+    entries: filtered.sort((left, right) => left.itemId.localeCompare(right.itemId)),
+  };
+}
+
+function sanitizeCategory(raw: unknown): ItemCategory {
+  const value = sanitizeIdentifier(raw, 'other');
+  if (!value) {
+    return 'other';
+  }
+  if (CORE_CATEGORY_SET.has(value)) {
+    return value;
+  }
+  return value;
+}
+
+function sanitizeEffectType(raw: unknown, category: ItemCategory): ItemEffectType {
+  const value = sanitizeIdentifier(raw, '');
+  if (value && EFFECT_TYPE_SET.has(value)) {
+    return value as ItemEffectType;
+  }
+  if (category === 'tool') return 'tool_action';
+  if (category === 'equipment') return 'equip_stub';
+  if (category === 'healing') return 'heal_flat';
+  return 'other_stub';
+}
+
+function sanitizeEffectConfig(effectType: ItemEffectType, raw: unknown): ItemEffectConfig {
+  const record = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  if (effectType === 'tool_action') {
+    const normalizedActionId = sanitizeIdentifier(record.actionId, 'tool-action');
+    return {
+      actionId: normalizedActionId === 'fish' ? 'fishing' : normalizedActionId,
+      power: sanitizeOptionalNumber(record.power, 0, 1),
+      requiresFacingTileKeyword: Array.isArray(record.requiresFacingTileKeyword)
+        ? record.requiresFacingTileKeyword
+            .filter((entry): entry is string => typeof entry === 'string')
+            .map((entry) => entry.trim().toLowerCase())
+            .filter((entry, index, values) => entry.length > 0 && values.indexOf(entry) === index)
+            .slice(0, 20)
+        : undefined,
+      successText: sanitizeOptionalText(record.successText, 160),
+    };
+  }
+  if (effectType === 'equip_stub') {
+    return {
+      slot: sanitizeOptionalText(record.slot, 40),
+    };
+  }
+  if (effectType === 'heal_flat') {
+    return {
+      healAmount: clampInt(record.healAmount, 1, 9999, 20),
+      curesStatus: Boolean(record.curesStatus),
+    };
+  }
+  if (effectType === 'heal_percent') {
+    return {
+      healPercent: clampNumber(record.healPercent, 0.01, 1, 0.25),
+      curesStatus: Boolean(record.curesStatus),
+    };
+  }
+  return {
+    actionId: sanitizeIdentifier(record.actionId, 'other-action'),
+    successText: sanitizeOptionalText(record.successText, 160),
+  };
+}
+
+function defaultMisuseText(category: ItemCategory): string {
+  if (category === 'tool') {
+    return 'You cannot use that tool right now.';
+  }
+  if (category === 'equipment') {
+    return 'No valid critter can equip that right now.';
+  }
+  if (category === 'healing') {
+    return 'Choose a squad critter to heal.';
+  }
+  if (category === 'material') {
+    return 'Materials are used for crafting or shopping.';
+  }
+  return 'That item cannot be used right now.';
+}
+
+function defaultConsumableForCategory(category: ItemCategory, effectType: ItemEffectType): boolean {
+  if (effectType === 'heal_flat' || effectType === 'heal_percent') {
+    return true;
+  }
+  if (category === 'tool' || category === 'equipment' || category === 'material') {
+    return false;
+  }
+  return true;
+}
+
+function sanitizeIdentifier(raw: unknown, fallback: string): string {
+  const normalized =
+    typeof raw === 'string'
+      ? raw
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9-_]+/g, '-')
+          .replace(/-+/g, '-')
+          .replace(/^-+/g, '')
+          .replace(/-+$/g, '')
+      : '';
+  return normalized || fallback;
+}
+
+function sanitizeText(raw: unknown, fallback: string, maxLength: number): string {
+  if (typeof raw !== 'string') {
+    return fallback;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+  return trimmed.slice(0, maxLength);
+}
+
+function sanitizeOptionalText(raw: unknown, maxLength: number): string | undefined {
+  if (typeof raw !== 'string') {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.slice(0, maxLength);
+}
+
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+  const parsed = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  const parsed = typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function sanitizeOptionalNumber(raw: unknown, min: number, max: number): number | undefined {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return undefined;
+  }
+  return Math.max(min, Math.min(max, raw));
+}
+
+function deriveValueFromEffectConfig(effectType: ItemEffectType, effectConfig: ItemEffectConfig): number | undefined {
+  if (effectType === 'heal_flat') {
+    const config = effectConfig as { healAmount?: number };
+    return typeof config.healAmount === 'number' && Number.isFinite(config.healAmount)
+      ? Math.max(1, Math.floor(config.healAmount))
+      : undefined;
+  }
+  if (effectType === 'tool_action') {
+    const config = effectConfig as { power?: number };
+    return typeof config.power === 'number' && Number.isFinite(config.power)
+      ? clampNumber(config.power, 0, 1, 0)
+      : undefined;
+  }
+  return undefined;
+}

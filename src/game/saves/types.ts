@@ -1,5 +1,6 @@
-import type { Direction } from '@/shared/types';
+import type { Direction, Vector2 } from '@/shared/types';
 import type { PlayerCritterProgress } from '@/game/critters/types';
+import type { PlayerItemInventory } from '@/game/items/types';
 
 export interface SideMissionProgressEntry {
   progress: number;
@@ -31,7 +32,13 @@ export interface SaveProfile {
     facing: Direction;
   };
   selectedStarterId: string | null;
+  respawnPoint: {
+    mapId: string;
+    position: Vector2;
+    facing: Direction;
+  };
   playerCritterProgress: PlayerCritterProgress;
+  playerItemInventory: PlayerItemInventory;
   progressTracking: SaveProgressTracking;
   updatedAt: string;
 }

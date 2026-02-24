@@ -878,7 +878,7 @@ export function PlayerSpriteTool() {
           </button>
         </div>
 
-        <div className="tileset-grid-wrap npc-sheet-grid-wrap">
+        <div className="tileset-grid-wrap player-sprite-atlas-wrap">
           {atlasMeta.loaded ? (
             <div
               className="tileset-grid"

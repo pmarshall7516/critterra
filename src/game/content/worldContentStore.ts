@@ -14,6 +14,8 @@ import {
   sanitizeElementChart,
   buildDefaultElementChart,
 } from '@/game/skills/schema';
+import type { GameItemDefinition } from '@/game/items/types';
+import { sanitizeItemCatalog } from '@/game/items/schema';
 
 const WORLD_CONTENT_STORAGE_KEY = 'critterra.world.content.v1';
 
@@ -42,6 +44,7 @@ export interface StoredWorldContent {
   critterSkills: SkillDefinition[];
   skillEffects: SkillEffectDefinition[];
   elementChart: ElementChart;
+  items: GameItemDefinition[];
 }
 
 interface BootstrapResponse {
@@ -59,6 +62,7 @@ interface BootstrapResponse {
     critterSkills?: unknown;
     skillEffects?: unknown;
     elementChart?: unknown;
+    items?: unknown;
   };
 }
 
@@ -134,6 +138,7 @@ export function readStoredWorldContent(): StoredWorldContent | null {
       critterSkills: sanitizeStoredSkills(parsed.critterSkills, parsed.skillEffects),
       skillEffects: sanitizeSkillEffectLibrary(parsed.skillEffects),
       elementChart: sanitizeElementChart(parsed.elementChart),
+      items: sanitizeItemCatalog(parsed.items),
     };
   } catch {
     return null;
@@ -200,6 +205,7 @@ export async function hydrateWorldContentFromServer(): Promise<void> {
     critterSkills: sanitizeSkillLibrary(content.critterSkills, knownEffectIds),
     skillEffects,
     elementChart: sanitizeElementChart(content.elementChart),
+    items: sanitizeItemCatalog(content.items),
   };
 
   persistWorldContent(next);

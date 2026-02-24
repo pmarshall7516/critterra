@@ -9,12 +9,15 @@ import { sanitizeCritterDatabase } from '@/game/critters/schema';
 import { getAdminDbValue, setAdminDbValue } from '@/admin/indexedDbStore';
 import { sanitizeEncounterTableLibrary } from '@/game/encounters/schema';
 import type { EncounterTableDefinition, MapEncounterGroupDefinition } from '@/game/encounters/types';
+import { sanitizeItemCatalog } from '@/game/items/schema';
+import type { GameItemDefinition } from '@/game/items/types';
 import { apiFetchJson } from '@/shared/apiClient';
 import { loadAdminFlags, type AdminFlagEntry } from '@/admin/flagsApi';
 import type { CritterDefinition } from '@/game/critters/types';
 import type {
   InteractionDefinition,
   NpcInteractionActionDefinition,
+  NpcItemRewardDefinition,
   NpcMovementGuardDefinition,
   NpcMovementDefinition,
   NpcSpriteConfig,
@@ -32,6 +35,8 @@ import {
   composeEditableTiles,
   createBlankEditableMap,
   createBlankLayer,
+  decodeTileTransform,
+  encodeTileTransform,
   editableMapToJson,
   editableMapToTypeScript,
   floodFill,
@@ -172,9 +177,14 @@ interface LoadSupabaseSpriteSheetsResponse {
   error?: string;
 }
 
+interface GameMapRow {
+  mapId: string;
+  mapData: unknown;
+}
+
 interface LoadMapsResponse {
   ok: boolean;
-  maps?: unknown[];
+  maps?: GameMapRow[];
   error?: string;
 }
 
@@ -187,6 +197,12 @@ interface LoadEncounterLibraryResponse {
 interface LoadCritterLibraryResponse {
   ok: boolean;
   critters?: unknown;
+  error?: string;
+}
+
+interface LoadItemLibraryResponse {
+  ok: boolean;
+  items?: unknown;
   error?: string;
 }
 
@@ -268,8 +284,20 @@ interface MapEditorToolProps {
 }
 
 export function MapEditorTool({ section = 'full', embedded = false }: MapEditorToolProps) {
-  const [sourceMaps, setSourceMaps] = useState<EditableMap[]>([]);
-  const sourceMapIds = useMemo(() => sourceMaps.map((map) => map.id), [sourceMaps]);
+  const [sourceMapRows, setSourceMapRows] = useState<GameMapRow[]>([]);
+  const sourceMaps = useMemo(() => {
+    return sourceMapRows
+      .map((row) => {
+        try {
+          const parsed = parseEditableMapJson(JSON.stringify(row.mapData));
+          return { ...parsed, id: row.mapId } as EditableMap;
+        } catch {
+          return null;
+        }
+      })
+      .filter((m): m is EditableMap => m !== null);
+  }, [sourceMapRows]);
+  const sourceMapIds = useMemo(() => sourceMapRows.map((row) => row.mapId), [sourceMapRows]);
   const [selectedSourceMapId, setSelectedSourceMapId] = useState('');
   const [loadedSourceMapIdForSave, setLoadedSourceMapIdForSave] = useState<string | null>(null);
   const [editableMap, setEditableMap] = useState<EditableMap>(EMPTY_EDITABLE_MAP);
@@ -315,6 +343,8 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   const [savedPaintTiles, setSavedPaintTiles] = useState<SavedPaintTile[]>([]);
   const [manualPaintTileName, setManualPaintTileName] = useState('');
   const [npcSpriteLibrary, setNpcSpriteLibrary] = useState<NpcSpriteLibraryEntry[]>([]);
+  const [npcSpriteEditorMode, setNpcSpriteEditorMode] = useState<'create' | 'edit'>('create');
+  const [editingNpcSpriteId, setEditingNpcSpriteId] = useState('');
   const [selectedNpcSpriteId, setSelectedNpcSpriteId] = useState('');
   const [npcSpriteLabelInput, setNpcSpriteLabelInput] = useState('');
   const [npcCharacterLibrary, setNpcCharacterLibrary] = useState<NpcCharacterTemplateEntry[]>([]);
@@ -333,7 +363,12 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   const [npcDialogueSetFlagInput, setNpcDialogueSetFlagInput] = useState('');
   const [npcFirstInteractionSetFlagInput, setNpcFirstInteractionSetFlagInput] = useState('');
   const [npcFirstInteractBattleInput, setNpcFirstInteractBattleInput] = useState(false);
+  const [npcInteractBattleRepeatableInput, setNpcInteractBattleRepeatableInput] = useState(false);
+  const [npcInteractBattleDefeatedFlagInput, setNpcInteractBattleDefeatedFlagInput] = useState('');
+  const [npcBattleRewardsInput, setNpcBattleRewardsInput] = useState('');
   const [npcHealerInput, setNpcHealerInput] = useState(false);
+  const [npcInteractionRewardsInput, setNpcInteractionRewardsInput] = useState('');
+  const [npcInteractionRewardSetFlagInput, setNpcInteractionRewardSetFlagInput] = useState('');
   const [npcBattleTeamsInput, setNpcBattleTeamsInput] = useState('');
   const [npcStoryStatesInput, setNpcStoryStatesInput] = useState('[]');
   const [npcMovementGuardsInput, setNpcMovementGuardsInput] = useState('[]');
@@ -435,6 +470,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   const [encounterTables, setEncounterTables] = useState<EncounterTableDefinition[]>([]);
   const [isLoadingEncounterTables, setIsLoadingEncounterTables] = useState(false);
   const [encounterCritters, setEncounterCritters] = useState<CritterDefinition[]>([]);
+  const [itemCatalog, setItemCatalog] = useState<GameItemDefinition[]>([]);
   const [selectedEncounterGroupId, setSelectedEncounterGroupId] = useState('');
   const [encounterGroupIdInput, setEncounterGroupIdInput] = useState('');
   const [encounterWalkTableIdInput, setEncounterWalkTableIdInput] = useState('');
@@ -443,6 +479,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   const [encounterFishFrequencyPercent, setEncounterFishFrequencyPercent] = useState(0);
   const [encounterManualTileXInput, setEncounterManualTileXInput] = useState('');
   const [encounterManualTileYInput, setEncounterManualTileYInput] = useState('');
+  const [healTileInteractionIdPrefixInput, setHealTileInteractionIdPrefixInput] = useState('heal-tile');
 
   const uploadedObjectUrlRef = useRef<string | null>(null);
   const hasAutoLoadedLibrariesRef = useRef(false);
@@ -640,16 +677,16 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     () => (selectedCharacterForInstanceList ? getCharacterPlacementInstances(selectedCharacterForInstanceList) : []),
     [selectedCharacterForInstanceList],
   );
-  const selectedNpcSprite = useMemo(
-    () => npcSpriteLibrary.find((sprite) => sprite.id === selectedNpcSpriteId) ?? null,
-    [npcSpriteLibrary, selectedNpcSpriteId],
+  const selectedNpcSpriteForEditor = useMemo(
+    () => npcSpriteLibrary.find((sprite) => sprite.id === editingNpcSpriteId) ?? null,
+    [editingNpcSpriteId, npcSpriteLibrary],
   );
-  const charactersUsingSelectedNpcSprite = useMemo(() => {
-    if (!selectedNpcSpriteId) {
+  const charactersUsingSelectedNpcSpriteForEditor = useMemo(() => {
+    if (!editingNpcSpriteId) {
       return [];
     }
-    return npcCharacterLibrary.filter((entry) => entry.spriteId === selectedNpcSpriteId);
-  }, [npcCharacterLibrary, selectedNpcSpriteId]);
+    return npcCharacterLibrary.filter((entry) => entry.spriteId === editingNpcSpriteId);
+  }, [editingNpcSpriteId, npcCharacterLibrary]);
   const filteredNpcSupabaseSpriteSheets = useMemo(() => {
     const query = npcSpriteSearchInput.trim().toLowerCase();
     const sorted = [...npcSupabaseSpriteSheets].sort((left, right) =>
@@ -668,6 +705,14 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
         left.localeCompare(right, undefined, { sensitivity: 'base' }),
       ),
     [flagEntries],
+  );
+  const knownFlagIdSet = useMemo(() => new Set(knownFlagIds), [knownFlagIds]);
+  const knownItemIds = useMemo(
+    () =>
+      [...new Set(itemCatalog.map((entry) => entry.id.trim()).filter((entry) => entry.length > 0))].sort((left, right) =>
+        left.localeCompare(right, undefined, { sensitivity: 'base' }),
+      ),
+    [itemCatalog],
   );
   const filteredTilesetSupabaseAssets = useMemo(() => {
     const query = tilesetSearchInput.trim().toLowerCase();
@@ -828,7 +873,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     return lookup;
   }, [activeLayer, hasMapLoaded, mapSize.height, mapSize.width]);
   const visibleLayerCellsByPosition = useMemo(() => {
-    const lookup = new Map<string, Array<{ layerId: string; code: EditorTileCode; rotation: number }>>();
+    const lookup = new Map<string, Array<{ layerId: string; code: EditorTileCode; tileTransform: number }>>();
     if (!hasMapLoaded) {
       return lookup;
     }
@@ -854,7 +899,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           stack.push({
             layerId: layer.id,
             code,
-            rotation: Number.isFinite(parsedRotation) ? parsedRotation % 4 : 0,
+            tileTransform: Number.isFinite(parsedRotation) ? Math.floor(Math.abs(parsedRotation)) % 8 : 0,
           });
           lookup.set(key, stack);
         }
@@ -1073,6 +1118,20 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     }
     setSelectedNpcSpriteId(npcSpriteLibrary[0]?.id ?? '');
   }, [npcSpriteLibrary, selectedNpcSpriteId]);
+
+  useEffect(() => {
+    if (!editingNpcSpriteId) {
+      if (npcSpriteEditorMode === 'edit') {
+        setNpcSpriteEditorMode('create');
+      }
+      return;
+    }
+    if (npcSpriteLibrary.some((sprite) => sprite.id === editingNpcSpriteId)) {
+      return;
+    }
+    setEditingNpcSpriteId('');
+    setNpcSpriteEditorMode('create');
+  }, [editingNpcSpriteId, npcSpriteEditorMode, npcSpriteLibrary]);
 
   useEffect(() => {
     if (!selectedMapNpcId) {
@@ -1537,18 +1596,26 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
         throw new Error(result.error ?? result.data?.error ?? 'Unable to load maps.');
       }
 
-      const loadedMaps = Array.isArray(result.data?.maps)
-        ? result.data.maps
-            .map((entry) => {
-              try {
-                return parseEditableMapJson(JSON.stringify(entry));
-              } catch {
-                return null;
-              }
-            })
-            .filter((entry): entry is EditableMap => entry !== null)
-        : [];
-      setSourceMaps(loadedMaps);
+      const raw = result.data?.maps;
+      const rows: GameMapRow[] = [];
+      if (Array.isArray(raw)) {
+        for (const entry of raw) {
+          if (entry == null || typeof entry !== 'object') continue;
+          // New format: { mapId, mapData }; or snake_case from server
+          const mapId =
+            (entry as GameMapRow).mapId ??
+            (entry as { map_id?: string }).map_id ??
+            (entry as { id?: string }).id;
+          const mapData =
+            (entry as GameMapRow).mapData ??
+            (entry as { map_data?: unknown }).map_data ??
+            entry;
+          if (typeof mapId === 'string') {
+            rows.push({ mapId, mapData });
+          }
+        }
+      }
+      setSourceMapRows(rows);
     } catch {
       setError('Unable to load maps from database.');
     }
@@ -1638,6 +1705,8 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
 
       setNpcSpriteLibrary(mergedSprites);
       setNpcCharacterLibrary(mergedCharacters);
+      setNpcSpriteEditorMode('create');
+      setEditingNpcSpriteId('');
       setSelectedNpcSpriteId(mergedSprites[0]?.id ?? '');
       setSelectedNpcCharacterId(mergedCharacters[0]?.id ?? '');
       await setAdminDbValue(NPC_SPRITE_LIBRARY_DB_KEY, mergedSprites);
@@ -1689,6 +1758,18 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     }
   };
 
+  const loadItemCatalogFromDatabase = async () => {
+    try {
+      const result = await apiFetchJson<LoadItemLibraryResponse>('/api/admin/items/list');
+      if (!result.ok || !result.data?.ok) {
+        throw new Error(result.error ?? result.data?.error ?? 'Unable to load item catalog.');
+      }
+      setItemCatalog(sanitizeItemCatalog(result.data.items));
+    } catch {
+      setItemCatalog([]);
+    }
+  };
+
   useEffect(() => {
     if (section === 'full' || hasAutoLoadedLibrariesRef.current) {
       return;
@@ -1705,6 +1786,9 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     }
     if (isMapSection || isNpcsSection || isNpcCharactersSection) {
       void loadFlagsFromDatabase();
+    }
+    if (isNpcsSection || isNpcCharactersSection) {
+      void loadItemCatalogFromDatabase();
     }
     if (isMapSection) {
       void loadEncounterDataFromDatabase();
@@ -1752,13 +1836,15 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
 
       const row = layer.tiles[y];
       const rotationRow = layer.rotations[y] ?? '0'.repeat(row.length);
-      const rotationChar = String(cell.rotationQuarter);
-      if (row[x] === cell.code && (rotationRow[x] ?? '0') === rotationChar) {
+      const transformChar = String(
+        cell.code === BLANK_TILE_CODE ? 0 : encodeTileTransform(cell.rotationQuarter, cell.mirrorHorizontal),
+      );
+      if (row[x] === cell.code && (rotationRow[x] ?? '0') === transformChar) {
         continue;
       }
 
       layer.tiles[y] = `${row.slice(0, x)}${cell.code}${row.slice(x + 1)}`;
-      layer.rotations[y] = `${rotationRow.slice(0, x)}${rotationChar}${rotationRow.slice(x + 1)}`;
+      layer.rotations[y] = `${rotationRow.slice(0, x)}${transformChar}${rotationRow.slice(x + 1)}`;
       changed = true;
     }
 
@@ -1814,10 +1900,10 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       const rotationRow = layer.rotations[current.y] ?? '0'.repeat(row.length);
       const delta = Math.abs(current.x - startX) + Math.abs(current.y - startY);
       const rotationQuarter = normalizeQuarter(baseRotationQuarter + (delta % 4));
-      const rotationChar = String(code === BLANK_TILE_CODE ? 0 : rotationQuarter);
-      if (row[current.x] !== code || (rotationRow[current.x] ?? '0') !== rotationChar) {
+      const transformChar = String(code === BLANK_TILE_CODE ? 0 : encodeTileTransform(rotationQuarter, false));
+      if (row[current.x] !== code || (rotationRow[current.x] ?? '0') !== transformChar) {
         layer.tiles[current.y] = `${row.slice(0, current.x)}${code}${row.slice(current.x + 1)}`;
-        layer.rotations[current.y] = `${rotationRow.slice(0, current.x)}${rotationChar}${rotationRow.slice(current.x + 1)}`;
+        layer.rotations[current.y] = `${rotationRow.slice(0, current.x)}${transformChar}${rotationRow.slice(current.x + 1)}`;
         changed = true;
       }
 
@@ -1912,21 +1998,22 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           return current;
         }
         const rotationRow = targetLayer.rotations[y] ?? '0'.repeat(row.length);
-        const currentRotation = normalizeQuarter(Number.parseInt(rotationRow[x] ?? '0', 10) || 0);
-        let nextRotation = currentRotation;
+        const currentTransformValue = Number.parseInt(rotationRow[x] ?? '0', 10);
+        const currentTransform = Number.isFinite(currentTransformValue) ? Math.floor(Math.abs(currentTransformValue)) % 8 : 0;
+        let nextTransform = currentTransform;
         if (tool === 'rotate-left') {
-          nextRotation = normalizeQuarter(currentRotation - 1);
+          nextTransform = rotateTileTransformValue(currentTransform, -1);
         } else if (tool === 'rotate-right') {
-          nextRotation = normalizeQuarter(currentRotation + 1);
+          nextTransform = rotateTileTransformValue(currentTransform, 1);
         } else if (tool === 'mirror-horizontal') {
-          nextRotation = currentRotation === 1 ? 3 : currentRotation === 3 ? 1 : currentRotation;
+          nextTransform = mirrorTileTransformHorizontally(currentTransform);
         } else if (tool === 'mirror-vertical') {
-          nextRotation = currentRotation === 0 ? 2 : currentRotation === 2 ? 0 : currentRotation;
+          nextTransform = mirrorTileTransformVertically(currentTransform);
         }
-        if (nextRotation === currentRotation) {
+        if (nextTransform === currentTransform) {
           return current;
         }
-        targetLayer.rotations[y] = `${rotationRow.slice(0, x)}${nextRotation}${rotationRow.slice(x + 1)}`;
+        targetLayer.rotations[y] = `${rotationRow.slice(0, x)}${nextTransform}${rotationRow.slice(x + 1)}`;
         return next;
       });
       return;
@@ -2008,7 +2095,9 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
             fillWithRotatedPattern(current, activeLayer.id, x, y, selectedTileCode, brushRotationQuarter),
           );
         } else {
-          setEditableMap((current) => floodFill(current, activeLayer.id, x, y, selectedTileCode, brushRotationQuarter));
+          setEditableMap((current) =>
+            floodFill(current, activeLayer.id, x, y, selectedTileCode, brushRotationQuarter, brushMirrorHorizontal),
+          );
         }
       }
       return;
@@ -2120,22 +2209,28 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
 
   const loadSelectedSourceMap = () => {
     if (!selectedSourceMapId) {
-      setError('Select a map id to load.');
+      setError('Select a map to load.');
       return;
     }
 
-    const source = sourceMaps.find((map) => map.id === selectedSourceMapId);
-    if (!source) {
-      setError(`Map ${selectedSourceMapId} not found in current registry.`);
+    const row = sourceMapRows.find((r) => r.mapId === selectedSourceMapId);
+    if (!row) {
+      setError(`Map ${selectedSourceMapId} not found in database.`);
       return;
     }
 
-    setEditableMap(cloneEditableMap(source));
-    setActiveLayerId(sortEditableLayersById(source.layers)[0]?.id ?? '');
-    setLoadedSourceMapIdForSave(source.id);
-    setSelectedCellKeys([]);
-    setSelectedEncounterGroupId(source.encounterGroups[0]?.id ?? '');
-    setStatus(`Loaded map ${source.id}`);
+    try {
+      const source = parseEditableMapJson(JSON.stringify(row.mapData));
+      const mapWithId = { ...source, id: row.mapId } as EditableMap;
+      setEditableMap(cloneEditableMap(mapWithId));
+      setActiveLayerId(sortEditableLayersById(mapWithId.layers)[0]?.id ?? '');
+      setLoadedSourceMapIdForSave(row.mapId);
+      setSelectedCellKeys([]);
+      setSelectedEncounterGroupId(mapWithId.encounterGroups[0]?.id ?? '');
+      setStatus(`Loaded map ${row.mapId}`);
+    } catch {
+      setError(`Map ${selectedSourceMapId} could not be parsed.`);
+    }
   };
 
   const createNewMap = () => {
@@ -2358,6 +2453,28 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     setSelectedCellKeys([]);
   };
 
+  const getSelectedNonEmptyMapCells = (): Vector2[] => {
+    const selected: Vector2[] = [];
+    const seen = new Set<string>();
+    for (const key of selectedCellKeys) {
+      const parsed = parseCellKey(key);
+      if (!parsed) {
+        continue;
+      }
+      const dedupeKey = `${parsed.x},${parsed.y}`;
+      if (seen.has(dedupeKey)) {
+        continue;
+      }
+      const code = getTileCodeAt(editableMap, parsed.x, parsed.y);
+      if (!code || code === BLANK_TILE_CODE) {
+        continue;
+      }
+      seen.add(dedupeKey);
+      selected.push(parsed);
+    }
+    return selected;
+  };
+
   const startEncounterGroupDraft = () => {
     setSelectedEncounterGroupId('');
     setEncounterGroupIdInput(suggestEncounterGroupId(editableMap.encounterGroups));
@@ -2403,13 +2520,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       return;
     }
 
-    const tilePositions = selectedCellKeys
-      .map((key) => parseCellKey(key))
-      .filter((position): position is Vector2 => position !== null)
-      .filter((position) => {
-        const code = getTileCodeAt(editableMap, position.x, position.y);
-        return Boolean(code && code !== BLANK_TILE_CODE);
-      });
+    const tilePositions = getSelectedNonEmptyMapCells();
     if (tilePositions.length === 0) {
       setError('Select one or more non-empty map cells before setting encounter group.');
       return;
@@ -2437,6 +2548,103 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     });
     setSelectedEncounterGroupId(groupId);
     setStatus(`Set encounter group "${groupId}" on ${tilePositions.length} tile(s).`);
+  };
+
+  const applyHealTilesToSelection = () => {
+    if (!hasMapLoaded) {
+      setError('Load or create a map before setting heal tiles.');
+      return;
+    }
+
+    const targetTiles = getSelectedNonEmptyMapCells();
+    if (targetTiles.length === 0) {
+      setError('Select one or more non-empty map cells before setting heal tiles.');
+      return;
+    }
+
+    const conflictingInteraction = targetTiles
+      .map((position) =>
+        editableMap.interactions.find(
+          (interaction) => interaction.position.x === position.x && interaction.position.y === position.y,
+        ),
+      )
+      .find((interaction) => interaction && !isHealTileInteractionKind(interaction.kind));
+    if (conflictingInteraction) {
+      setError(
+        `Tile (${conflictingInteraction.position.x}, ${conflictingInteraction.position.y}) already has non-heal interaction "${conflictingInteraction.id}".`,
+      );
+      return;
+    }
+
+    const idPrefix = sanitizeIdentifier(healTileInteractionIdPrefixInput, 'heal-tile');
+    setEditableMap((current) => {
+      const next = cloneEditableMap(current);
+      for (const position of targetTiles) {
+        const existingIndex = next.interactions.findIndex(
+          (interaction) => interaction.position.x === position.x && interaction.position.y === position.y,
+        );
+        const existing = existingIndex >= 0 ? next.interactions[existingIndex] : null;
+        const nextInteraction: InteractionDefinition = {
+          id:
+            existing?.id ??
+            makeUniqueInteractionId(next.interactions, `${idPrefix}-${position.x}-${position.y}`),
+          position: { ...position },
+          speaker: existing?.speaker ?? 'Healer',
+          lines: [
+            existing?.lines.find((entry) => typeof entry === 'string' && entry.trim().length > 0)?.trim() ??
+              'Would you like to heal your Critters?',
+          ],
+          kind: 'heal_tile',
+          requiresFlag: existing?.requiresFlag,
+          hideIfFlag: existing?.hideIfFlag,
+          setFlag: existing?.setFlag,
+        };
+        if (existingIndex >= 0) {
+          next.interactions[existingIndex] = nextInteraction;
+        } else {
+          next.interactions.push(nextInteraction);
+        }
+      }
+      return next;
+    });
+    setStatus(`Set heal tile interaction on ${targetTiles.length} tile(s).`);
+  };
+
+  const removeHealTilesFromSelection = () => {
+    if (!hasMapLoaded) {
+      setError('Load or create a map before removing heal tiles.');
+      return;
+    }
+
+    const selectedTiles = getSelectedNonEmptyMapCells();
+    if (selectedTiles.length === 0) {
+      setError('Select one or more non-empty map cells before removing heal tiles.');
+      return;
+    }
+    const selectedKeys = new Set(selectedTiles.map((position) => `${position.x},${position.y}`));
+
+    const existingCount = editableMap.interactions.filter(
+      (interaction) =>
+        isHealTileInteractionKind(interaction.kind) &&
+        selectedKeys.has(`${interaction.position.x},${interaction.position.y}`),
+    ).length;
+    if (existingCount === 0) {
+      setError('No heal tile interactions were found on the selected cells.');
+      return;
+    }
+
+    setEditableMap((current) => {
+      const next = cloneEditableMap(current);
+      next.interactions = next.interactions.filter(
+        (interaction) =>
+          !(
+            isHealTileInteractionKind(interaction.kind) &&
+            selectedKeys.has(`${interaction.position.x},${interaction.position.y}`)
+          ),
+      );
+      return next;
+    });
+    setStatus(`Removed ${existingCount} heal tile interaction(s).`);
   };
 
   const applyNpcJson = () => {
@@ -2772,6 +2980,75 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     setNpcAnimationSetsInput(stringifyDirectionalAnimationSetsForEditor(safeSets));
   };
 
+  const validateNpcItemRewardsAgainstCatalog = (rewards: NpcItemRewardDefinition[]): string | null => {
+    if (rewards.length === 0) {
+      return null;
+    }
+    if (knownItemIds.length === 0) {
+      return null;
+    }
+    for (const reward of rewards) {
+      if (!knownItemIds.includes(reward.itemId)) {
+        return `Reward item "${reward.itemId}" does not exist in the item catalog.`;
+      }
+    }
+    return null;
+  };
+
+  const validateKnownFlagSelection = (
+    flagIdRaw: string | undefined,
+    label: string,
+    options?: { required?: boolean },
+  ): string | null => {
+    const flagId = typeof flagIdRaw === 'string' ? flagIdRaw.trim() : '';
+    if (!flagId) {
+      return options?.required ? `${label} is required.` : null;
+    }
+    if (knownFlagIds.length === 0) {
+      return `No flags exist yet. Create flags first, then set ${label}.`;
+    }
+    if (!knownFlagIdSet.has(flagId)) {
+      return `${label} must match an existing flag from the Flags page.`;
+    }
+    return null;
+  };
+
+  const validateNpcMovementGuardBattles = (
+    guards: NpcMovementGuardDefinition[],
+    fallbackBattleTeamIds: string[] | undefined,
+    fallbackBattleRewards: NpcItemRewardDefinition[],
+  ): string | null => {
+    for (let index = 0; index < guards.length; index += 1) {
+      const guard = guards[index];
+      const guardLabel = guard.id?.trim() || `guard-${index + 1}`;
+      const effectiveTeams =
+        guard.battleTeamIds && guard.battleTeamIds.length > 0 ? guard.battleTeamIds : fallbackBattleTeamIds;
+      if (!effectiveTeams || effectiveTeams.length === 0) {
+        continue;
+      }
+      const defeatedFlag = typeof guard.defeatedFlag === 'string' ? guard.defeatedFlag.trim() : '';
+      if (!defeatedFlag) {
+        return `Movement guard "${guardLabel}" enables battle but has no Defeat Flag.`;
+      }
+      const defeatedFlagError = validateKnownFlagSelection(defeatedFlag, `Movement guard "${guardLabel}" defeat flag`, {
+        required: true,
+      });
+      if (defeatedFlagError) {
+        return defeatedFlagError;
+      }
+      const effectiveRewards =
+        guard.battleRewards && guard.battleRewards.length > 0 ? guard.battleRewards : fallbackBattleRewards;
+      if (!effectiveRewards || effectiveRewards.length === 0) {
+        return `Movement guard "${guardLabel}" enables battle but has no battle rewards.`;
+      }
+      const rewardCatalogError = validateNpcItemRewardsAgainstCatalog(effectiveRewards);
+      if (rewardCatalogError) {
+        return rewardCatalogError;
+      }
+    }
+    return null;
+  };
+
   const loadTilesetSupabaseAssets = async () => {
     const bucket = tilesetBucketInput.trim() || DEFAULT_TILESET_SUPABASE_BUCKET;
     const prefix = tilesetPrefixInput.trim();
@@ -2943,22 +3220,24 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     setStatus(`Deleted animation "${selectedNpcAnimationName}".`);
   };
 
-  const addSelectedNpcFrameToAnimation = () => {
-    if (!selectedNpcAtlasRect || npcSpriteMeta.columns <= 0) {
-      setError('Select a rectangle on the NPC sheet first.');
-      return;
-    }
+  const appendNpcFrameToSelectedAnimation = (
+    frameIndex: number,
+    frameCellsWide: number,
+    frameCellsTall: number,
+    options?: {
+      allowDuplicate?: boolean;
+    },
+  ) => {
     if (!selectedNpcAnimationName) {
       setError('Select an animation before adding frames.');
       return;
     }
 
-    const frameIndex = selectedNpcAtlasRect.minRow * npcSpriteMeta.columns + selectedNpcAtlasRect.minCol;
-    setNpcFrameCellsWideInput(String(selectedNpcAtlasRect.width));
-    setNpcFrameCellsTallInput(String(selectedNpcAtlasRect.height));
+    setNpcFrameCellsWideInput(String(Math.max(1, frameCellsWide)));
+    setNpcFrameCellsTallInput(String(Math.max(1, frameCellsTall)));
     const currentSet = parsedNpcAnimationSets[selectedNpcAnimationName] ?? {};
     const currentFrames = currentSet[npcAssignDirection] ? [...currentSet[npcAssignDirection]!] : [];
-    if (!currentFrames.includes(frameIndex)) {
+    if (options?.allowDuplicate || !currentFrames.includes(frameIndex)) {
       currentFrames.push(frameIndex);
     }
     setNpcAnimationSetsDraft({
@@ -2969,8 +3248,18 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       },
     });
     setStatus(
-      `Added frame ${frameIndex} to "${selectedNpcAnimationName}" ${npcAssignDirection} (${selectedNpcAtlasRect.width}x${selectedNpcAtlasRect.height} cells).`,
+      `Added frame ${frameIndex} to "${selectedNpcAnimationName}" ${npcAssignDirection} (${Math.max(1, frameCellsWide)}x${Math.max(1, frameCellsTall)} cells).`,
     );
+  };
+
+  const addSelectedNpcFrameToAnimation = () => {
+    if (!selectedNpcAtlasRect || npcSpriteMeta.columns <= 0) {
+      setError('Select a rectangle on the NPC sheet first.');
+      return;
+    }
+
+    const frameIndex = selectedNpcAtlasRect.minRow * npcSpriteMeta.columns + selectedNpcAtlasRect.minCol;
+    appendNpcFrameToSelectedAnimation(frameIndex, selectedNpcAtlasRect.width, selectedNpcAtlasRect.height);
   };
 
   const removeNpcFrameFromAnimation = (frameIndex: number) => {
@@ -3003,6 +3292,77 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       },
     });
     setStatus(`Cleared frames for "${selectedNpcAnimationName}" ${npcAssignDirection}.`);
+  };
+
+  const loadNpcSpriteIntoEditor = (
+    sprite: NpcSpriteLibraryEntry,
+    options?: {
+      statusMessage?: string;
+    },
+  ) => {
+    const atlasCellWidth = sprite.sprite.atlasCellWidth ?? sprite.sprite.frameWidth;
+    const atlasCellHeight = sprite.sprite.atlasCellHeight ?? sprite.sprite.frameHeight;
+    const frameCellsWide =
+      sprite.sprite.frameCellsWide ??
+      Math.max(1, Math.round(sprite.sprite.frameWidth / Math.max(1, atlasCellWidth)));
+    const frameCellsTall =
+      sprite.sprite.frameCellsTall ??
+      Math.max(1, Math.round(sprite.sprite.frameHeight / Math.max(1, atlasCellHeight)));
+    setNpcSpriteEditorMode('edit');
+    setEditingNpcSpriteId(sprite.id);
+    setNpcSpriteLabelInput(sprite.label);
+    setNpcSpriteUrl(sprite.sprite.url);
+    setNpcFrameWidthInput(String(atlasCellWidth));
+    setNpcFrameHeightInput(String(atlasCellHeight));
+    setNpcFrameCellsWideInput(String(frameCellsWide));
+    setNpcFrameCellsTallInput(String(frameCellsTall));
+    setNpcRenderWidthTilesInput(String(sprite.sprite.renderWidthTiles ?? 1));
+    setNpcRenderHeightTilesInput(String(sprite.sprite.renderHeightTiles ?? 2));
+    setNpcFacingFrames({ ...sprite.sprite.facingFrames });
+    setNpcWalkFrames({
+      up: [...(sprite.sprite.walkFrames?.up ?? [])],
+      down: [...(sprite.sprite.walkFrames?.down ?? [])],
+      left: [...(sprite.sprite.walkFrames?.left ?? [])],
+      right: [...(sprite.sprite.walkFrames?.right ?? [])],
+    });
+    const nextAnimationSets =
+      sprite.sprite.animationSets &&
+      Object.keys(sprite.sprite.animationSets).length > 0
+        ? sanitizeDirectionalAnimationSets(
+            sprite.sprite.animationSets as Partial<
+              Record<string, Partial<Record<Direction, number[]>>>
+            >,
+          )
+        : buildDirectionalAnimationSetsFromLegacyFrames(
+            sprite.sprite.facingFrames,
+            {
+              up: [...(sprite.sprite.walkFrames?.up ?? [])],
+              down: [...(sprite.sprite.walkFrames?.down ?? [])],
+              left: [...(sprite.sprite.walkFrames?.left ?? [])],
+              right: [...(sprite.sprite.walkFrames?.right ?? [])],
+            },
+          );
+    setNpcAnimationSetsInput(stringifyDirectionalAnimationSetsForEditor(nextAnimationSets));
+    const nextIdleAnimation = sprite.sprite.defaultIdleAnimation ?? 'idle';
+    const nextMoveAnimation = sprite.sprite.defaultMoveAnimation ?? 'walk';
+    const nextAnimationNames = Object.keys(nextAnimationSets);
+    const nextSelectedAnimation = nextAnimationNames.includes(nextMoveAnimation)
+      ? nextMoveAnimation
+      : nextAnimationNames.includes('walk')
+        ? 'walk'
+        : nextAnimationNames[0] ?? '';
+    setSelectedNpcAnimationName(nextSelectedAnimation);
+    setNpcDefaultIdleAnimationInput(nextIdleAnimation);
+    setNpcDefaultMoveAnimationInput(nextMoveAnimation);
+    if (options?.statusMessage) {
+      setStatus(options.statusMessage);
+    }
+  };
+
+  const startNewNpcSpriteDraft = () => {
+    setNpcSpriteEditorMode('create');
+    setEditingNpcSpriteId('');
+    setStatus('Sprite editor is now in create mode. Saving will create a new sprite entry.');
   };
 
   const saveNpcSprite = () => {
@@ -3050,12 +3410,16 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       defaultIdleAnimation,
       defaultMoveAnimation,
     );
+    const editingIndex = npcSpriteLibrary.findIndex((entry) => entry.id === editingNpcSpriteId);
+    const isEditingExisting = npcSpriteEditorMode === 'edit' && editingIndex >= 0;
+    if (npcSpriteEditorMode === 'edit' && editingNpcSpriteId && editingIndex < 0) {
+      setError('The selected sprite no longer exists. Switch to create mode and save a new sprite.');
+      return;
+    }
+    const resolvedSpriteId = isEditingExisting ? editingNpcSpriteId : makeNpcSpriteId(label, npcSpriteLibrary);
 
     const spriteEntry: NpcSpriteLibraryEntry = {
-      id:
-        selectedNpcSpriteId && npcSpriteLibrary.some((entry) => entry.id === selectedNpcSpriteId)
-          ? selectedNpcSpriteId
-          : makeNpcSpriteId(label, npcSpriteLibrary),
+      id: resolvedSpriteId,
       label,
       sprite: {
         url: withCacheBusterTag(npcSpriteUrl.trim()),
@@ -3075,24 +3439,28 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       },
     };
 
-    const existingIndex = npcSpriteLibrary.findIndex((entry) => entry.id === spriteEntry.id);
     const next =
-      existingIndex >= 0
-        ? npcSpriteLibrary.map((entry, index) => (index === existingIndex ? spriteEntry : entry))
+      isEditingExisting
+        ? npcSpriteLibrary.map((entry, index) => (index === editingIndex ? spriteEntry : entry))
         : [...npcSpriteLibrary, spriteEntry];
     setNpcSpriteLibrary(next);
-    setSelectedNpcSpriteId(spriteEntry.id);
+    setNpcSpriteEditorMode('edit');
+    setEditingNpcSpriteId(spriteEntry.id);
     void persistNpcSpriteLibrary(next);
     setStatus(
-      existingIndex >= 0
+      isEditingExisting
         ? `Updated NPC sprite "${spriteEntry.label}" without reloading atlas.`
-        : `Saved NPC sprite "${spriteEntry.label}".`,
+        : `Created NPC sprite "${spriteEntry.label}".`,
     );
   };
 
   const removeNpcSprite = (spriteId: string) => {
     const next = npcSpriteLibrary.filter((sprite) => sprite.id !== spriteId);
     setNpcSpriteLibrary(next);
+    if (editingNpcSpriteId === spriteId) {
+      setEditingNpcSpriteId('');
+      setNpcSpriteEditorMode('create');
+    }
     if (selectedNpcSpriteId === spriteId) {
       setSelectedNpcSpriteId(next[0]?.id ?? '');
     }
@@ -3166,6 +3534,26 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       setError(interactionScriptResult.error);
       return;
     }
+    const battleRewardsResult = parseNpcItemRewardsInput(npcBattleRewardsInput);
+    if (!battleRewardsResult.ok) {
+      setError(battleRewardsResult.error);
+      return;
+    }
+    const interactionRewardsResult = parseNpcItemRewardsInput(npcInteractionRewardsInput);
+    if (!interactionRewardsResult.ok) {
+      setError(interactionRewardsResult.error);
+      return;
+    }
+    const battleRewardCatalogError = validateNpcItemRewardsAgainstCatalog(battleRewardsResult.rewards);
+    if (battleRewardCatalogError) {
+      setError(battleRewardCatalogError);
+      return;
+    }
+    const interactionRewardCatalogError = validateNpcItemRewardsAgainstCatalog(interactionRewardsResult.rewards);
+    if (interactionRewardCatalogError) {
+      setError(interactionRewardCatalogError);
+      return;
+    }
 
     const idleAnimation = npcCharacterIdleAnimationInput.trim() || undefined;
     const moveAnimation = npcCharacterMoveAnimationInput.trim() || undefined;
@@ -3190,6 +3578,81 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       setError(`Move animation "${moveAnimation}" does not exist on the selected sprite.`);
       return;
     }
+    const interactBattleDefeatedFlag = npcInteractBattleDefeatedFlagInput.trim() || undefined;
+    const battleTeamIds = parseStringList(npcBattleTeamsInput);
+    const interactionRewardSetFlag = npcInteractionRewardSetFlagInput.trim() || undefined;
+    const interactBattleFlagError = validateKnownFlagSelection(
+      interactBattleDefeatedFlag,
+      'Interaction battle transition flag',
+      { required: npcFirstInteractBattleInput },
+    );
+    if (interactBattleFlagError) {
+      setError(interactBattleFlagError);
+      return;
+    }
+    if (npcFirstInteractBattleInput) {
+      if (!battleTeamIds || battleTeamIds.length === 0) {
+        setError('Battler NPCs require at least one Battle Team ID.');
+        return;
+      }
+      if (battleRewardsResult.rewards.length === 0) {
+        setError('Battler NPCs require at least one battle reward item.');
+        return;
+      }
+    }
+    for (const state of storyStatesResult.states) {
+      if (!state.firstInteractBattle) {
+        continue;
+      }
+      const effectiveTeams = state.battleTeamIds && state.battleTeamIds.length > 0 ? state.battleTeamIds : battleTeamIds;
+      const stateDefeatFlag = state.interactBattleDefeatedFlag?.trim() || interactBattleDefeatedFlag;
+      const stateRewards =
+        state.battleRewards && state.battleRewards.length > 0 ? state.battleRewards : battleRewardsResult.rewards;
+      if (!stateDefeatFlag) {
+        setError(`Story state "${state.id ?? '(unnamed)'}" enables battle but has no Defeat Flag.`);
+        return;
+      }
+      if (!effectiveTeams || effectiveTeams.length === 0) {
+        setError(`Story state "${state.id ?? '(unnamed)'}" enables battle but has no Battle Team IDs.`);
+        return;
+      }
+      if (!stateRewards || stateRewards.length === 0) {
+        setError(`Story state "${state.id ?? '(unnamed)'}" enables battle but has no battle rewards.`);
+        return;
+      }
+      const stateDefeatFlagError = validateKnownFlagSelection(
+        stateDefeatFlag,
+        `Story state "${state.id ?? '(unnamed)'}" interaction battle transition flag`,
+        { required: true },
+      );
+      if (stateDefeatFlagError) {
+        setError(stateDefeatFlagError);
+        return;
+      }
+      const stateRewardCatalogError = validateNpcItemRewardsAgainstCatalog(stateRewards);
+      if (stateRewardCatalogError) {
+        setError(stateRewardCatalogError);
+        return;
+      }
+      const stateGuardValidationError = validateNpcMovementGuardBattles(
+        state.movementGuards ?? [],
+        effectiveTeams,
+        stateRewards,
+      );
+      if (stateGuardValidationError) {
+        setError(`Story state "${state.id ?? '(unnamed)'}": ${stateGuardValidationError}`);
+        return;
+      }
+    }
+    const movementGuardBattleValidationError = validateNpcMovementGuardBattles(
+      movementGuardsResult.guards,
+      battleTeamIds,
+      battleRewardsResult.rewards,
+    );
+    if (movementGuardBattleValidationError) {
+      setError(movementGuardBattleValidationError);
+      return;
+    }
 
     const isUpdatingExisting =
       selectedNpcCharacterId && npcCharacterLibrary.some((entry) => entry.id === selectedNpcCharacterId);
@@ -3207,8 +3670,13 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       dialogueSetFlag: npcDialogueSetFlagInput.trim() || undefined,
       firstInteractionSetFlag: npcFirstInteractionSetFlagInput.trim() || undefined,
       firstInteractBattle: npcFirstInteractBattleInput,
+      interactBattleRepeatable: npcInteractBattleRepeatableInput,
+      interactBattleDefeatedFlag,
+      battleRewards: battleRewardsResult.rewards.length > 0 ? battleRewardsResult.rewards : undefined,
       healer: npcHealerInput,
-      battleTeamIds: parseStringList(npcBattleTeamsInput),
+      interactionRewards: interactionRewardsResult.rewards.length > 0 ? interactionRewardsResult.rewards : undefined,
+      interactionRewardSetFlag,
+      battleTeamIds,
       storyStates:
         storyStatesResult.states.length > 0 ? compactCharacterPlacementOrder(storyStatesResult.states) : undefined,
       movementGuards:
@@ -3310,7 +3778,12 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     setNpcDialogueSetFlagInput(template.dialogueSetFlag ?? '');
     setNpcFirstInteractionSetFlagInput(template.firstInteractionSetFlag ?? '');
     setNpcFirstInteractBattleInput(Boolean(template.firstInteractBattle));
+    setNpcInteractBattleRepeatableInput(Boolean(template.interactBattleRepeatable));
+    setNpcInteractBattleDefeatedFlagInput(template.interactBattleDefeatedFlag ?? '');
+    setNpcBattleRewardsInput(formatNpcItemRewardsInput(template.battleRewards));
     setNpcHealerInput(Boolean(template.healer));
+    setNpcInteractionRewardsInput(formatNpcItemRewardsInput(template.interactionRewards));
+    setNpcInteractionRewardSetFlagInput(template.interactionRewardSetFlag ?? '');
     setNpcMovementTypeInput(toEditorNpcMovementType(template.movement?.type));
     setNpcMovementPatternInput((template.movement?.pattern ?? []).join(', '));
     setNpcStepIntervalInput(String(template.movement?.stepIntervalMs ?? 850));
@@ -3363,7 +3836,14 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           dialogueSetFlag: template.dialogueSetFlag,
           firstInteractionSetFlag: template.firstInteractionSetFlag,
           firstInteractBattle: template.firstInteractBattle,
+          interactBattleRepeatable: template.interactBattleRepeatable,
+          interactBattleDefeatedFlag: template.interactBattleDefeatedFlag,
+          battleRewards: template.battleRewards ? template.battleRewards.map((entry) => ({ ...entry })) : undefined,
           healer: template.healer,
+          interactionRewards: template.interactionRewards
+            ? template.interactionRewards.map((entry) => ({ ...entry }))
+            : undefined,
+          interactionRewardSetFlag: template.interactionRewardSetFlag,
           battleTeamIds: template.battleTeamIds ? [...template.battleTeamIds] : undefined,
           movement: template.movement
             ? {
@@ -3375,11 +3855,20 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
             ? template.movementGuards.map((guard) => ({
                 ...guard,
                 dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+                postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+                battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
+                battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
               }))
             : undefined,
           idleAnimation: template.idleAnimation,
           moveAnimation: template.moveAnimation,
-          interactionScript: template.interactionScript ? template.interactionScript.map((entry) => ({ ...entry })) : undefined,
+          interactionScript: template.interactionScript
+            ? template.interactionScript.map((entry) => ({
+                ...entry,
+                ...(entry.type === 'dialogue' && Array.isArray(entry.lines) ? { lines: [...entry.lines] } : {}),
+                ...(entry.type === 'move_path' && Array.isArray(entry.directions) ? { directions: [...entry.directions] } : {}),
+              }))
+            : undefined,
         },
       ]);
       return {
@@ -3468,8 +3957,27 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
         ? placement.firstInteractBattle
         : Boolean(character.firstInteractBattle),
     );
+    setNpcInteractBattleRepeatableInput(
+      typeof placement.interactBattleRepeatable === 'boolean'
+        ? placement.interactBattleRepeatable
+        : Boolean(character.interactBattleRepeatable),
+    );
+    setNpcInteractBattleDefeatedFlagInput(
+      placement.interactBattleDefeatedFlag ??
+        character.interactBattleDefeatedFlag ??
+        '',
+    );
+    setNpcBattleRewardsInput(
+      formatNpcItemRewardsInput(placement.battleRewards ?? character.battleRewards),
+    );
     setNpcHealerInput(
       typeof placement.healer === 'boolean' ? placement.healer : Boolean(character.healer),
+    );
+    setNpcInteractionRewardsInput(
+      formatNpcItemRewardsInput(placement.interactionRewards ?? character.interactionRewards),
+    );
+    setNpcInteractionRewardSetFlagInput(
+      placement.interactionRewardSetFlag ?? character.interactionRewardSetFlag ?? '',
     );
     setNpcBattleTeamsInput((placement.battleTeamIds ?? character.battleTeamIds ?? []).join(', '));
     setNpcMovementTypeInput(toEditorNpcMovementType(placement.movement?.type ?? character.movement?.type));
@@ -3574,7 +4082,12 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     setNpcDialogueSetFlagInput(npc.dialogueSetFlag ?? '');
     setNpcFirstInteractionSetFlagInput(npc.firstInteractionSetFlag ?? '');
     setNpcFirstInteractBattleInput(Boolean(npc.firstInteractBattle));
+    setNpcInteractBattleRepeatableInput(Boolean(npc.interactBattleRepeatable));
+    setNpcInteractBattleDefeatedFlagInput(npc.interactBattleDefeatedFlag ?? '');
+    setNpcBattleRewardsInput(formatNpcItemRewardsInput(npc.battleRewards));
     setNpcHealerInput(Boolean(npc.healer));
+    setNpcInteractionRewardsInput(formatNpcItemRewardsInput(npc.interactionRewards));
+    setNpcInteractionRewardSetFlagInput(npc.interactionRewardSetFlag ?? '');
     setNpcBattleTeamsInput((npc.battleTeamIds ?? []).join(', '));
     setNpcStoryStatesInput(JSON.stringify(npc.storyStates ?? [], null, 2));
     setNpcMovementGuardsInput(JSON.stringify(npc.movementGuards ?? [], null, 2));
@@ -3634,6 +4147,57 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
 
     const idleAnimation = npcCharacterIdleAnimationInput.trim() || undefined;
     const moveAnimation = npcCharacterMoveAnimationInput.trim() || undefined;
+    const interactBattleDefeatedFlag = npcInteractBattleDefeatedFlagInput.trim() || undefined;
+    const battleRewardsResult = parseNpcItemRewardsInput(npcBattleRewardsInput);
+    if (!battleRewardsResult.ok) {
+      setError(battleRewardsResult.error);
+      return;
+    }
+    const interactionRewardsResult = parseNpcItemRewardsInput(npcInteractionRewardsInput);
+    if (!interactionRewardsResult.ok) {
+      setError(interactionRewardsResult.error);
+      return;
+    }
+    const battleRewardCatalogError = validateNpcItemRewardsAgainstCatalog(battleRewardsResult.rewards);
+    if (battleRewardCatalogError) {
+      setError(battleRewardCatalogError);
+      return;
+    }
+    const interactionRewardCatalogError = validateNpcItemRewardsAgainstCatalog(interactionRewardsResult.rewards);
+    if (interactionRewardCatalogError) {
+      setError(interactionRewardCatalogError);
+      return;
+    }
+    const battleTeamIds = parseStringList(npcBattleTeamsInput);
+    const interactionRewardSetFlag = npcInteractionRewardSetFlagInput.trim() || undefined;
+    const interactBattleFlagError = validateKnownFlagSelection(
+      interactBattleDefeatedFlag,
+      'Interaction battle transition flag',
+      { required: npcFirstInteractBattleInput },
+    );
+    if (interactBattleFlagError) {
+      setError(interactBattleFlagError);
+      return;
+    }
+    if (npcFirstInteractBattleInput) {
+      if (!battleTeamIds || battleTeamIds.length === 0) {
+        setError('Battler NPCs require at least one Battle Team ID.');
+        return;
+      }
+      if (battleRewardsResult.rewards.length === 0) {
+        setError('Battler NPCs require at least one battle reward item.');
+        return;
+      }
+    }
+    const movementGuardBattleValidationError = validateNpcMovementGuardBattles(
+      movementGuardsResult.guards,
+      battleTeamIds,
+      battleRewardsResult.rewards,
+    );
+    if (movementGuardBattleValidationError) {
+      setError(movementGuardBattleValidationError);
+      return;
+    }
 
     const selectedSpriteEntry = selectedNpcSpriteId
       ? npcSpriteLibrary.find((entry) => entry.id === selectedNpcSpriteId) ?? null
@@ -3687,8 +4251,13 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           dialogueSetFlag: npcDialogueSetFlagInput.trim() || undefined,
           firstInteractionSetFlag: npcFirstInteractionSetFlagInput.trim() || undefined,
           firstInteractBattle: npcFirstInteractBattleInput,
+          interactBattleRepeatable: npcInteractBattleRepeatableInput,
+          interactBattleDefeatedFlag,
+          battleRewards: battleRewardsResult.rewards.length > 0 ? battleRewardsResult.rewards : undefined,
           healer: npcHealerInput,
-          battleTeamIds: parseStringList(npcBattleTeamsInput),
+          interactionRewards: interactionRewardsResult.rewards.length > 0 ? interactionRewardsResult.rewards : undefined,
+          interactionRewardSetFlag,
+          battleTeamIds,
           movement,
           movementGuards:
             movementGuardsResult.guards.length > 0 ? movementGuardsResult.guards : undefined,
@@ -3715,8 +4284,13 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           dialogueSetFlag: npcDialogueSetFlagInput.trim() || undefined,
           firstInteractionSetFlag: npcFirstInteractionSetFlagInput.trim() || undefined,
           firstInteractBattle: npcFirstInteractBattleInput,
+          interactBattleRepeatable: npcInteractBattleRepeatableInput,
+          interactBattleDefeatedFlag,
+          battleRewards: battleRewardsResult.rewards.length > 0 ? battleRewardsResult.rewards : undefined,
           healer: npcHealerInput,
-          battleTeamIds: parseStringList(npcBattleTeamsInput),
+          interactionRewards: interactionRewardsResult.rewards.length > 0 ? interactionRewardsResult.rewards : undefined,
+          interactionRewardSetFlag,
+          battleTeamIds,
           movement,
           movementGuards:
             movementGuardsResult.guards.length > 0 ? movementGuardsResult.guards : undefined,
@@ -3741,6 +4315,50 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       setError(storyStatesResult.error);
       return;
     }
+    for (const state of storyStatesResult.states) {
+      if (!state.firstInteractBattle) {
+        continue;
+      }
+      const effectiveTeams = state.battleTeamIds && state.battleTeamIds.length > 0 ? state.battleTeamIds : battleTeamIds;
+      const stateDefeatFlag = state.interactBattleDefeatedFlag?.trim() || interactBattleDefeatedFlag;
+      const stateRewards =
+        state.battleRewards && state.battleRewards.length > 0 ? state.battleRewards : battleRewardsResult.rewards;
+      if (!stateDefeatFlag) {
+        setError(`Story state "${state.id ?? '(unnamed)'}" enables battle but has no Defeat Flag.`);
+        return;
+      }
+      if (!effectiveTeams || effectiveTeams.length === 0) {
+        setError(`Story state "${state.id ?? '(unnamed)'}" enables battle but has no Battle Team IDs.`);
+        return;
+      }
+      if (!stateRewards || stateRewards.length === 0) {
+        setError(`Story state "${state.id ?? '(unnamed)'}" enables battle but has no battle rewards.`);
+        return;
+      }
+      const stateDefeatFlagError = validateKnownFlagSelection(
+        stateDefeatFlag,
+        `Story state "${state.id ?? '(unnamed)'}" interaction battle transition flag`,
+        { required: true },
+      );
+      if (stateDefeatFlagError) {
+        setError(stateDefeatFlagError);
+        return;
+      }
+      const stateRewardCatalogError = validateNpcItemRewardsAgainstCatalog(stateRewards);
+      if (stateRewardCatalogError) {
+        setError(stateRewardCatalogError);
+        return;
+      }
+      const stateGuardValidationError = validateNpcMovementGuardBattles(
+        state.movementGuards ?? [],
+        effectiveTeams,
+        stateRewards,
+      );
+      if (stateGuardValidationError) {
+        setError(`Story state "${state.id ?? '(unnamed)'}": ${stateGuardValidationError}`);
+        return;
+      }
+    }
 
     setEditableMap((current) => {
       const next = cloneEditableMap(current);
@@ -3762,8 +4380,13 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
         dialogueSetFlag: npcDialogueSetFlagInput.trim() || undefined,
         firstInteractionSetFlag: npcFirstInteractionSetFlagInput.trim() || undefined,
         firstInteractBattle: npcFirstInteractBattleInput,
+        interactBattleRepeatable: npcInteractBattleRepeatableInput,
+        interactBattleDefeatedFlag,
+        battleRewards: battleRewardsResult.rewards.length > 0 ? battleRewardsResult.rewards : undefined,
         healer: npcHealerInput,
-        battleTeamIds: parseStringList(npcBattleTeamsInput),
+        interactionRewards: interactionRewardsResult.rewards.length > 0 ? interactionRewardsResult.rewards : undefined,
+        interactionRewardSetFlag,
+        battleTeamIds,
         movement,
         movementGuards:
           movementGuardsResult.guards.length > 0 ? movementGuardsResult.guards : undefined,
@@ -3933,7 +4556,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     };
   };
 
-  const tileCellStyle = (code: EditorTileCode, size: number, rotationQuarter = 0): CSSProperties => {
+  const tileCellStyle = (code: EditorTileCode, size: number, tileTransform = 0): CSSProperties => {
     if (code === BLANK_TILE_CODE) {
       return {
         width: `${size}px`,
@@ -3955,10 +4578,18 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           imageRendering: 'pixelated',
         };
 
-    const withRotation = (base: CSSProperties): CSSProperties => {
+    const withRotationAndMirror = (base: CSSProperties): CSSProperties => {
       const style = { ...base };
-      if (rotationQuarter % 4 !== 0) {
-        style.transform = `rotate(${(rotationQuarter % 4) * 90}deg)`;
+      const decoded = decodeTileTransform(tileTransform);
+      const transforms: string[] = [];
+      if (decoded.rotationQuarter % 4 !== 0) {
+        transforms.push(`rotate(${(decoded.rotationQuarter % 4) * 90}deg)`);
+      }
+      if (decoded.mirrorHorizontal) {
+        transforms.push('scaleX(-1)');
+      }
+      if (transforms.length > 0) {
+        style.transform = transforms.join(' ');
         style.transformOrigin = 'center center';
       }
       return style;
@@ -3978,7 +4609,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
         );
         const column = safeIndex % tileRenderSource.columns;
         const row = Math.floor(safeIndex / tileRenderSource.columns);
-        return withRotation({
+        return withRotationAndMirror({
           ...fallback,
           backgroundImage: `url(${tileRenderSource.tilesetUrl})`,
           backgroundRepeat: 'no-repeat',
@@ -3987,19 +4618,19 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           imageRendering: 'pixelated',
         });
       }
-      return withRotation(fallback);
+      return withRotationAndMirror(fallback);
     }
 
     if (!tilesetUrl || !atlasMeta.loaded || atlasMeta.columns <= 0 || atlasMeta.rows <= 0) {
-      return withRotation(fallback);
+      return withRotationAndMirror(fallback);
     }
 
     const tileIndex = tileRenderSource?.atlasIndex;
     if (tileIndex === undefined || !Number.isFinite(tileIndex) || tileIndex < 0) {
-      return withRotation(fallback);
+      return withRotationAndMirror(fallback);
     }
 
-    return withRotation({
+    return withRotationAndMirror({
       ...fallback,
       ...atlasCellStyle(tileIndex, size),
     });
@@ -4031,6 +4662,11 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           <option key={`admin-flag-option-${flagId}`} value={flagId} />
         ))}
       </datalist>
+      <datalist id="admin-item-options">
+        {knownItemIds.map((itemId) => (
+          <option key={`admin-item-option-${itemId}`} value={itemId} />
+        ))}
+      </datalist>
       {!embedded && (
         <header className="admin-tool__header">
           <div>
@@ -4058,9 +4694,9 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
             <div className="admin-row">
               <select value={selectedSourceMapId} onChange={(event) => setSelectedSourceMapId(event.target.value)}>
                 <option value="">Select existing map</option>
-                {sourceMaps.map((map) => (
-                  <option key={map.id} value={map.id}>
-                    {map.id}
+                {sourceMapRows.map((row) => (
+                  <option key={row.mapId} value={row.mapId}>
+                    {row.mapId}
                   </option>
                 ))}
               </select>
@@ -4203,7 +4839,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                         />
                       </label>
                       <label>
-                        First Interact Battle?
+                        Enable Interaction Battle?
                         <input
                           type="checkbox"
                           checked={Boolean(placement.firstInteractBattle)}
@@ -4213,6 +4849,55 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                               firstInteractBattle: event.target.checked,
                             }))
                           }
+                        />
+                      </label>
+                      <label>
+                        Repeat Interaction Battle After Win?
+                        <input
+                          type="checkbox"
+                          checked={Boolean(placement.interactBattleRepeatable)}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              interactBattleRepeatable: event.target.checked,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        Battle Win Transition Flag
+                        <select
+                          value={placement.interactBattleDefeatedFlag ?? ''}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              interactBattleDefeatedFlag: event.target.value.trim() || undefined,
+                            }))
+                          }
+                        >
+                          <option value="">(Select existing flag)</option>
+                          {knownFlagIds.map((flagId) => (
+                            <option key={`npc-character-instance-battle-flag-${index}-${flagId}`} value={flagId}>
+                              {flagId}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Battle Rewards
+                        <input
+                          list="admin-item-options"
+                          value={formatNpcItemRewardsInput(placement.battleRewards)}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => {
+                              const parsed = parseNpcItemRewardsInput(event.target.value);
+                              return {
+                                ...entry,
+                                battleRewards: parsed.ok && parsed.rewards.length > 0 ? parsed.rewards : undefined,
+                              };
+                            })
+                          }
+                          placeholder="lume:25, field-bandage:1"
                         />
                       </label>
                       <label>
@@ -4226,6 +4911,38 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                               healer: event.target.checked,
                             }))
                           }
+                        />
+                      </label>
+                      <label>
+                        Interaction Rewards
+                        <input
+                          list="admin-item-options"
+                          value={formatNpcItemRewardsInput(placement.interactionRewards)}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => {
+                              const parsed = parseNpcItemRewardsInput(event.target.value);
+                              return {
+                                ...entry,
+                                interactionRewards:
+                                  parsed.ok && parsed.rewards.length > 0 ? parsed.rewards : undefined,
+                              };
+                            })
+                          }
+                          placeholder="lume:5, field-bandage:1"
+                        />
+                      </label>
+                      <label>
+                        Interaction Reward Once Flag
+                        <input
+                          list="admin-flag-options"
+                          value={placement.interactionRewardSetFlag ?? ''}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              interactionRewardSetFlag: event.target.value.trim() || undefined,
+                            }))
+                          }
+                          placeholder="optional"
                         />
                       </label>
                     </div>
@@ -5304,6 +6021,45 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           </section>
           )}
 
+          {showMapEditing && !isNpcsSection && (
+          <section className="admin-panel">
+            <h3>Heal Tile Tools</h3>
+            <div className="admin-grid-2">
+              <label>
+                Heal Interaction ID Prefix
+                <input
+                  value={healTileInteractionIdPrefixInput}
+                  onChange={(event) => setHealTileInteractionIdPrefixInput(event.target.value)}
+                  placeholder="heal-tile"
+                />
+              </label>
+              <label>
+                Selected Cells
+                <input value={selectedCellKeys.join(', ')} readOnly placeholder="Use Select Cells tool" />
+              </label>
+            </div>
+            <div className="admin-row">
+              <button type="button" className="primary" onClick={applyHealTilesToSelection}>
+                Set Heal Tile(s)
+              </button>
+              <button type="button" className="secondary" onClick={removeHealTilesFromSelection}>
+                Remove Heal Tile(s)
+              </button>
+              <button
+                type="button"
+                className={`secondary ${tool === 'encounter-select' ? 'is-selected' : ''}`}
+                onClick={() => toggleTool('encounter-select')}
+              >
+                Select Cells
+              </button>
+            </div>
+            <p className="admin-note">
+              Heal tiles are saved as interactions with <code>kind: "heal_tile"</code>. At runtime they prompt the player, heal the
+              squad on Yes, and update blackout respawn to the current map position.
+            </p>
+          </section>
+          )}
+
           {showNpcStudio && (
           <section className="admin-panel">
             <h3>
@@ -5530,12 +6286,13 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                 </select>
               </label>
               <button type="button" className="secondary" onClick={addSelectedNpcFrameToAnimation}>
-                Add Selected Frame
+                Add Selected Rectangle
               </button>
               <button type="button" className="secondary" onClick={clearNpcDirectionFrames}>
                 Clear Direction Frames
               </button>
             </div>
+            <p className="admin-note">Tip: Hold Shift and click sheet cells to append frames in click order.</p>
             <div className="tileset-grid-wrap npc-sheet-grid-wrap">
               {npcSpriteMeta.loaded ? (
                 <div
@@ -5566,6 +6323,31 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                             return;
                           }
                           event.preventDefault();
+                          if (event.shiftKey || event.metaKey || event.ctrlKey) {
+                            if (npcSpriteMeta.columns <= 0) {
+                              setError('NPC sheet is not ready yet.');
+                              return;
+                            }
+                            const currentFrameCellsWide = Math.max(1, parseInteger(npcFrameCellsWideInput) ?? 1);
+                            const currentFrameCellsTall = Math.max(1, parseInteger(npcFrameCellsTallInput) ?? 1);
+                            const startCol = frameIndex % npcSpriteMeta.columns;
+                            const startRow = Math.floor(frameIndex / npcSpriteMeta.columns);
+                            const endCol = Math.min(
+                              npcSpriteMeta.columns - 1,
+                              startCol + Math.max(0, currentFrameCellsWide - 1),
+                            );
+                            const endRow = Math.min(
+                              npcSpriteMeta.rows - 1,
+                              startRow + Math.max(0, currentFrameCellsTall - 1),
+                            );
+                            const endIndex = endRow * npcSpriteMeta.columns + endCol;
+                            setSelectedNpcAtlasStartIndex(frameIndex);
+                            setSelectedNpcAtlasEndIndex(endIndex);
+                            appendNpcFrameToSelectedAnimation(frameIndex, currentFrameCellsWide, currentFrameCellsTall, {
+                              allowDuplicate: true,
+                            });
+                            return;
+                          }
                           setIsSelectingNpcAtlas(true);
                           setSelectedNpcAtlasStartIndex(frameIndex);
                           setSelectedNpcAtlasEndIndex(frameIndex);
@@ -5625,76 +6407,36 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
               Selected Rectangle: {selectedNpcAtlasRect ? `${selectedNpcAtlasRect.width}x${selectedNpcAtlasRect.height}` : 'none'}
             </p>
 
+            <div className="admin-row">
+              <button type="button" className="secondary" onClick={startNewNpcSpriteDraft}>
+                Create New Sprite
+              </button>
+              <span className="admin-note">
+                {npcSpriteEditorMode === 'edit' && selectedNpcSpriteForEditor
+                  ? `Edit mode: ${selectedNpcSpriteForEditor.label} (${selectedNpcSpriteForEditor.id})`
+                  : 'Create mode: save will create a new sprite entry.'}
+              </span>
+            </div>
             <button type="button" className="secondary" onClick={saveNpcSprite}>
-              Save Sprite
+              {npcSpriteEditorMode === 'edit' ? 'Update Selected Sprite' : 'Save New Sprite'}
             </button>
             <div className="saved-paint-list">
               {npcSpriteLibrary.length === 0 && <p className="admin-note">No NPC sprites saved yet.</p>}
               {npcSpriteLibrary.map((sprite) => (
                 <div
                   key={sprite.id}
-                  className={`saved-paint-row ${selectedNpcSpriteId === sprite.id ? 'is-selected' : ''}`}
+                  className={`saved-paint-row ${editingNpcSpriteId === sprite.id ? 'is-selected' : ''}`}
                 >
                   <button
                     type="button"
                     className="secondary"
-                    onClick={() => {
-                      const atlasCellWidth = sprite.sprite.atlasCellWidth ?? sprite.sprite.frameWidth;
-                      const atlasCellHeight = sprite.sprite.atlasCellHeight ?? sprite.sprite.frameHeight;
-                      const frameCellsWide =
-                        sprite.sprite.frameCellsWide ??
-                        Math.max(1, Math.round(sprite.sprite.frameWidth / Math.max(1, atlasCellWidth)));
-                      const frameCellsTall =
-                        sprite.sprite.frameCellsTall ??
-                        Math.max(1, Math.round(sprite.sprite.frameHeight / Math.max(1, atlasCellHeight)));
-                      setSelectedNpcSpriteId(sprite.id);
-                      setNpcSpriteLabelInput(sprite.label);
-                      setNpcSpriteUrl(sprite.sprite.url);
-                      setNpcFrameWidthInput(String(atlasCellWidth));
-                      setNpcFrameHeightInput(String(atlasCellHeight));
-                      setNpcFrameCellsWideInput(String(frameCellsWide));
-                      setNpcFrameCellsTallInput(String(frameCellsTall));
-                      setNpcRenderWidthTilesInput(String(sprite.sprite.renderWidthTiles ?? 1));
-                      setNpcRenderHeightTilesInput(String(sprite.sprite.renderHeightTiles ?? 2));
-                      setNpcFacingFrames({ ...sprite.sprite.facingFrames });
-                      setNpcWalkFrames({
-                        up: [...(sprite.sprite.walkFrames?.up ?? [])],
-                        down: [...(sprite.sprite.walkFrames?.down ?? [])],
-                        left: [...(sprite.sprite.walkFrames?.left ?? [])],
-                        right: [...(sprite.sprite.walkFrames?.right ?? [])],
-                      });
-                      const nextAnimationSets =
-                        sprite.sprite.animationSets &&
-                        Object.keys(sprite.sprite.animationSets).length > 0
-                          ? sanitizeDirectionalAnimationSets(
-                              sprite.sprite.animationSets as Partial<
-                                Record<string, Partial<Record<Direction, number[]>>>
-                              >,
-                            )
-                          : buildDirectionalAnimationSetsFromLegacyFrames(
-                              sprite.sprite.facingFrames,
-                              {
-                                up: [...(sprite.sprite.walkFrames?.up ?? [])],
-                                down: [...(sprite.sprite.walkFrames?.down ?? [])],
-                                left: [...(sprite.sprite.walkFrames?.left ?? [])],
-                                right: [...(sprite.sprite.walkFrames?.right ?? [])],
-                              },
-                            );
-                      setNpcAnimationSetsInput(stringifyDirectionalAnimationSetsForEditor(nextAnimationSets));
-                      const nextIdleAnimation = sprite.sprite.defaultIdleAnimation ?? 'idle';
-                      const nextMoveAnimation = sprite.sprite.defaultMoveAnimation ?? 'walk';
-                      const nextAnimationNames = Object.keys(nextAnimationSets);
-                      const nextSelectedAnimation = nextAnimationNames.includes(nextMoveAnimation)
-                        ? nextMoveAnimation
-                        : nextAnimationNames.includes('walk')
-                          ? 'walk'
-                          : nextAnimationNames[0] ?? '';
-                      setSelectedNpcAnimationName(nextSelectedAnimation);
-                      setNpcDefaultIdleAnimationInput(nextIdleAnimation);
-                      setNpcDefaultMoveAnimationInput(nextMoveAnimation);
-                    }}
+                    onClick={() =>
+                      loadNpcSpriteIntoEditor(sprite, {
+                        statusMessage: `Loaded NPC sprite "${sprite.label}" into edit mode.`,
+                      })
+                    }
                   >
-                    Use
+                    Edit
                   </button>
                   <span className="saved-paint-row__meta">{sprite.label}</span>
                   <span className="saved-paint-row__meta">{sprite.id}</span>
@@ -5705,15 +6447,15 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
               ))}
             </div>
             <h4>Sprite Usage</h4>
-            {selectedNpcSprite ? (
+            {selectedNpcSpriteForEditor ? (
               <>
                 <p className="admin-note">
-                  {charactersUsingSelectedNpcSprite.length > 0
-                    ? `"${selectedNpcSprite.label}" is currently used by ${charactersUsingSelectedNpcSprite.length} character(s).`
-                    : `"${selectedNpcSprite.label}" is not linked to any NPC character yet.`}
+                  {charactersUsingSelectedNpcSpriteForEditor.length > 0
+                    ? `"${selectedNpcSpriteForEditor.label}" is currently used by ${charactersUsingSelectedNpcSpriteForEditor.length} character(s).`
+                    : `"${selectedNpcSpriteForEditor.label}" is not linked to any NPC character yet.`}
                 </p>
                 <div className="saved-paint-list">
-                  {charactersUsingSelectedNpcSprite.map((template) => (
+                  {charactersUsingSelectedNpcSpriteForEditor.map((template) => (
                     <div key={`npc-sprite-usage-${template.id}`} className="saved-paint-row">
                       <button
                         type="button"
@@ -5849,12 +6591,34 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                 />
               </label>
               <label>
-                First Interact Battle?
+                Enable Interaction Battle?
                 <input
                   type="checkbox"
                   checked={npcFirstInteractBattleInput}
                   onChange={(event) => setNpcFirstInteractBattleInput(event.target.checked)}
                 />
+              </label>
+              <label>
+                Repeat Interaction Battle After Win?
+                <input
+                  type="checkbox"
+                  checked={npcInteractBattleRepeatableInput}
+                  onChange={(event) => setNpcInteractBattleRepeatableInput(event.target.checked)}
+                />
+              </label>
+              <label>
+                Battle Win Transition Flag
+                <select
+                  value={npcInteractBattleDefeatedFlagInput}
+                  onChange={(event) => setNpcInteractBattleDefeatedFlagInput(event.target.value)}
+                >
+                  <option value="">(Select existing flag)</option>
+                  {knownFlagIds.map((flagId) => (
+                    <option key={`npc-battle-flag-${flagId}`} value={flagId}>
+                      {flagId}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label>
                 Healer?
@@ -5942,12 +6706,43 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
               </label>
             )}
             <label>
-              Battle Team IDs (comma-separated, future use)
+              Battle Team IDs (comma-separated)
               <input
                 value={npcBattleTeamsInput}
                 onChange={(event) => setNpcBattleTeamsInput(event.target.value)}
               />
             </label>
+            <label>
+              Battle Rewards (itemId:qty, comma-separated)
+              <input
+                list="admin-item-options"
+                value={npcBattleRewardsInput}
+                onChange={(event) => setNpcBattleRewardsInput(event.target.value)}
+                placeholder="lume:25, field-bandage:1"
+              />
+            </label>
+            <label>
+              Interaction Rewards (itemId:qty, comma-separated)
+              <input
+                list="admin-item-options"
+                value={npcInteractionRewardsInput}
+                onChange={(event) => setNpcInteractionRewardsInput(event.target.value)}
+                placeholder="lume:5, field-bandage:1"
+              />
+            </label>
+            <label>
+              Interaction Reward Once Flag
+              <input
+                list="admin-flag-options"
+                value={npcInteractionRewardSetFlagInput}
+                onChange={(event) => setNpcInteractionRewardSetFlagInput(event.target.value)}
+                placeholder="optional one-time gate flag"
+              />
+            </label>
+            <p className="admin-note">
+              Battle flow uses one transition flag: when an interaction or guard battle is won, that defeat flag is set.
+              Use that same flag in the next instance&apos;s <code>requiresFlag</code> to transition dialogue/state.
+            </p>
             <label>
               Story States JSON (ordered by timeline)
               <textarea
@@ -5959,13 +6754,13 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
               />
             </label>
             <label>
-              Movement Guards JSON (block movement by flag/area)
+              Movement Guards JSON (guard battles must use defeatedFlag as transition flag)
               <textarea
                 rows={5}
                 className="admin-json"
                 value={npcMovementGuardsInput}
                 onChange={(event) => setNpcMovementGuardsInput(event.target.value)}
-                placeholder='[{"id":"guard-north","hideIfFlag":"demo-done","maxY":0,"dialogueSpeaker":"Ben","dialogueLines":["..."]},{"id":"battle-guard","maxY":0,"defeatedFlag":"ben-defeated","postDuelDialogueSpeaker":"Ben","postDuelDialogueLines":["I lost..."]}]'
+                placeholder='[{"id":"guard-north","hideIfFlag":"demo-done","maxY":0,"dialogueSpeaker":"Ben","dialogueLines":["..."]},{"id":"battle-guard","maxY":0,"defeatedFlag":"ben-defeated","battleTeamIds":["buddo@1"],"battleRewards":[{"itemId":"lume","quantity":30}],"postDuelDialogueSpeaker":"Ben","postDuelDialogueLines":["I lost..."]}]'
               />
             </label>
             <label>
@@ -5975,7 +6770,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                 className="admin-json"
                 value={npcInteractionScriptInput}
                 onChange={(event) => setNpcInteractionScriptInput(event.target.value)}
-                placeholder='[{"type":"face_player"},{"type":"dialogue","speaker":"Jacob","lines":["Hey there!"]},{"type":"move_to_player"},{"type":"set_flag","flag":"met-jacob"}]'
+                placeholder='[{"type":"face_player"},{"type":"dialogue","speaker":"Jacob","lines":["Hey there!"]},{"type":"give_item","itemId":"lume","quantity":25,"message":"You received Lume!"},{"type":"set_flag","flag":"met-jacob"}]'
               />
             </label>
             <div className="admin-row">
@@ -6055,6 +6850,9 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           {showMapEditing && !isNpcsSection && (
           <section className="admin-panel">
             <h3>Interactions JSON</h3>
+            <p className="admin-note">
+              Use <code>kind: "heal_tile"</code> for heal prompts, or omit <code>kind</code> / use <code>"dialogue"</code> for normal notes.
+            </p>
             <textarea
               rows={8}
               value={interactionJsonDraft}
@@ -6655,7 +7453,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                                     <span
                                       key={`${cellKey}-${entry.layerId}-${index}`}
                                       className={`map-grid__tile-layer ${activeLayer?.id === entry.layerId ? 'is-active-layer' : ''}`}
-                                      style={tileCellStyle(entry.code, cellSize, entry.rotation)}
+                                      style={tileCellStyle(entry.code, cellSize, entry.tileTransform)}
                                     />
                                   ))
                                 ) : (
@@ -7187,7 +7985,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                         />
                       </label>
                       <label>
-                        First Interact Battle?
+                        Enable Interaction Battle?
                         <input
                           type="checkbox"
                           checked={Boolean(placement.firstInteractBattle)}
@@ -7197,6 +7995,55 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                               firstInteractBattle: event.target.checked,
                             }))
                           }
+                        />
+                      </label>
+                      <label>
+                        Repeat Interaction Battle After Win?
+                        <input
+                          type="checkbox"
+                          checked={Boolean(placement.interactBattleRepeatable)}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              interactBattleRepeatable: event.target.checked,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        Battle Win Transition Flag
+                        <select
+                          value={placement.interactBattleDefeatedFlag ?? ''}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              interactBattleDefeatedFlag: event.target.value.trim() || undefined,
+                            }))
+                          }
+                        >
+                          <option value="">(Select existing flag)</option>
+                          {knownFlagIds.map((flagId) => (
+                            <option key={`npc-instance-battle-flag-${index}-${flagId}`} value={flagId}>
+                              {flagId}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Battle Rewards
+                        <input
+                          list="admin-item-options"
+                          value={formatNpcItemRewardsInput(placement.battleRewards)}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => {
+                              const parsed = parseNpcItemRewardsInput(event.target.value);
+                              return {
+                                ...entry,
+                                battleRewards: parsed.ok && parsed.rewards.length > 0 ? parsed.rewards : undefined,
+                              };
+                            })
+                          }
+                          placeholder="lume:25, field-bandage:1"
                         />
                       </label>
                       <label>
@@ -7210,6 +8057,38 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                               healer: event.target.checked,
                             }))
                           }
+                        />
+                      </label>
+                      <label>
+                        Interaction Rewards
+                        <input
+                          list="admin-item-options"
+                          value={formatNpcItemRewardsInput(placement.interactionRewards)}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => {
+                              const parsed = parseNpcItemRewardsInput(event.target.value);
+                              return {
+                                ...entry,
+                                interactionRewards:
+                                  parsed.ok && parsed.rewards.length > 0 ? parsed.rewards : undefined,
+                              };
+                            })
+                          }
+                          placeholder="lume:5, field-bandage:1"
+                        />
+                      </label>
+                      <label>
+                        Interaction Reward Once Flag
+                        <input
+                          list="admin-flag-options"
+                          value={placement.interactionRewardSetFlag ?? ''}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              interactionRewardSetFlag: event.target.value.trim() || undefined,
+                            }))
+                          }
+                          placeholder="optional"
                         />
                       </label>
                       <label>
@@ -7311,7 +8190,12 @@ function placeNpcFromTemplate(
     dialogueSetFlag: template.dialogueSetFlag,
     firstInteractionSetFlag: template.firstInteractionSetFlag,
     firstInteractBattle: template.firstInteractBattle,
+    interactBattleRepeatable: template.interactBattleRepeatable,
+    interactBattleDefeatedFlag: template.interactBattleDefeatedFlag,
+    battleRewards: template.battleRewards ? template.battleRewards.map((entry) => ({ ...entry })) : undefined,
     healer: template.healer,
+    interactionRewards: template.interactionRewards ? template.interactionRewards.map((entry) => ({ ...entry })) : undefined,
+    interactionRewardSetFlag: template.interactionRewardSetFlag,
     battleTeamIds: template.battleTeamIds ? [...template.battleTeamIds] : undefined,
     movement: template.movement
       ? {
@@ -7324,6 +8208,12 @@ function placeNpcFromTemplate(
           ...state,
           position: state.position ? { ...state.position } : undefined,
           dialogueLines: state.dialogueLines ? [...state.dialogueLines] : undefined,
+          firstInteractBattle: state.firstInteractBattle,
+          interactBattleRepeatable: state.interactBattleRepeatable,
+          interactBattleDefeatedFlag: state.interactBattleDefeatedFlag,
+          battleRewards: state.battleRewards ? state.battleRewards.map((entry) => ({ ...entry })) : undefined,
+          interactionRewards: state.interactionRewards ? state.interactionRewards.map((entry) => ({ ...entry })) : undefined,
+          interactionRewardSetFlag: state.interactionRewardSetFlag,
           battleTeamIds: state.battleTeamIds ? [...state.battleTeamIds] : undefined,
           movement: state.movement
             ? {
@@ -7335,18 +8225,36 @@ function placeNpcFromTemplate(
             ? state.movementGuards.map((guard) => ({
                 ...guard,
                 dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+                postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+                battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
+                battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
               }))
             : undefined,
-          interactionScript: state.interactionScript ? state.interactionScript.map((step) => ({ ...step })) : undefined,
+          interactionScript: state.interactionScript
+            ? state.interactionScript.map((step) => ({
+                ...step,
+                ...(step.type === 'dialogue' && Array.isArray(step.lines) ? { lines: [...step.lines] } : {}),
+                ...(step.type === 'move_path' && Array.isArray(step.directions) ? { directions: [...step.directions] } : {}),
+              }))
+            : undefined,
         }))
       : undefined,
     movementGuards: template.movementGuards
       ? template.movementGuards.map((guard) => ({
           ...guard,
           dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+          postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+          battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
+          battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
         }))
       : undefined,
-    interactionScript: template.interactionScript ? template.interactionScript.map((step) => ({ ...step })) : undefined,
+    interactionScript: template.interactionScript
+      ? template.interactionScript.map((step) => ({
+          ...step,
+          ...(step.type === 'dialogue' && Array.isArray(step.lines) ? { lines: [...step.lines] } : {}),
+          ...(step.type === 'move_path' && Array.isArray(step.directions) ? { directions: [...step.directions] } : {}),
+        }))
+      : undefined,
     idleAnimation: template.idleAnimation,
     moveAnimation: template.moveAnimation,
     sprite: resolvedSprite
@@ -7480,6 +8388,37 @@ function sanitizeIdentifier(value: string, fallback: string): string {
   return trimmed.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
 }
 
+function makeUniqueInteractionId(existing: InteractionDefinition[], baseId: string): string {
+  const normalizedBase = sanitizeIdentifier(baseId, 'interaction');
+  let suffix = 1;
+  while (suffix <= 10000) {
+    const candidate = suffix === 1 ? normalizedBase : `${normalizedBase}-${suffix}`;
+    if (!existing.some((interaction) => interaction.id === candidate)) {
+      return candidate;
+    }
+    suffix += 1;
+  }
+  return `${normalizedBase}-${Date.now()}`;
+}
+
+function normalizeInteractionKind(kind: InteractionDefinition['kind'] | undefined): 'dialogue' | 'heal_tile' | null {
+  if (typeof kind !== 'string' || !kind.trim()) {
+    return null;
+  }
+  const normalized = kind.trim().toLowerCase();
+  if (normalized === 'dialogue') {
+    return 'dialogue';
+  }
+  if (normalized === 'heal_tile' || normalized === 'heal') {
+    return 'heal_tile';
+  }
+  return null;
+}
+
+function isHealTileInteractionKind(kind: InteractionDefinition['kind'] | undefined): boolean {
+  return normalizeInteractionKind(kind) === 'heal_tile';
+}
+
 function makeUniqueWarpId(existing: WarpDefinition[], mapId: string): string {
   const safeMapId = mapId.replace(/[^a-z0-9]/gi, '_');
   let index = existing.length + 1;
@@ -7540,19 +8479,49 @@ function normalizeQuarter(value: number): number {
   return ((value % 4) + 4) % 4;
 }
 
+function rotateTileTransformValue(tileTransform: number, deltaQuarter: number): number {
+  const decoded = decodeTileTransform(tileTransform);
+  return encodeTileTransform(normalizeQuarter(decoded.rotationQuarter + deltaQuarter), decoded.mirrorHorizontal);
+}
+
+function mirrorTileTransformHorizontally(tileTransform: number): number {
+  const decoded = decodeTileTransform(tileTransform);
+  return encodeTileTransform(normalizeQuarter(-decoded.rotationQuarter), !decoded.mirrorHorizontal);
+}
+
+function mirrorTileTransformVertically(tileTransform: number): number {
+  const decoded = decodeTileTransform(tileTransform);
+  return encodeTileTransform(normalizeQuarter(2 - decoded.rotationQuarter), !decoded.mirrorHorizontal);
+}
+
 function inferTileYSortWithActors(name: string, width: number, height: number): boolean {
-  if (width > 1 || height > 1) {
-    return true;
-  }
-
   const normalizedName = name.trim().toLowerCase();
+  const flatKeywords = [
+    'grass',
+    'flower',
+    'path',
+    'sand',
+    'water',
+    'floor',
+    'ground',
+    'healer',
+    'hospital',
+    'counter',
+    'desk',
+    'table',
+    'bed',
+    'machine',
+    'terminal',
+  ];
   if (!normalizedName) {
-    return true;
+    return !(width > 1 || height > 1);
   }
-
-  const flatKeywords = ['grass', 'flower', 'path', 'sand', 'water', 'floor', 'ground'];
   if (flatKeywords.some((keyword) => normalizedName.includes(keyword))) {
     return false;
+  }
+
+  if (width > 1 || height > 1) {
+    return true;
   }
 
   const overheadKeywords = [
@@ -7584,8 +8553,18 @@ function transformStampCells(
   rotationQuarter: number,
   mirrorHorizontal: boolean,
   mirrorVertical: boolean,
-): Array<{ code: EditorTileCode; dx: number; dy: number; rotationQuarter: number }> {
+): Array<{ code: EditorTileCode; dx: number; dy: number; rotationQuarter: number; mirrorHorizontal: boolean }> {
   const quarter = normalizeQuarter(rotationQuarter);
+  const transformedOrientation = (() => {
+    let nextTransform = encodeTileTransform(quarter, false);
+    if (mirrorHorizontal) {
+      nextTransform = mirrorTileTransformHorizontally(nextTransform);
+    }
+    if (mirrorVertical) {
+      nextTransform = mirrorTileTransformVertically(nextTransform);
+    }
+    return decodeTileTransform(nextTransform);
+  })();
 
   return tile.cells.map((cell) => {
     const mirroredX = mirrorHorizontal ? tile.width - 1 - cell.dx : cell.dx;
@@ -7597,28 +8576,32 @@ function transformStampCells(
           code: cell.code,
           dx: tile.height - 1 - mirroredY,
           dy: mirroredX,
-          rotationQuarter: 1,
+          rotationQuarter: transformedOrientation.rotationQuarter,
+          mirrorHorizontal: transformedOrientation.mirrorHorizontal,
         };
       case 2:
         return {
           code: cell.code,
           dx: tile.width - 1 - mirroredX,
           dy: tile.height - 1 - mirroredY,
-          rotationQuarter: 2,
+          rotationQuarter: transformedOrientation.rotationQuarter,
+          mirrorHorizontal: transformedOrientation.mirrorHorizontal,
         };
       case 3:
         return {
           code: cell.code,
           dx: mirroredY,
           dy: tile.width - 1 - mirroredX,
-          rotationQuarter: 3,
+          rotationQuarter: transformedOrientation.rotationQuarter,
+          mirrorHorizontal: transformedOrientation.mirrorHorizontal,
         };
       default:
         return {
           code: cell.code,
           dx: mirroredX,
           dy: mirroredY,
-          rotationQuarter: 0,
+          rotationQuarter: transformedOrientation.rotationQuarter,
+          mirrorHorizontal: transformedOrientation.mirrorHorizontal,
         };
     }
   });
@@ -7839,6 +8822,12 @@ function buildWarnings(map: EditableMap, savedCustomTileCodes: Set<string>, know
     if (!isInsideBounds(interaction.position.x, interaction.position.y, width, height)) {
       warnings.push(
         `Interaction ${interaction.id} is out of bounds at (${interaction.position.x}, ${interaction.position.y}).`,
+      );
+    }
+    const normalizedKind = normalizeInteractionKind(interaction.kind);
+    if (interaction.kind && !normalizedKind) {
+      warnings.push(
+        `Interaction ${interaction.id} has unknown kind "${interaction.kind}". Use "dialogue" or "heal_tile".`,
       );
     }
   }
@@ -8258,7 +9247,13 @@ function sanitizeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateEntry[] 
       dialogueSetFlag?: unknown;
       firstInteractionSetFlag?: unknown;
       firstInteractBattle?: unknown;
+      interactBattleRepeatable?: unknown;
+      interactBattleDefeatedFlag?: unknown;
+      postDefeatSetFlag?: unknown;
+      battleRewards?: unknown;
       healer?: unknown;
+      interactionRewards?: unknown;
+      interactionRewardSetFlag?: unknown;
       battleTeamIds?: unknown;
       movementGuards?: unknown;
       storyStates?: unknown;
@@ -8288,6 +9283,12 @@ function sanitizeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateEntry[] 
       record.facing === 'up' || record.facing === 'down' || record.facing === 'left' || record.facing === 'right'
         ? record.facing
         : undefined;
+    const interactBattleTransitionFlag =
+      typeof record.interactBattleDefeatedFlag === 'string' && record.interactBattleDefeatedFlag.trim()
+        ? record.interactBattleDefeatedFlag.trim()
+        : typeof record.postDefeatSetFlag === 'string' && record.postDefeatSetFlag.trim()
+          ? record.postDefeatSetFlag.trim()
+          : undefined;
 
     characters.push({
       id: typeof record.id === 'string' && record.id.trim() ? record.id : `npc-character-${Date.now()}`,
@@ -8313,7 +9314,16 @@ function sanitizeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateEntry[] 
           ? record.firstInteractionSetFlag.trim()
           : undefined,
       firstInteractBattle: typeof record.firstInteractBattle === 'boolean' ? record.firstInteractBattle : undefined,
+      interactBattleRepeatable:
+        typeof record.interactBattleRepeatable === 'boolean' ? record.interactBattleRepeatable : undefined,
+      interactBattleDefeatedFlag: interactBattleTransitionFlag,
+      battleRewards: sanitizeNpcItemRewards(record.battleRewards),
       healer: typeof record.healer === 'boolean' ? record.healer : undefined,
+      interactionRewards: sanitizeNpcItemRewards(record.interactionRewards),
+      interactionRewardSetFlag:
+        typeof record.interactionRewardSetFlag === 'string' && record.interactionRewardSetFlag.trim()
+          ? record.interactionRewardSetFlag.trim()
+          : undefined,
       battleTeamIds: battleTeamIds && battleTeamIds.length > 0 ? battleTeamIds : undefined,
       movementGuards: sanitizeNpcMovementGuards(record.movementGuards),
       storyStates: compactCharacterPlacementOrder(sanitizeNpcStoryStates(record.storyStates) ?? []),
@@ -8379,6 +9389,12 @@ function sanitizeNpcStoryStates(raw: unknown): NpcStoryStateDefinition[] | undef
           .filter((teamId): teamId is string => typeof teamId === 'string' && teamId.trim().length > 0)
           .map((teamId) => teamId.trim())
       : undefined;
+    const interactBattleTransitionFlag =
+      typeof record.interactBattleDefeatedFlag === 'string' && record.interactBattleDefeatedFlag.trim()
+        ? record.interactBattleDefeatedFlag.trim()
+        : typeof record.postDefeatSetFlag === 'string' && record.postDefeatSetFlag.trim()
+          ? record.postDefeatSetFlag.trim()
+          : undefined;
 
     const state: NpcStoryStateDefinition = {
       id: typeof record.id === 'string' && record.id.trim() ? record.id.trim() : undefined,
@@ -8403,7 +9419,16 @@ function sanitizeNpcStoryStates(raw: unknown): NpcStoryStateDefinition[] | undef
           ? record.firstInteractionSetFlag.trim()
           : undefined,
       firstInteractBattle: typeof record.firstInteractBattle === 'boolean' ? record.firstInteractBattle : undefined,
+      interactBattleRepeatable:
+        typeof record.interactBattleRepeatable === 'boolean' ? record.interactBattleRepeatable : undefined,
+      interactBattleDefeatedFlag: interactBattleTransitionFlag,
+      battleRewards: sanitizeNpcItemRewards(record.battleRewards),
       healer: typeof record.healer === 'boolean' ? record.healer : undefined,
+      interactionRewards: sanitizeNpcItemRewards(record.interactionRewards),
+      interactionRewardSetFlag:
+        typeof record.interactionRewardSetFlag === 'string' && record.interactionRewardSetFlag.trim()
+          ? record.interactionRewardSetFlag.trim()
+          : undefined,
       battleTeamIds: battleTeamIds && battleTeamIds.length > 0 ? battleTeamIds : undefined,
       movement: sanitizeNpcMovement(record.movement),
       movementGuards: sanitizeNpcMovementGuards(record.movementGuards),
@@ -8462,6 +9487,12 @@ function sanitizeNpcMovementGuards(raw: unknown): NpcMovementGuardDefinition[] |
     if (!hasTarget) {
       continue;
     }
+    const guardDefeatTransitionFlag =
+      typeof record.defeatedFlag === 'string' && record.defeatedFlag.trim()
+        ? record.defeatedFlag.trim()
+        : typeof record.postDefeatSetFlag === 'string' && record.postDefeatSetFlag.trim()
+          ? record.postDefeatSetFlag.trim()
+          : undefined;
     guards.push({
       id: typeof record.id === 'string' && record.id.trim() ? record.id.trim() : undefined,
       requiresFlag:
@@ -8484,8 +9515,14 @@ function sanitizeNpcMovementGuards(raw: unknown): NpcMovementGuardDefinition[] |
             .map((line) => line.trim())
         : undefined,
       setFlag: typeof record.setFlag === 'string' && record.setFlag.trim() ? record.setFlag.trim() : undefined,
-      defeatedFlag:
-        typeof record.defeatedFlag === 'string' && record.defeatedFlag.trim() ? record.defeatedFlag.trim() : undefined,
+      defeatedFlag: guardDefeatTransitionFlag,
+      battleTeamIds: Array.isArray(record.battleTeamIds)
+        ? record.battleTeamIds
+            .filter((teamId): teamId is string => typeof teamId === 'string' && teamId.trim().length > 0)
+            .map((teamId) => teamId.trim())
+        : undefined,
+      battleRewards: sanitizeNpcItemRewards(record.battleRewards),
+      battleRepeatable: typeof record.battleRepeatable === 'boolean' ? record.battleRepeatable : undefined,
       postDuelDialogueSpeaker:
         typeof record.postDuelDialogueSpeaker === 'string' && record.postDuelDialogueSpeaker.trim()
           ? record.postDuelDialogueSpeaker.trim()
@@ -8587,8 +9624,56 @@ function sanitizeNpcInteractionScript(raw: unknown): NpcInteractionActionDefinit
       });
       continue;
     }
+    if (type === 'give_item') {
+      const itemId = typeof record.itemId === 'string' ? record.itemId.trim() : '';
+      const quantity =
+        typeof record.quantity === 'number' && Number.isFinite(record.quantity)
+          ? Math.max(0, Math.floor(record.quantity))
+          : 0;
+      if (!itemId || quantity <= 0) {
+        continue;
+      }
+      actions.push({
+        type: 'give_item',
+        itemId,
+        quantity,
+        setFlag: typeof record.setFlag === 'string' && record.setFlag.trim() ? record.setFlag.trim() : undefined,
+        message: typeof record.message === 'string' && record.message.trim() ? record.message.trim() : undefined,
+      });
+      continue;
+    }
   }
   return actions.length > 0 ? actions : undefined;
+}
+
+function sanitizeNpcItemRewards(raw: unknown): NpcItemRewardDefinition[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const rewards: NpcItemRewardDefinition[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const itemId = typeof record.itemId === 'string' ? record.itemId.trim() : '';
+    const quantity =
+      typeof record.quantity === 'number' && Number.isFinite(record.quantity)
+        ? Math.max(0, Math.floor(record.quantity))
+        : 0;
+    if (!itemId || quantity <= 0) {
+      continue;
+    }
+    rewards.push({ itemId, quantity });
+  }
+  if (rewards.length === 0) {
+    return undefined;
+  }
+  const merged = new Map<string, number>();
+  for (const reward of rewards) {
+    merged.set(reward.itemId, (merged.get(reward.itemId) ?? 0) + reward.quantity);
+  }
+  return [...merged.entries()].map(([itemId, quantity]) => ({ itemId, quantity }));
 }
 
 function parseNpcInteractionScriptInput(
@@ -8618,6 +9703,57 @@ function parseStringList(value: string): string[] | undefined {
   return entries.length > 0 ? entries : undefined;
 }
 
+function parseNpcItemRewardsInput(
+  value: string,
+): { ok: true; rewards: NpcItemRewardDefinition[] } | { ok: false; error: string } {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return { ok: true, rewards: [] };
+  }
+  const entries = trimmed
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  const merged = new Map<string, number>();
+  for (const entry of entries) {
+    const [itemIdRaw, quantityRaw] = entry.split(':');
+    const itemId = (itemIdRaw ?? '').trim();
+    const quantityText = (quantityRaw ?? '').trim();
+    const quantity = quantityText ? Number.parseInt(quantityText, 10) : 1;
+    if (!itemId) {
+      return { ok: false, error: `Invalid reward entry "${entry}". Use item-id:quantity format.` };
+    }
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      return { ok: false, error: `Invalid quantity for "${itemId}". Quantity must be a positive integer.` };
+    }
+    merged.set(itemId, (merged.get(itemId) ?? 0) + Math.floor(quantity));
+  }
+  return {
+    ok: true,
+    rewards: [...merged.entries()].map(([itemId, quantity]) => ({
+      itemId,
+      quantity,
+    })),
+  };
+}
+
+function formatNpcItemRewardsInput(rewards: NpcItemRewardDefinition[] | undefined): string {
+  if (!Array.isArray(rewards) || rewards.length === 0) {
+    return '';
+  }
+  return rewards
+    .map((entry) => {
+      const itemId = typeof entry.itemId === 'string' ? entry.itemId.trim() : '';
+      const quantity =
+        typeof entry.quantity === 'number' && Number.isFinite(entry.quantity)
+          ? Math.max(1, Math.floor(entry.quantity))
+          : 1;
+      return itemId ? `${itemId}:${quantity}` : '';
+    })
+    .filter((entry) => entry.length > 0)
+    .join(', ');
+}
+
 function toEditorNpcMovementType(movementType: NpcMovementDefinition['type'] | undefined): EditorNpcMovementType {
   if (movementType === 'static-turning') {
     return 'static-turning';
@@ -8643,6 +9779,8 @@ function compactCharacterPlacementOrder(states: NpcStoryStateDefinition[]): NpcS
     mapId: typeof state.mapId === 'string' ? state.mapId.trim() : '',
     position: state.position ? { ...state.position } : undefined,
     dialogueLines: state.dialogueLines ? [...state.dialogueLines] : undefined,
+    battleRewards: state.battleRewards ? state.battleRewards.map((entry) => ({ ...entry })) : undefined,
+    interactionRewards: state.interactionRewards ? state.interactionRewards.map((entry) => ({ ...entry })) : undefined,
     battleTeamIds: state.battleTeamIds ? [...state.battleTeamIds] : undefined,
     movement: state.movement
       ? {
@@ -8654,9 +9792,18 @@ function compactCharacterPlacementOrder(states: NpcStoryStateDefinition[]): NpcS
       ? state.movementGuards.map((guard) => ({
           ...guard,
           dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+          postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+          battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
+          battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
         }))
       : undefined,
-    interactionScript: state.interactionScript ? state.interactionScript.map((entry) => ({ ...entry })) : undefined,
+    interactionScript: state.interactionScript
+      ? state.interactionScript.map((entry) => ({
+          ...entry,
+          ...(entry.type === 'dialogue' && Array.isArray(entry.lines) ? { lines: [...entry.lines] } : {}),
+          ...(entry.type === 'move_path' && Array.isArray(entry.directions) ? { directions: [...entry.directions] } : {}),
+        }))
+      : undefined,
   }));
 }
 

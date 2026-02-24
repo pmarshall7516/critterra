@@ -88,7 +88,7 @@ export function TitleScreen({ userEmail, hasSave, onLogout, onContinue, onNewGam
               <strong>Menu:</strong> Esc
             </p>
             <p>
-              <strong>Fullscreen:</strong> F (Esc exits)
+              <strong>Fullscreen:</strong> Y
             </p>
             <button type="button" className="secondary" onClick={() => setShowControls(false)}>
               Close

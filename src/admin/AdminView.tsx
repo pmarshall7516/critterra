@@ -8,6 +8,7 @@ import { MoveTool } from '@/admin/MoveTool';
 import { SkillEffectsTool } from '@/admin/SkillEffectsTool';
 import { ElementChartTool } from '@/admin/ElementChartTool';
 import { FlagsTool } from '@/admin/FlagsTool';
+import { ItemTool } from '@/admin/ItemTool';
 import { apiFetchJson } from '@/shared/apiClient';
 import { setAuthToken } from '@/shared/authStorage';
 
@@ -20,6 +21,7 @@ type AdminRoute =
   | 'player-sprite'
   | 'critters'
   | 'encounters'
+  | 'items'
   | 'flags'
   | 'moves'
   | 'skill-effects'
@@ -55,6 +57,7 @@ const ACTIVE_NAV_LINKS: AdminNavLink[] = [
   { id: 'player-sprite', label: 'Player Sprite', type: 'active' },
   { id: 'critters', label: 'Critters', type: 'active' },
   { id: 'encounters', label: 'Encounters', type: 'active' },
+  { id: 'items', label: 'Items', type: 'active' },
   { id: 'moves', label: 'Skills', type: 'active' },
   { id: 'skill-effects', label: 'Skill Effects', type: 'active' },
   { id: 'element-chart', label: 'Element Chart', type: 'active' },
@@ -89,6 +92,7 @@ function parseAdminRoute(pathname: string): AdminRoute {
     route === 'player-sprite' ||
     route === 'critters' ||
     route === 'encounters' ||
+    route === 'items' ||
     route === 'flags' ||
     route === 'moves' ||
     route === 'skill-effects' ||
@@ -209,6 +213,9 @@ export function AdminView({ gameHref = '/' }: AdminViewProps) {
     if (activeRoute === 'encounters') {
       return 'Encounter Tables';
     }
+    if (activeRoute === 'items') {
+      return 'Item Catalog';
+    }
     if (activeRoute === 'moves') {
       return 'Skills';
     }
@@ -325,6 +332,7 @@ export function AdminView({ gameHref = '/' }: AdminViewProps) {
           {activeRoute === 'player-sprite' && <PlayerSpriteTool />}
           {activeRoute === 'critters' && <CritterTool />}
           {activeRoute === 'encounters' && <EncounterTool />}
+          {activeRoute === 'items' && <ItemTool />}
           {activeRoute === 'moves' && <MoveTool />}
           {activeRoute === 'skill-effects' && <SkillEffectsTool />}
           {activeRoute === 'element-chart' && <ElementChartTool />}

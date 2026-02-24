@@ -203,6 +203,50 @@ export const darkForestMap = createMap({
         }
       ],
       requireInteract: false
+    },
+    {
+      id: 'dark_forest_warp_2',
+      to: {
+        x: 1,
+        y: 17
+      },
+      from: {
+        x: 34,
+        y: 17
+      },
+      label: 'To Germania',
+      toMapId: 'germania',
+      toFacing: 'right',
+      toPositions: [
+        {
+          x: 1,
+          y: 17
+        },
+        {
+          x: 1,
+          y: 18
+        },
+        {
+          x: 1,
+          y: 19
+        }
+      ],
+      fromPositions: [
+        {
+          x: 34,
+          y: 17
+        },
+        {
+          x: 34,
+          y: 18
+        },
+        {
+          x: 34,
+          y: 19
+        }
+      ],
+      requiredFacing: 'right',
+      requireInteract: false
     }
   ],
   encounterGroups: [

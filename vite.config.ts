@@ -146,6 +146,10 @@ interface SaveEncounterLibraryRequestPayload {
   encounterTables?: unknown;
 }
 
+interface SaveItemsRequestPayload {
+  items?: unknown;
+}
+
 interface SaveSkillsRequestPayload {
   critterSkills?: unknown;
 }
@@ -684,8 +688,8 @@ function normalizeRotationRow(rawRow: string, width: number, layerId: string, ro
   let normalized = '';
   for (const char of rawRow) {
     const parsed = Number.parseInt(char, 10);
-    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 3) {
-      throw new Error(`Layer "${layerId}" rotation "${char}" at row ${rowIndex} must be 0-3.`);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 7) {
+      throw new Error(`Layer "${layerId}" rotation "${char}" at row ${rowIndex} must be 0-7.`);
     }
     normalized += String(parsed);
   }
@@ -897,7 +901,7 @@ function buildMapFileSource(map: EditableMapPayload): { source: string; constNam
         if (layer.collision === false) {
           layerPayload.collision = false;
         }
-        if (layer.rotations.some((row) => /[1-3]/.test(row))) {
+        if (layer.rotations.some((row) => /[1-7]/.test(row))) {
           layerPayload.rotations = layer.rotations;
         }
         if (layer.collisionEdges.some((row) => /[1-9a-f]/i.test(row))) {
@@ -941,7 +945,7 @@ function shouldSerializeAsLegacyTiles(map: EditableMapPayload): boolean {
     return false;
   }
   return (
-    !layer.rotations.some((row) => /[1-3]/.test(row)) &&
+    !layer.rotations.some((row) => /[1-7]/.test(row)) &&
     !layer.collisionEdges.some((row) => /[1-9a-f]/i.test(row))
   );
 }
@@ -1090,7 +1094,7 @@ function parseSavedPaintTiles(raw: unknown): SavedPaintTilePayload[] {
   return parsed;
 }
 
-const CRITTER_ELEMENT_OPTIONS = new Set(['bloom', 'ember', 'tide', 'gust', 'stone', 'spark', 'shade']);
+const CRITTER_ELEMENT_OPTIONS = new Set(['bloom', 'ember', 'tide', 'gust', 'stone', 'spark', 'shade', 'normal']);
 const CRITTER_RARITY_OPTIONS = new Set(['common', 'uncommon', 'rare', 'legendary']);
 const CRITTER_ABILITY_KIND_OPTIONS = new Set(['passive', 'active']);
 const CRITTER_MISSION_TYPE_OPTIONS = new Set(['opposing_knockouts', 'ascension', 'story_flag']);
@@ -1457,7 +1461,7 @@ function parseEncounterLibrary(
 
     const entries = parseEncounterEntries(record.entries, { strictUnique: strictUnique || strictEntries });
     if (strictEntries && entries.length === 0) {
-      throw new Error(`Encounter table "${id}" must include at least one critter entry.`);
+      throw new Error(`Encounter table "${id}" must include at least one encounter entry.`);
     }
     if (strictWeights) {
       const totalWeight = entries.reduce((sum, tableEntry) => sum + Number(tableEntry.weight ?? 0), 0);
@@ -1477,13 +1481,11 @@ function parseEncounterLibrary(
 
 function parseEncounterEntries(
   raw: unknown,
-  options?: { strictUnique?: boolean },
+  _options?: { strictUnique?: boolean },
 ): Array<Record<string, unknown>> {
   if (!Array.isArray(raw)) {
     return [];
   }
-  const strictUnique = Boolean(options?.strictUnique);
-  const seenCritterIds = new Set<number>();
   const parsed: Array<Record<string, unknown>> = [];
 
   for (let index = 0; index < raw.length; index += 1) {
@@ -1492,23 +1494,38 @@ function parseEncounterEntries(
       continue;
     }
     const record = entry as Record<string, unknown>;
+    const weight = typeof record.weight === 'number' && Number.isFinite(record.weight) ? record.weight : 0;
+    const normalizedWeight = Math.round(Math.max(0, Math.min(1, weight)) * 1000000) / 1000000;
+    const kindRaw = typeof record.kind === 'string' ? record.kind.trim().toLowerCase() : '';
+    const isItemEntry = kindRaw === 'item' || (kindRaw === '' && typeof record.itemId === 'string');
+    if (isItemEntry) {
+      const itemId = sanitizeItemIdentifier(record.itemId);
+      if (!itemId) {
+        continue;
+      }
+      const [minAmount, maxAmount] = parseEncounterAmountRange(
+        record.minAmount ?? record.minQty ?? record.minQuantity ?? record.minLevel,
+        record.maxAmount ?? record.maxQty ?? record.maxQuantity ?? record.maxLevel,
+      );
+      parsed.push({
+        kind: 'item',
+        itemId,
+        weight: normalizedWeight,
+        minAmount,
+        maxAmount,
+      });
+      continue;
+    }
+
     const critterId = critterClampInt(record.critterId, 1, 999999, -1);
     if (critterId < 0) {
       continue;
     }
-    if (seenCritterIds.has(critterId)) {
-      if (strictUnique) {
-        throw new Error(`Critter #${critterId} cannot be added to the same encounter table twice.`);
-      }
-      continue;
-    }
-    seenCritterIds.add(critterId);
-
-    const weight = typeof record.weight === 'number' && Number.isFinite(record.weight) ? record.weight : 0;
     const [minLevel, maxLevel] = parseEncounterLevelRange(record.minLevel, record.maxLevel);
     parsed.push({
+      kind: 'critter',
       critterId,
-      weight: Math.round(Math.max(0, Math.min(1, weight)) * 1000000) / 1000000,
+      weight: normalizedWeight,
       minLevel,
       maxLevel,
     });
@@ -1531,6 +1548,178 @@ function parseEncounterLevelValue(raw: unknown): number | null {
     return null;
   }
   return critterClampInt(raw, 1, 99, 1);
+}
+
+function parseEncounterAmountRange(minRaw: unknown, maxRaw: unknown): [number | null, number | null] {
+  const minAmount = parseEncounterAmountValue(minRaw);
+  const maxAmount = parseEncounterAmountValue(maxRaw);
+  if (minAmount !== null && maxAmount !== null && minAmount > maxAmount) {
+    return [maxAmount, minAmount];
+  }
+  return [minAmount, maxAmount];
+}
+
+function parseEncounterAmountValue(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return null;
+  }
+  return critterClampInt(raw, 1, 9999, 1);
+}
+
+function sanitizeItemIdentifier(raw: unknown): string {
+  if (typeof raw !== 'string') {
+    return '';
+  }
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+/g, '')
+    .replace(/-+$/g, '');
+}
+
+const ITEM_EFFECT_TYPE_OPTIONS = new Set(['tool_action', 'equip_stub', 'heal_flat', 'heal_percent', 'other_stub']);
+const ITEM_DEFAULT_CATEGORIES = new Set(['tool', 'equipment', 'healing', 'material', 'other']);
+const DEFAULT_SEEDED_ITEMS: Array<Record<string, unknown>> = [
+  {
+    id: 'field-bandage',
+    name: 'Field Bandage',
+    category: 'healing',
+    description: 'Heals one squad critter by 20 HP.',
+    imageUrl: '',
+    misuseText: 'Choose an injured squad critter to use this.',
+    successText: '<Critter> was healed by X HP!',
+    effectType: 'heal_flat',
+    effectConfig: {
+      healAmount: 20,
+      curesStatus: false,
+    },
+    value: 20,
+    consumable: true,
+    maxStack: 99,
+    isActive: true,
+    starterGrantAmount: 3,
+  },
+];
+
+function parseItemCatalog(
+  raw: unknown,
+  options?: { strictUnique?: boolean },
+): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const strictUnique = Boolean(options?.strictUnique);
+  const seenIds = new Set<string>();
+  const parsed: Array<Record<string, unknown>> = [];
+  for (let index = 0; index < raw.length; index += 1) {
+    const item = parseItemDefinition(raw[index], index);
+    if (!item) {
+      continue;
+    }
+    const id = String(item.id);
+    if (seenIds.has(id)) {
+      if (strictUnique) {
+        throw new Error(`Duplicate item ID "${id}" is not allowed.`);
+      }
+      continue;
+    }
+    seenIds.add(id);
+    parsed.push(item);
+  }
+  return parsed;
+}
+
+function parseItemDefinition(raw: unknown, index: number): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const id = sanitizeIdentifier(typeof record.id === 'string' ? record.id : '', `item-${index + 1}`);
+  const name =
+    typeof record.name === 'string' && record.name.trim() ? record.name.trim().slice(0, 60) : `Item ${index + 1}`;
+  const categoryRaw = sanitizeIdentifier(typeof record.category === 'string' ? record.category : '', 'other');
+  const category = categoryRaw || 'other';
+  const effectTypeRaw = sanitizeIdentifier(typeof record.effectType === 'string' ? record.effectType : '', '');
+  const effectType = ITEM_EFFECT_TYPE_OPTIONS.has(effectTypeRaw)
+    ? effectTypeRaw
+    : category === 'tool'
+      ? 'tool_action'
+      : category === 'equipment'
+        ? 'equip_stub'
+        : category === 'healing'
+          ? 'heal_flat'
+          : 'other_stub';
+  const effectConfig =
+    record.effectConfig && typeof record.effectConfig === 'object' && !Array.isArray(record.effectConfig)
+      ? (record.effectConfig as Record<string, unknown>)
+      : {};
+  const normalizedEffectConfig = parseItemEffectConfig(effectType, effectConfig);
+  const explicitValue = typeof record.value === 'number' && Number.isFinite(record.value) ? record.value : undefined;
+  const derivedValue = deriveItemValueFromEffectConfig(effectType, normalizedEffectConfig);
+
+  return {
+    id,
+    name,
+    category: ITEM_DEFAULT_CATEGORIES.has(category) ? category : category || 'other',
+    description:
+      typeof record.description === 'string' && record.description.trim()
+        ? record.description.trim().slice(0, 300)
+        : '',
+    imageUrl: typeof record.imageUrl === 'string' ? record.imageUrl.trim().slice(0, 1200) : '',
+    misuseText:
+      typeof record.misuseText === 'string' && record.misuseText.trim()
+        ? record.misuseText.trim().slice(0, 160)
+        : 'That item cannot be used right now.',
+    successText:
+      typeof record.successText === 'string' && record.successText.trim()
+        ? record.successText.trim().slice(0, 200)
+        : typeof record.success_text === 'string' && record.success_text.trim()
+          ? record.success_text.trim().slice(0, 200)
+          : undefined,
+    effectType,
+    effectConfig: normalizedEffectConfig,
+    value: explicitValue ?? derivedValue,
+    consumable: typeof record.consumable === 'boolean' ? record.consumable : effectType.startsWith('heal_'),
+    maxStack: critterClampInt(record.maxStack, 1, 9999, 99),
+    isActive: typeof record.isActive === 'boolean' ? record.isActive : true,
+    starterGrantAmount: critterClampInt(record.starterGrantAmount, 0, 9999, 0),
+  };
+}
+
+function parseItemEffectConfig(effectType: string, rawConfig: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...rawConfig };
+  if (effectType === 'tool_action') {
+    const actionIdRaw = sanitizeIdentifier(typeof rawConfig.actionId === 'string' ? rawConfig.actionId : '', '');
+    if (actionIdRaw === 'fish') {
+      next.actionId = 'fishing';
+    } else if (actionIdRaw) {
+      next.actionId = actionIdRaw;
+    }
+    if (typeof rawConfig.power === 'number' && Number.isFinite(rawConfig.power)) {
+      next.power = Math.max(0, Math.min(1, rawConfig.power));
+    }
+  }
+  return next;
+}
+
+function deriveItemValueFromEffectConfig(effectType: string, effectConfig: Record<string, unknown>): number | undefined {
+  if (effectType === 'heal_flat') {
+    const healAmount = effectConfig.healAmount;
+    if (typeof healAmount === 'number' && Number.isFinite(healAmount)) {
+      return Math.max(1, Math.floor(healAmount));
+    }
+    return undefined;
+  }
+  if (effectType === 'tool_action') {
+    const power = effectConfig.power;
+    if (typeof power === 'number' && Number.isFinite(power)) {
+      return Math.max(0, Math.min(1, power));
+    }
+    return undefined;
+  }
+  return undefined;
 }
 
 function parseMapEncounterGroups(raw: unknown, mapWidth: number, mapHeight: number): Array<Record<string, unknown>> {
@@ -1678,48 +1867,23 @@ function writeCustomTiles(
       width,
       height,
       ySortWithActors,
+      ...(typeof tile.tilesetUrl === 'string' && tile.tilesetUrl.trim()
+        ? { tilesetUrl: tile.tilesetUrl.trim() }
+        : {}),
+      ...(typeof tile.tilePixelWidth === 'number' && Number.isFinite(tile.tilePixelWidth)
+        ? { tilePixelWidth: Math.max(1, Math.floor(tile.tilePixelWidth)) }
+        : {}),
+      ...(typeof tile.tilePixelHeight === 'number' && Number.isFinite(tile.tilePixelHeight)
+        ? { tilePixelHeight: Math.max(1, Math.floor(tile.tilePixelHeight)) }
+        : {}),
       cells,
     };
   });
 
-  const customEntries = new Map<string, { label: string; atlasIndex: number; ySortWithActors: boolean }>();
-  for (const tile of savedPaintTiles) {
-    const tileName =
-      typeof tile.name === 'string' && tile.name.trim() ? tile.name.trim() : 'Custom Tile';
-    const tileWidth = typeof tile.width === 'number' ? Math.max(1, Math.floor(tile.width)) : 1;
-    const tileHeight = typeof tile.height === 'number' ? Math.max(1, Math.floor(tile.height)) : 1;
-    const tileYSortWithActors =
-      typeof tile.ySortWithActors === 'boolean'
-        ? tile.ySortWithActors
-        : inferTileYSortWithActors(tileName, tileWidth, tileHeight);
-    const cells = Array.isArray(tile.cells) ? tile.cells : [];
-    for (const cell of cells) {
-      const code = typeof cell.code === 'string' ? cell.code.trim().slice(0, 1) : '';
-      const atlasIndex = typeof cell.atlasIndex === 'number' ? Math.max(0, Math.floor(cell.atlasIndex)) : 0;
-      if (!code || BASE_TILE_CODES.has(code) || customEntries.has(code)) {
-        continue;
-      }
-      customEntries.set(code, {
-        label: `${tileName} ${code}`.slice(0, 60),
-        atlasIndex,
-        ySortWithActors: tileYSortWithActors,
-      });
-    }
-  }
-  for (const row of getMapTileRows(map)) {
-    for (const rawCode of row) {
-      const code = rawCode.slice(0, 1);
-      if (!code || BASE_TILE_CODES.has(code) || customEntries.has(code)) {
-        continue;
-      }
-      customEntries.set(code, {
-        label: `Map Tile ${code}`,
-        atlasIndex: 0,
-        ySortWithActors: true,
-      });
-    }
-  }
-
+  const customEntries = new Map<
+    string,
+    { label: string; atlasIndex: number; ySortWithActors: boolean; tilesetUrl?: string; tilePixelWidth?: number; tilePixelHeight?: number }
+  >();
   const safeTileset =
     tileset &&
     typeof tileset.url === 'string' &&
@@ -1737,6 +1901,55 @@ function writeCustomTiles(
           tileHeight: Math.floor(tileset.tilePixelHeight),
         }
       : null;
+  for (const tile of savedPaintTiles) {
+    const tileName =
+      typeof tile.name === 'string' && tile.name.trim() ? tile.name.trim() : 'Custom Tile';
+    const tileWidth = typeof tile.width === 'number' ? Math.max(1, Math.floor(tile.width)) : 1;
+    const tileHeight = typeof tile.height === 'number' ? Math.max(1, Math.floor(tile.height)) : 1;
+    const tileYSortWithActors =
+      typeof tile.ySortWithActors === 'boolean'
+        ? tile.ySortWithActors
+        : inferTileYSortWithActors(tileName, tileWidth, tileHeight);
+    const tilesetUrl = typeof tile.tilesetUrl === 'string' && tile.tilesetUrl.trim() ? tile.tilesetUrl.trim() : undefined;
+    const tilePixelWidth = typeof tile.tilePixelWidth === 'number' && Number.isFinite(tile.tilePixelWidth) ? Math.max(1, Math.floor(tile.tilePixelWidth)) : undefined;
+    const tilePixelHeight = typeof tile.tilePixelHeight === 'number' && Number.isFinite(tile.tilePixelHeight) ? Math.max(1, Math.floor(tile.tilePixelHeight)) : undefined;
+    const cells = Array.isArray(tile.cells) ? tile.cells : [];
+    for (const cell of cells) {
+      const code = typeof cell.code === 'string' ? cell.code.trim().slice(0, 1) : '';
+      const atlasIndex = typeof cell.atlasIndex === 'number' ? Math.max(0, Math.floor(cell.atlasIndex)) : 0;
+      if (!code || BASE_TILE_CODES.has(code) || customEntries.has(code)) {
+        continue;
+      }
+      customEntries.set(code, {
+        label: `${tileName} ${code}`.slice(0, 60),
+        atlasIndex,
+        ySortWithActors: tileYSortWithActors,
+        ...(tilesetUrl !== undefined && { tilesetUrl }),
+        ...(tilePixelWidth !== undefined && { tilePixelWidth }),
+        ...(tilePixelHeight !== undefined && { tilePixelHeight }),
+      });
+    }
+  }
+  for (const row of getMapTileRows(map)) {
+    for (const rawCode of row) {
+      const code = rawCode.slice(0, 1);
+      if (!code || BASE_TILE_CODES.has(code) || customEntries.has(code)) {
+        continue;
+      }
+      customEntries.set(code, {
+        label: `Map Tile ${code}`,
+        atlasIndex: 0,
+        ySortWithActors: true,
+        ...(safeTileset
+          ? {
+              tilesetUrl: safeTileset.url,
+              tilePixelWidth: safeTileset.tileWidth,
+              tilePixelHeight: safeTileset.tileHeight,
+            }
+          : {}),
+      });
+    }
+  }
 
   const entries = Array.from(customEntries.entries()).sort(([a], [b]) => a.localeCompare(b));
   const customDefinitions: Record<string, unknown> = {};
@@ -1750,6 +1963,9 @@ function writeCustomTiles(
       height: 0,
       atlasIndex: entry.atlasIndex,
       ySortWithActors: entry.ySortWithActors,
+      ...(entry.tilesetUrl !== undefined && { tilesetUrl: entry.tilesetUrl }),
+      ...(entry.tilePixelWidth !== undefined && { tilePixelWidth: entry.tilePixelWidth }),
+      ...(entry.tilePixelHeight !== undefined && { tilePixelHeight: entry.tilePixelHeight }),
     };
   }
 
@@ -1780,6 +1996,9 @@ function writeCustomTiles(
     '  width: number;',
     '  height: number;',
     '  ySortWithActors: boolean;',
+    '  tilesetUrl?: string;',
+    '  tilePixelWidth?: number;',
+    '  tilePixelHeight?: number;',
     '  cells: SavedPaintTileDatabaseCell[];',
     '}',
     '',
@@ -2182,6 +2401,7 @@ const DEFAULT_SYSTEM_FLAGS = [
   'starter-selection-done',
   'demo-done',
   'jacob-left-house',
+  'jacob-battle-won',
 ] as const;
 const FLAG_REFERENCE_KEYS = new Set([
   'requiresFlag',
@@ -2189,6 +2409,9 @@ const FLAG_REFERENCE_KEYS = new Set([
   'setFlag',
   'dialogueSetFlag',
   'firstInteractionSetFlag',
+  'interactBattleDefeatedFlag',
+  'postDefeatSetFlag',
+  'interactionRewardSetFlag',
   'storyFlagId',
   'flag',
   'defeatedFlag',
@@ -2202,6 +2425,354 @@ const LEGACY_CATALOG_TABLES = [
   'critter_libraries',
   'encounter_libraries',
 ] as const;
+const JACOB_BATTLE_WIN_FLAG_ID = 'jacob-battle-won';
+const DEFAULT_BATTLE_REWARD_ITEM_ID = 'lume';
+const DEFAULT_BATTLE_REWARD_QUANTITY = 25;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function sanitizeBattleTeamIdsForMigration(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const teams = raw
+    .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    .map((entry) => entry.trim());
+  return teams.length > 0 ? teams : undefined;
+}
+
+function sanitizeBattleRewardsForMigration(raw: unknown): Array<{ itemId: string; quantity: number }> | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const merged = new Map<string, number>();
+  for (const entry of raw) {
+    if (!isPlainRecord(entry)) {
+      continue;
+    }
+    const itemId = sanitizeIdentifier(typeof entry.itemId === 'string' ? entry.itemId : '', '');
+    const quantity =
+      typeof entry.quantity === 'number' && Number.isFinite(entry.quantity) ? Math.max(0, Math.floor(entry.quantity)) : 0;
+    if (!itemId || quantity <= 0) {
+      continue;
+    }
+    merged.set(itemId, (merged.get(itemId) ?? 0) + quantity);
+  }
+  if (merged.size === 0) {
+    return undefined;
+  }
+  return Array.from(merged.entries()).map(([itemId, quantity]) => ({ itemId, quantity }));
+}
+
+function migrateMovementGuardsForBattleCompatibility(
+  raw: unknown,
+  options?: {
+    fallbackBattleTeamIds?: string[];
+    fallbackBattleRewards?: Array<{ itemId: string; quantity: number }>;
+  },
+): { guards: unknown; changed: boolean } {
+  if (!Array.isArray(raw)) {
+    return { guards: raw, changed: false };
+  }
+  let changed = false;
+  const guards = raw.map((entry) => {
+    if (!isPlainRecord(entry)) {
+      return entry;
+    }
+    const before = JSON.stringify(entry);
+    const next: Record<string, unknown> = { ...entry };
+    const explicitBattleTeams = sanitizeBattleTeamIdsForMigration(next.battleTeamIds);
+    const battleTeams = explicitBattleTeams ?? options?.fallbackBattleTeamIds;
+    if (battleTeams) {
+      if (explicitBattleTeams) {
+        next.battleTeamIds = explicitBattleTeams;
+      } else if (next.battleTeamIds !== undefined) {
+        delete next.battleTeamIds;
+      }
+    } else if (next.battleTeamIds !== undefined) {
+      delete next.battleTeamIds;
+    }
+    const explicitBattleRewards = sanitizeBattleRewardsForMigration(next.battleRewards);
+    const battleRewards = explicitBattleRewards ?? options?.fallbackBattleRewards;
+    if (battleRewards) {
+      if (explicitBattleRewards) {
+        next.battleRewards = explicitBattleRewards;
+      } else if (next.battleRewards !== undefined) {
+        delete next.battleRewards;
+      }
+    } else if (next.battleRewards !== undefined) {
+      delete next.battleRewards;
+    }
+    const defeatedFlag = sanitizeFlagId(next.defeatedFlag) || sanitizeFlagId(next.postDefeatSetFlag);
+    if (next.postDefeatSetFlag !== undefined) {
+      delete next.postDefeatSetFlag;
+    }
+    if (defeatedFlag) {
+      next.defeatedFlag = defeatedFlag;
+    } else if (next.defeatedFlag !== undefined) {
+      delete next.defeatedFlag;
+    }
+    if (battleTeams && battleTeams.length > 0) {
+      const normalizedRewards = sanitizeBattleRewardsForMigration(next.battleRewards);
+      if (!normalizedRewards || normalizedRewards.length === 0) {
+        next.battleRewards = [
+          { itemId: DEFAULT_BATTLE_REWARD_ITEM_ID, quantity: DEFAULT_BATTLE_REWARD_QUANTITY },
+        ];
+      }
+    }
+    const after = JSON.stringify(next);
+    if (after !== before) {
+      changed = true;
+    }
+    return next;
+  });
+  return { guards, changed };
+}
+
+function migrateBattleStateRecordForCompatibility(
+  rawState: unknown,
+  options: {
+    inheritedBattleTeamIds?: string[];
+  },
+): { state: unknown; changed: boolean; hasBattleTeams: boolean } {
+  if (!isPlainRecord(rawState)) {
+    return { state: rawState, changed: false, hasBattleTeams: false };
+  }
+  const before = JSON.stringify(rawState);
+  const next: Record<string, unknown> = { ...rawState };
+  let hasBattleTeams = false;
+
+  const battleTeamIds = sanitizeBattleTeamIdsForMigration(next.battleTeamIds) ?? options.inheritedBattleTeamIds;
+  if (battleTeamIds && battleTeamIds.length > 0) {
+    hasBattleTeams = true;
+    next.battleTeamIds = battleTeamIds;
+  } else if (next.battleTeamIds !== undefined) {
+    delete next.battleTeamIds;
+  }
+
+  if (next.firstInteractBattle === true) {
+    const defeatedFlag = sanitizeFlagId(next.interactBattleDefeatedFlag) || sanitizeFlagId(next.postDefeatSetFlag);
+    if (defeatedFlag) {
+      next.interactBattleDefeatedFlag = defeatedFlag;
+    } else if (next.interactBattleDefeatedFlag !== undefined) {
+      delete next.interactBattleDefeatedFlag;
+    }
+
+    const rewards = sanitizeBattleRewardsForMigration(next.battleRewards);
+    next.battleRewards =
+      rewards && rewards.length > 0
+        ? rewards
+        : [{ itemId: DEFAULT_BATTLE_REWARD_ITEM_ID, quantity: DEFAULT_BATTLE_REWARD_QUANTITY }];
+  } else {
+    const defeatedFlag = sanitizeFlagId(next.interactBattleDefeatedFlag);
+    if (defeatedFlag) {
+      next.interactBattleDefeatedFlag = defeatedFlag;
+    } else if (next.interactBattleDefeatedFlag !== undefined) {
+      delete next.interactBattleDefeatedFlag;
+    }
+    const rewards = sanitizeBattleRewardsForMigration(next.battleRewards);
+    if (rewards) {
+      next.battleRewards = rewards;
+    } else if (next.battleRewards !== undefined) {
+      delete next.battleRewards;
+    }
+  }
+
+  const postDefeatSetFlag = sanitizeFlagId(next.postDefeatSetFlag);
+  if (postDefeatSetFlag && next.interactBattleDefeatedFlag === undefined) {
+    next.interactBattleDefeatedFlag = postDefeatSetFlag;
+  }
+  if (next.postDefeatSetFlag !== undefined) {
+    delete next.postDefeatSetFlag;
+  }
+
+  const interactionRewardSetFlag = sanitizeFlagId(next.interactionRewardSetFlag);
+  if (interactionRewardSetFlag) {
+    next.interactionRewardSetFlag = interactionRewardSetFlag;
+  } else if (next.interactionRewardSetFlag !== undefined) {
+    delete next.interactionRewardSetFlag;
+  }
+
+  const interactionRewards = sanitizeBattleRewardsForMigration(next.interactionRewards);
+  if (interactionRewards) {
+    next.interactionRewards = interactionRewards;
+  } else if (next.interactionRewards !== undefined) {
+    delete next.interactionRewards;
+  }
+
+  const movementGuards = migrateMovementGuardsForBattleCompatibility(next.movementGuards, {
+    fallbackBattleTeamIds: battleTeamIds,
+    fallbackBattleRewards: sanitizeBattleRewardsForMigration(next.battleRewards),
+  });
+  if (movementGuards.changed) {
+    next.movementGuards = movementGuards.guards;
+  }
+
+  const after = JSON.stringify(next);
+  return {
+    state: next,
+    changed: after !== before,
+    hasBattleTeams,
+  };
+}
+
+function migrateNpcRecordForBattleCompatibility(
+  rawRecord: unknown,
+  seed: string,
+): { record: unknown; changed: boolean } {
+  if (!isPlainRecord(rawRecord)) {
+    return { record: rawRecord, changed: false };
+  }
+  const before = JSON.stringify(rawRecord);
+  const next: Record<string, unknown> = { ...rawRecord };
+  const characterId = sanitizeIdentifier(typeof next.id === 'string' ? next.id : '', seed) || seed;
+
+  const baseBattleTeams = sanitizeBattleTeamIdsForMigration(next.battleTeamIds);
+  if (baseBattleTeams) {
+    next.battleTeamIds = baseBattleTeams;
+  } else if (next.battleTeamIds !== undefined) {
+    delete next.battleTeamIds;
+  }
+
+  if (next.firstInteractBattle === true) {
+    const defeatedFlag = sanitizeFlagId(next.interactBattleDefeatedFlag) || sanitizeFlagId(next.postDefeatSetFlag);
+    if (defeatedFlag) {
+      next.interactBattleDefeatedFlag = defeatedFlag;
+    } else if (next.interactBattleDefeatedFlag !== undefined) {
+      delete next.interactBattleDefeatedFlag;
+    }
+    const rewards = sanitizeBattleRewardsForMigration(next.battleRewards);
+    next.battleRewards =
+      rewards && rewards.length > 0
+        ? rewards
+        : [{ itemId: DEFAULT_BATTLE_REWARD_ITEM_ID, quantity: DEFAULT_BATTLE_REWARD_QUANTITY }];
+  } else {
+    const defeatedFlag = sanitizeFlagId(next.interactBattleDefeatedFlag);
+    if (defeatedFlag) {
+      next.interactBattleDefeatedFlag = defeatedFlag;
+    }
+    const rewards = sanitizeBattleRewardsForMigration(next.battleRewards);
+    if (rewards) {
+      next.battleRewards = rewards;
+    }
+  }
+
+  const storyStatesRaw = Array.isArray(next.storyStates) ? next.storyStates : [];
+  const migratedStates = storyStatesRaw.map((state) => {
+    const migrated = migrateBattleStateRecordForCompatibility(state, {
+      inheritedBattleTeamIds: baseBattleTeams,
+    });
+    return migrated.state;
+  });
+  if (storyStatesRaw.length > 0) {
+    next.storyStates = migratedStates;
+  }
+
+  const postDefeatSetFlag = sanitizeFlagId(next.postDefeatSetFlag);
+  if (postDefeatSetFlag && next.interactBattleDefeatedFlag === undefined) {
+    next.interactBattleDefeatedFlag = postDefeatSetFlag;
+  }
+  if (next.postDefeatSetFlag !== undefined) {
+    delete next.postDefeatSetFlag;
+  }
+
+  const movementGuards = migrateMovementGuardsForBattleCompatibility(next.movementGuards, {
+    fallbackBattleTeamIds: baseBattleTeams,
+    fallbackBattleRewards: sanitizeBattleRewardsForMigration(next.battleRewards),
+  });
+  if (movementGuards.changed) {
+    next.movementGuards = movementGuards.guards;
+  }
+
+  const interactionRewardSetFlag = sanitizeFlagId(next.interactionRewardSetFlag);
+  if (interactionRewardSetFlag) {
+    next.interactionRewardSetFlag = interactionRewardSetFlag;
+  } else if (next.interactionRewardSetFlag !== undefined) {
+    delete next.interactionRewardSetFlag;
+  }
+
+  const interactionRewards = sanitizeBattleRewardsForMigration(next.interactionRewards);
+  if (interactionRewards) {
+    next.interactionRewards = interactionRewards;
+  } else if (next.interactionRewards !== undefined) {
+    delete next.interactionRewards;
+  }
+
+  const after = JSON.stringify(next);
+  return { record: next, changed: after !== before };
+}
+
+function migrateNpcCharacterLibraryForBattleCompatibility(raw: unknown): { characterLibrary: unknown[]; changed: boolean } {
+  if (!Array.isArray(raw)) {
+    return { characterLibrary: [], changed: false };
+  }
+  let changed = false;
+  const characterLibrary = raw.map((entry, index) => {
+    const migrated = migrateNpcRecordForBattleCompatibility(entry, `npc-${index + 1}`);
+    if (migrated.changed) {
+      changed = true;
+    }
+    return migrated.record;
+  });
+  return { characterLibrary, changed };
+}
+
+function migrateMapsForBattleCompatibility(
+  rows: Array<{ map_id: string; map_data: unknown }>,
+): Array<{ mapId: string; mapData: unknown }> {
+  const updates: Array<{ mapId: string; mapData: unknown }> = [];
+  for (const row of rows) {
+    if (!isPlainRecord(row.map_data) || !Array.isArray(row.map_data.npcs)) {
+      continue;
+    }
+    const mapData = row.map_data as Record<string, unknown>;
+    const npcs = mapData.npcs as unknown[];
+    let changed = false;
+    const migratedNpcs = npcs.map((entry, index) => {
+      const migrated = migrateNpcRecordForBattleCompatibility(entry, `${row.map_id}-npc-${index + 1}`);
+      if (migrated.changed) {
+        changed = true;
+      }
+      return migrated.record;
+    });
+    if (!changed) {
+      continue;
+    }
+    updates.push({
+      mapId: row.map_id,
+      mapData: {
+        ...mapData,
+        npcs: migratedNpcs,
+      },
+    });
+  }
+  return updates;
+}
+
+function migrateSaveDataForBattleCompatibility(raw: unknown): { saveData: unknown; changed: boolean } {
+  if (!isPlainRecord(raw)) {
+    return { saveData: raw, changed: false };
+  }
+  const before = JSON.stringify(raw);
+  const next: Record<string, unknown> = { ...raw };
+  const progressTracking = isPlainRecord(next.progressTracking) ? { ...next.progressTracking } : {};
+  const mainStory = isPlainRecord(progressTracking.mainStory) ? { ...progressTracking.mainStory } : {};
+  const flags = isPlainRecord(mainStory.flags) ? { ...(mainStory.flags as Record<string, unknown>) } : {};
+
+  const demoDone = Boolean(flags['demo-done']);
+  const jacobLeftHouse = Boolean(flags['jacob-left-house']);
+  if ((demoDone || jacobLeftHouse) && !Boolean(flags[JACOB_BATTLE_WIN_FLAG_ID])) {
+    flags[JACOB_BATTLE_WIN_FLAG_ID] = true;
+  }
+
+  mainStory.flags = flags;
+  progressTracking.mainStory = mainStory;
+  next.progressTracking = progressTracking;
+  const after = JSON.stringify(next);
+  return { saveData: next, changed: after !== before };
+}
 
 function createSpawnMapPayload(): EditableMapPayload {
   const width = 11;
@@ -2706,6 +3277,14 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       );
     `);
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_items (
+        item_id TEXT PRIMARY KEY,
+        item_name TEXT NOT NULL,
+        item_data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS game_skill_catalog (
         skill_id TEXT PRIMARY KEY,
         skill_data JSONB NOT NULL,
@@ -2839,6 +3418,79 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         );
       }
 
+      const itemCountResult = await client.query('SELECT COUNT(*)::int AS count FROM game_items');
+      const itemCount = Number(itemCountResult.rows[0]?.count ?? 0);
+      if (itemCount === 0) {
+        const seededItems = parseItemCatalog(DEFAULT_SEEDED_ITEMS, { strictUnique: true });
+        for (const item of seededItems) {
+          const itemId = sanitizeIdentifier(typeof item.id === 'string' ? item.id : '', '');
+          const itemName = typeof item.name === 'string' ? item.name.trim() : '';
+          if (!itemId || !itemName) {
+            continue;
+          }
+          await client.query(
+            `
+              INSERT INTO game_items (item_id, item_name, item_data, updated_at)
+              VALUES ($1, $2, $3::jsonb, NOW())
+              ON CONFLICT (item_id)
+              DO UPDATE SET item_name = EXCLUDED.item_name, item_data = EXCLUDED.item_data, updated_at = NOW()
+            `,
+            [itemId, itemName, JSON.stringify(item)],
+          );
+        }
+      }
+
+      const npcCatalogResult = await client.query<{ character_library: unknown }>(
+        'SELECT character_library FROM game_npc_libraries WHERE catalog_key = $1',
+        [GLOBAL_CATALOG_KEY],
+      );
+      const migratedNpcCatalog = migrateNpcCharacterLibraryForBattleCompatibility(
+        npcCatalogResult.rows[0]?.character_library,
+      );
+      if (migratedNpcCatalog.changed) {
+        await client.query(
+          `
+            UPDATE game_npc_libraries
+            SET character_library = $2::jsonb, updated_at = NOW()
+            WHERE catalog_key = $1
+          `,
+          [GLOBAL_CATALOG_KEY, JSON.stringify(migratedNpcCatalog.characterLibrary)],
+        );
+      }
+
+      const mapRowsResult = await client.query<{ map_id: string; map_data: unknown }>(
+        'SELECT map_id, map_data FROM game_maps',
+      );
+      const migratedMaps = migrateMapsForBattleCompatibility(mapRowsResult.rows);
+      for (const migratedMap of migratedMaps) {
+        await client.query(
+          `
+            UPDATE game_maps
+            SET map_data = $2::jsonb, updated_at = NOW()
+            WHERE map_id = $1
+          `,
+          [migratedMap.mapId, JSON.stringify(migratedMap.mapData)],
+        );
+      }
+
+      const saveRowsResult = await client.query<{ user_id: string; save_data: unknown }>(
+        'SELECT user_id, save_data FROM user_saves',
+      );
+      for (const row of saveRowsResult.rows) {
+        const migratedSave = migrateSaveDataForBattleCompatibility(row.save_data);
+        if (!migratedSave.changed) {
+          continue;
+        }
+        await client.query(
+          `
+            UPDATE user_saves
+            SET save_data = $2::jsonb, updated_at = NOW()
+            WHERE user_id = $1
+          `,
+          [row.user_id, JSON.stringify(migratedSave.saveData)],
+        );
+      }
+
       await syncDiscoveredFlags(client);
 
       await client.query('COMMIT');
@@ -2920,6 +3572,45 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
             VALUES ($1, $2::jsonb, NOW())
           `,
           [tableId, JSON.stringify(table)],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
+  const readGlobalItemCatalog = async (): Promise<Array<Record<string, unknown>>> => {
+    if (!pool) {
+      return [];
+    }
+    const result = await pool.query('SELECT item_data FROM game_items ORDER BY item_id ASC');
+    return parseItemCatalog(result.rows.map((row) => row.item_data));
+  };
+
+  const writeGlobalItemCatalog = async (items: Array<Record<string, unknown>>): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM game_items');
+      for (const item of items) {
+        const itemId = sanitizeIdentifier(typeof item.id === 'string' ? item.id : '', '');
+        const itemName = typeof item.name === 'string' ? item.name.trim() : '';
+        if (!itemId || !itemName) {
+          continue;
+        }
+        await client.query(
+          `
+            INSERT INTO game_items (item_id, item_name, item_data, updated_at)
+            VALUES ($1, $2, $3::jsonb, NOW())
+          `,
+          [itemId, itemName, JSON.stringify(item)],
         );
       }
       await client.query('COMMIT');
@@ -3133,6 +3824,8 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       '/api/admin/critters/list',
       '/api/admin/encounters/save',
       '/api/admin/encounters/list',
+      '/api/admin/items/save',
+      '/api/admin/items/list',
       '/api/admin/skills/list',
       '/api/admin/skills/save',
       '/api/admin/skill-effects/list',
@@ -3373,7 +4066,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         } finally {
           client.release();
         }
-        const [mapsResult, tilesRowsResult, playerSpriteResult, npcLibraryResult, crittersResult, encounterResult, skills, effects, elementChart] = await Promise.all([
+        const [mapsResult, tilesRowsResult, playerSpriteResult, npcLibraryResult, crittersResult, encounterResult, skills, effects, elementChart, items] = await Promise.all([
           pool.query('SELECT map_data FROM game_maps ORDER BY updated_at DESC'),
           pool.query('SELECT id, name, primary_code, width, height, y_sort_with_actors, tileset_url, tile_pixel_width, tile_pixel_height, cells FROM game_tiles ORDER BY updated_at DESC'),
           pool.query('SELECT sprite_config FROM game_player_sprite_configs WHERE catalog_key = $1', [GLOBAL_CATALOG_KEY]),
@@ -3383,6 +4076,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
           readGlobalSkillCatalog(),
           readGlobalSkillEffectsCatalog(),
           readElementChart(),
+          readGlobalItemCatalog(),
         ]);
         const savedTiles = (tilesRowsResult.rows ?? []).map((row: Record<string, unknown>) => ({
           id: row.id,
@@ -3414,6 +4108,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
             critterSkills: skills,
             skillEffects: effects,
             elementChart,
+            items,
           },
         });
         return;
@@ -3425,8 +4120,14 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
           return;
         }
         await ensureGlobalCatalogBaseline();
-        const mapsResult = await pool.query('SELECT map_data FROM game_maps ORDER BY updated_at DESC');
-        sendJson(res, 200, { ok: true, maps: mapsResult.rows.map((row) => row.map_data) });
+        const mapsResult = await pool.query('SELECT map_id, map_data FROM game_maps ORDER BY updated_at DESC');
+        sendJson(res, 200, {
+          ok: true,
+          maps: mapsResult.rows.map((row: { map_id: string; map_data: unknown }) => ({
+            mapId: row.map_id,
+            mapData: row.map_data,
+          })),
+        });
         return;
       }
 
@@ -3891,6 +4592,30 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
           strictWeights: true,
         });
         await writeGlobalEncounterCatalog(encounterTables);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (url === '/api/admin/items/list' && req.method === 'GET') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const items = await readGlobalItemCatalog();
+        sendJson(res, 200, { ok: true, items });
+        return;
+      }
+
+      if (url === '/api/admin/items/save' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const body = (await readJsonBody(req)) as SaveItemsRequestPayload;
+        const items = parseItemCatalog(body.items, { strictUnique: true });
+        await writeGlobalItemCatalog(items);
         sendJson(res, 200, { ok: true });
         return;
       }
