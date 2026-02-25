@@ -16,6 +16,7 @@ import {
   type CritterMissionType,
   type CritterRarity,
   type CritterStats,
+  type EquippedEquipmentAnchor,
   type EquippedSkillSlots,
   type PlayerCritterCollectionEntry,
   type PlayerCritterProgress,
@@ -58,6 +59,18 @@ export interface CritterDerivedProgress {
   effectiveStats: CritterStats;
   unlockedAbilityIds: string[];
   unlockedSkillIds: string[];
+}
+
+export function computeCritterUnlockedEquipSlots(critter: CritterDefinition, level: number): number {
+  const safeLevel = Math.max(0, Math.floor(level));
+  let unlocked = 0;
+  for (const levelRow of critter.levels) {
+    if (levelRow.level > safeLevel) {
+      continue;
+    }
+    unlocked += clampInt(levelRow.unlockEquipSlots, 0, 8, levelRow.level === 1 ? 1 : 0);
+  }
+  return Math.max(0, Math.min(8, unlocked));
 }
 
 export function computeCritterDerivedProgress(critter: CritterDefinition, level: number): CritterDerivedProgress {
@@ -169,6 +182,7 @@ export function createDefaultPlayerCritterProgress(database: CritterDefinition[]
     unlockedSquadSlots: STARTING_UNLOCKED_SQUAD_SLOTS,
     squad: Array.from({ length: MAX_SQUAD_SLOTS }, () => null),
     collection: database.map((critter) => createDefaultCollectionEntry(critter)),
+    lockedKnockoutTargetCritterId: null,
   };
 }
 
@@ -233,6 +247,13 @@ export function sanitizePlayerCritterProgress(
       effectiveStats: derived.effectiveStats,
       unlockedAbilityIds: derived.unlockedAbilityIds,
       equippedSkillIds: existing.equippedSkillIds,
+      equippedEquipmentAnchors:
+        unlocked && level > 0
+          ? sanitizeEquippedEquipmentAnchors(
+              existing.equippedEquipmentAnchors,
+              computeCritterUnlockedEquipSlots(critter, level),
+            )
+          : [],
       lastProgressAt: existing.lastProgressAt,
     };
   });
@@ -250,12 +271,21 @@ export function sanitizePlayerCritterProgress(
     }
     return critterId;
   });
+  const rawLockedKnockoutTargetCritterId = parseNumberish(record.lockedKnockoutTargetCritterId);
+  const lockedKnockoutTargetCritterId =
+    rawLockedKnockoutTargetCritterId !== null &&
+    collection.some(
+      (entry) => entry.critterId === rawLockedKnockoutTargetCritterId && !entry.unlocked,
+    )
+      ? rawLockedKnockoutTargetCritterId
+      : null;
 
   return {
     version: PLAYER_CRITTER_PROGRESS_VERSION,
     unlockedSquadSlots,
     squad,
     collection,
+    lockedKnockoutTargetCritterId,
   };
 }
 
@@ -273,6 +303,7 @@ function createDefaultCollectionEntry(critter: CritterDefinition): PlayerCritter
     effectiveStats: derived.effectiveStats,
     unlockedAbilityIds: derived.unlockedAbilityIds,
     equippedSkillIds: [null, null, null, null],
+    equippedEquipmentAnchors: [],
     lastProgressAt: null,
   };
 }
@@ -314,6 +345,9 @@ function sanitizeCollectionEntry(
   }
 
   const equippedSkillIds = sanitizeEquippedSkillSlots(record.equippedSkillIds);
+  const equippedEquipmentAnchors = sanitizeEquippedEquipmentAnchors(
+    record.equippedEquipmentAnchors ?? record.equippedEquipmentItems,
+  );
 
   return {
     critterId,
@@ -338,6 +372,7 @@ function sanitizeCollectionEntry(
     },
     unlockedAbilityIds: [],
     equippedSkillIds,
+    equippedEquipmentAnchors,
     lastProgressAt: sanitizeIsoTimestamp(record.lastProgressAt),
   };
 }
@@ -354,6 +389,31 @@ function sanitizeEquippedSkillSlots(raw: unknown): EquippedSkillSlots {
     typeof raw[3] === 'string' && raw[3].trim() ? raw[3].trim() : null,
   ];
   return result;
+}
+
+function sanitizeEquippedEquipmentAnchors(raw: unknown, maxSlots = 8): EquippedEquipmentAnchor[] {
+  if (!Array.isArray(raw) || maxSlots <= 0) {
+    return [];
+  }
+  const parsed: EquippedEquipmentAnchor[] = [];
+  const seenItems = new Set<string>();
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const itemId = sanitizeSlug(record.itemId, '');
+    const slotIndex = clampInt(record.slotIndex, 0, Math.max(0, maxSlots - 1), -1);
+    if (!itemId || slotIndex < 0 || seenItems.has(itemId)) {
+      continue;
+    }
+    seenItems.add(itemId);
+    parsed.push({
+      itemId,
+      slotIndex,
+    });
+  }
+  return parsed.sort((left, right) => left.slotIndex - right.slotIndex || left.itemId.localeCompare(right.itemId));
 }
 
 function sanitizeAbilityDefinitions(raw: unknown): CritterAbilityDefinition[] {
@@ -431,6 +491,7 @@ function sanitizeLevelRequirement(
       ? (record.statDelta as Record<string, unknown>)
       : {};
   const requiredMissionCount = clampInt(record.requiredMissionCount, 0, missions.length, missions.length);
+  const unlockEquipSlots = clampInt(record.unlockEquipSlots, 0, 8, level === 1 ? 1 : 0);
   const abilityUnlockIds = sanitizeStringArray(record.abilityUnlockIds, 30).filter((id) => abilityIdSet.has(id));
   const skillUnlockIds = sanitizeStringArray(record.skillUnlockIds, 30).filter((id) => id.length > 0);
 
@@ -444,6 +505,7 @@ function sanitizeLevelRequirement(
       defense: clampInt(statDeltaRecord.defense, -999, 999, EMPTY_STAT_DELTA.defense),
       speed: clampInt(statDeltaRecord.speed, -999, 999, EMPTY_STAT_DELTA.speed),
     },
+    unlockEquipSlots,
     abilityUnlockIds,
     skillUnlockIds,
   };
@@ -698,6 +760,7 @@ function ensureBuddoStarterStoryMission(database: CritterDefinition[]): CritterD
       ? {
           ...existingLevelOne,
           statDelta: { ...existingLevelOne.statDelta },
+          unlockEquipSlots: clampInt(existingLevelOne.unlockEquipSlots, 0, 8, 1),
           abilityUnlockIds: [...existingLevelOne.abilityUnlockIds],
           skillUnlockIds: [...(existingLevelOne.skillUnlockIds ?? [])],
           missions: [
@@ -729,6 +792,7 @@ function ensureBuddoStarterStoryMission(database: CritterDefinition[]): CritterD
             defense: 0,
             speed: 0,
           },
+          unlockEquipSlots: 1,
           abilityUnlockIds: [],
           skillUnlockIds: [],
         };
@@ -738,6 +802,7 @@ function ensureBuddoStarterStoryMission(database: CritterDefinition[]): CritterD
       .map((entry) => ({
         ...entry,
         statDelta: { ...entry.statDelta },
+        unlockEquipSlots: clampInt(entry.unlockEquipSlots, 0, 8, 0),
         abilityUnlockIds: [...entry.abilityUnlockIds],
         skillUnlockIds: [...(entry.skillUnlockIds ?? [])],
         missions: entry.missions.map((mission) => ({ ...mission })),

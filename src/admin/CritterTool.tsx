@@ -80,6 +80,7 @@ interface LevelDraft {
   attackDelta: string;
   defenseDelta: string;
   speedDelta: string;
+  unlockEquipSlots: string;
   abilityUnlockIdsInput: string;
   skillUnlockIdsInput: string;
   missions: MissionDraft[];
@@ -806,7 +807,7 @@ export function CritterTool() {
               onClick={() =>
                 setDraft((current) => ({
                   ...current,
-                  levels: [...current.levels, createDefaultLevelDraft()],
+                  levels: [...current.levels, createDefaultLevelDraft(current.levels.length)],
                 }))
               }
             >
@@ -867,6 +868,17 @@ export function CritterTool() {
                       type="number"
                       value={levelRow.speedDelta}
                       onChange={(event) => updateLevelRow(levelIndex, (entry) => ({ ...entry, speedDelta: event.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    Unlock Equip Slot(s)
+                    <input
+                      type="number"
+                      min={0}
+                      value={levelRow.unlockEquipSlots}
+                      onChange={(event) =>
+                        updateLevelRow(levelIndex, (entry) => ({ ...entry, unlockEquipSlots: event.target.value }))
+                      }
                     />
                   </label>
                 </div>
@@ -1271,7 +1283,7 @@ function createEmptyDraft(existing: CritterDefinition[]): CritterDraft {
     defense: '8',
     speed: '8',
     abilities: [],
-    levels: [createDefaultLevelDraft()],
+    levels: [createDefaultLevelDraft(0)],
   };
 }
 
@@ -1299,6 +1311,7 @@ function critterToDraft(critter: CritterDefinition): CritterDraft {
       attackDelta: String(level.statDelta.attack),
       defenseDelta: String(level.statDelta.defense),
       speedDelta: String(level.statDelta.speed),
+      unlockEquipSlots: String(typeof level.unlockEquipSlots === 'number' ? level.unlockEquipSlots : level.level === 1 ? 1 : 0),
       abilityUnlockIdsInput: level.abilityUnlockIds.join(','),
       skillUnlockIdsInput: (level.skillUnlockIds ?? []).join(','),
       missions: level.missions.map((mission) => ({
@@ -1352,6 +1365,7 @@ function draftToRaw(draft: CritterDraft): unknown {
         defense: Number.parseInt(level.defenseDelta, 10),
         speed: Number.parseInt(level.speedDelta, 10),
       },
+      unlockEquipSlots: Number.parseInt(level.unlockEquipSlots, 10),
       abilityUnlockIds: level.abilityUnlockIdsInput
         .split(',')
         .map((entry) => entry.trim())
@@ -1393,13 +1407,14 @@ function draftToRaw(draft: CritterDraft): unknown {
   };
 }
 
-function createDefaultLevelDraft(): LevelDraft {
+function createDefaultLevelDraft(levelIndex = 0): LevelDraft {
   return {
     requiredMissionCount: '0',
     hpDelta: '0',
     attackDelta: '0',
     defenseDelta: '0',
     speedDelta: '0',
+    unlockEquipSlots: levelIndex === 0 ? '1' : '0',
     abilityUnlockIdsInput: '',
     skillUnlockIdsInput: '',
     missions: [],

@@ -85,7 +85,7 @@ export function TitleScreen({ userEmail, hasSave, onLogout, onContinue, onNewGam
               <strong>Interact:</strong> Space
             </p>
             <p>
-              <strong>Menu:</strong> Esc
+              <strong>Menu:</strong> Esc / E
             </p>
             <p>
               <strong>Fullscreen:</strong> Y

@@ -11,6 +11,8 @@ import { sanitizeEncounterTableLibrary } from '@/game/encounters/schema';
 import type { EncounterTableDefinition, MapEncounterGroupDefinition } from '@/game/encounters/types';
 import { sanitizeItemCatalog } from '@/game/items/schema';
 import type { GameItemDefinition } from '@/game/items/types';
+import { parseShopCatalog } from '@/game/shops/schema';
+import type { ShopDefinition } from '@/game/shops/types';
 import { apiFetchJson } from '@/shared/apiClient';
 import { loadAdminFlags, type AdminFlagEntry } from '@/admin/flagsApi';
 import type { CritterDefinition } from '@/game/critters/types';
@@ -74,6 +76,7 @@ type PaintTool =
   | 'camera-preview'
   | 'camera-point';
 type EditorNpcMovementType = 'static' | 'static-turning' | 'wander' | 'path';
+type NpcInteractionMode = 'dialogue' | 'battle' | 'healer' | 'shop';
 type EdgeSide = 'top' | 'right' | 'bottom' | 'left';
 type CollisionPaintMode = 'add' | 'remove';
 
@@ -206,6 +209,12 @@ interface LoadItemLibraryResponse {
   error?: string;
 }
 
+interface LoadShopLibraryResponse {
+  ok: boolean;
+  shops?: unknown;
+  error?: string;
+}
+
 interface NpcCharacterInstanceMarker {
   type: 'character-instance';
   key: string;
@@ -232,6 +241,56 @@ const ATLAS_PREVIEW_SIZE = 28;
 const MAX_ATLAS_PREVIEW_CELLS = 4096;
 const DEFAULT_TILESET_SUPABASE_BUCKET = 'tilesets';
 const DEFAULT_NPC_SUPABASE_BUCKET = 'character-spritesheets';
+
+function resolveNpcInteractionMode(input: {
+  firstInteractBattle?: boolean;
+  healer?: boolean;
+  shopId?: string;
+}): NpcInteractionMode {
+  if (typeof input.shopId === 'string' && input.shopId.trim().length > 0) {
+    return 'shop';
+  }
+  if (input.firstInteractBattle) {
+    return 'battle';
+  }
+  if (input.healer) {
+    return 'healer';
+  }
+  return 'dialogue';
+}
+
+function resolveNpcInteractionFlags(mode: NpcInteractionMode, shopIdInput: string): {
+  firstInteractBattle: boolean;
+  healer: boolean;
+  shopId: string | undefined;
+} {
+  if (mode === 'battle') {
+    return {
+      firstInteractBattle: true,
+      healer: false,
+      shopId: undefined,
+    };
+  }
+  if (mode === 'healer') {
+    return {
+      firstInteractBattle: false,
+      healer: true,
+      shopId: undefined,
+    };
+  }
+  if (mode === 'shop') {
+    return {
+      firstInteractBattle: false,
+      healer: false,
+      shopId: shopIdInput.trim() || undefined,
+    };
+  }
+  return {
+    firstInteractBattle: false,
+    healer: false,
+    shopId: undefined,
+  };
+}
 const TILE_CODE_GENERATION_RANGES: Array<[number, number]> = [
   [0xe000, 0xf8ff],
   [0x3400, 0x4dbf],
@@ -348,6 +407,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   const [selectedNpcSpriteId, setSelectedNpcSpriteId] = useState('');
   const [npcSpriteLabelInput, setNpcSpriteLabelInput] = useState('');
   const [npcCharacterLibrary, setNpcCharacterLibrary] = useState<NpcCharacterTemplateEntry[]>([]);
+  const [shopCatalog, setShopCatalog] = useState<ShopDefinition[]>([]);
   const [flagEntries, setFlagEntries] = useState<AdminFlagEntry[]>([]);
   const [selectedNpcCharacterId, setSelectedNpcCharacterId] = useState('');
   const [selectedMapNpcId, setSelectedMapNpcId] = useState('');
@@ -362,11 +422,13 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   const [npcDialogueLinesInput, setNpcDialogueLinesInput] = useState('');
   const [npcDialogueSetFlagInput, setNpcDialogueSetFlagInput] = useState('');
   const [npcFirstInteractionSetFlagInput, setNpcFirstInteractionSetFlagInput] = useState('');
+  const [npcInteractionModeInput, setNpcInteractionModeInput] = useState<NpcInteractionMode>('dialogue');
   const [npcFirstInteractBattleInput, setNpcFirstInteractBattleInput] = useState(false);
   const [npcInteractBattleRepeatableInput, setNpcInteractBattleRepeatableInput] = useState(false);
   const [npcInteractBattleDefeatedFlagInput, setNpcInteractBattleDefeatedFlagInput] = useState('');
   const [npcBattleRewardsInput, setNpcBattleRewardsInput] = useState('');
   const [npcHealerInput, setNpcHealerInput] = useState(false);
+  const [npcShopIdInput, setNpcShopIdInput] = useState('');
   const [npcInteractionRewardsInput, setNpcInteractionRewardsInput] = useState('');
   const [npcInteractionRewardSetFlagInput, setNpcInteractionRewardSetFlagInput] = useState('');
   const [npcBattleTeamsInput, setNpcBattleTeamsInput] = useState('');
@@ -714,6 +776,20 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       ),
     [itemCatalog],
   );
+  const knownShopIds = useMemo(
+    () =>
+      [...new Set(shopCatalog.map((entry) => entry.id.trim()).filter((entry) => entry.length > 0))].sort((left, right) =>
+        left.localeCompare(right, undefined, { sensitivity: 'base' }),
+      ),
+    [shopCatalog],
+  );
+  const shopNameById = useMemo(() => {
+    const lookup = new Map<string, string>();
+    for (const shop of shopCatalog) {
+      lookup.set(shop.id, shop.name);
+    }
+    return lookup;
+  }, [shopCatalog]);
   const filteredTilesetSupabaseAssets = useMemo(() => {
     const query = tilesetSearchInput.trim().toLowerCase();
     const sorted = [...tilesetSupabaseAssets].sort((left, right) =>
@@ -1770,6 +1846,18 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     }
   };
 
+  const loadShopCatalogFromDatabase = async () => {
+    try {
+      const result = await apiFetchJson<LoadShopLibraryResponse>('/api/admin/shops/list');
+      if (!result.ok || !result.data?.ok) {
+        throw new Error(result.error ?? result.data?.error ?? 'Unable to load shop catalog.');
+      }
+      setShopCatalog(parseShopCatalog(result.data.shops));
+    } catch {
+      setShopCatalog([]);
+    }
+  };
+
   useEffect(() => {
     if (section === 'full' || hasAutoLoadedLibrariesRef.current) {
       return;
@@ -1789,6 +1877,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     }
     if (isNpcsSection || isNpcCharactersSection) {
       void loadItemCatalogFromDatabase();
+      void loadShopCatalogFromDatabase();
     }
     if (isMapSection) {
       void loadEncounterDataFromDatabase();
@@ -3581,16 +3670,28 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     const interactBattleDefeatedFlag = npcInteractBattleDefeatedFlagInput.trim() || undefined;
     const battleTeamIds = parseStringList(npcBattleTeamsInput);
     const interactionRewardSetFlag = npcInteractionRewardSetFlagInput.trim() || undefined;
+    const interactionModeFlags = resolveNpcInteractionFlags(npcInteractionModeInput, npcShopIdInput);
+    const resolvedShopId = interactionModeFlags.shopId;
+    if (npcInteractionModeInput === 'shop') {
+      if (!resolvedShopId) {
+        setError('Shop interaction mode requires a shop selection.');
+        return;
+      }
+      if (knownShopIds.length > 0 && !knownShopIds.includes(resolvedShopId)) {
+        setError(`Shop "${resolvedShopId}" does not exist in the shop catalog.`);
+        return;
+      }
+    }
     const interactBattleFlagError = validateKnownFlagSelection(
       interactBattleDefeatedFlag,
       'Interaction battle transition flag',
-      { required: npcFirstInteractBattleInput },
+      { required: interactionModeFlags.firstInteractBattle },
     );
     if (interactBattleFlagError) {
       setError(interactBattleFlagError);
       return;
     }
-    if (npcFirstInteractBattleInput) {
+    if (interactionModeFlags.firstInteractBattle) {
       if (!battleTeamIds || battleTeamIds.length === 0) {
         setError('Battler NPCs require at least one Battle Team ID.');
         return;
@@ -3669,11 +3770,12 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       dialogueLines: dialogueLines.length > 0 ? dialogueLines : undefined,
       dialogueSetFlag: npcDialogueSetFlagInput.trim() || undefined,
       firstInteractionSetFlag: npcFirstInteractionSetFlagInput.trim() || undefined,
-      firstInteractBattle: npcFirstInteractBattleInput,
+      firstInteractBattle: interactionModeFlags.firstInteractBattle,
       interactBattleRepeatable: npcInteractBattleRepeatableInput,
       interactBattleDefeatedFlag,
       battleRewards: battleRewardsResult.rewards.length > 0 ? battleRewardsResult.rewards : undefined,
-      healer: npcHealerInput,
+      healer: interactionModeFlags.healer,
+      shopId: resolvedShopId,
       interactionRewards: interactionRewardsResult.rewards.length > 0 ? interactionRewardsResult.rewards : undefined,
       interactionRewardSetFlag,
       battleTeamIds,
@@ -3777,11 +3879,14 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     setNpcDialogueLinesInput((template.dialogueLines ?? []).join('\n'));
     setNpcDialogueSetFlagInput(template.dialogueSetFlag ?? '');
     setNpcFirstInteractionSetFlagInput(template.firstInteractionSetFlag ?? '');
+    const interactionMode = resolveNpcInteractionMode(template);
+    setNpcInteractionModeInput(interactionMode);
     setNpcFirstInteractBattleInput(Boolean(template.firstInteractBattle));
     setNpcInteractBattleRepeatableInput(Boolean(template.interactBattleRepeatable));
     setNpcInteractBattleDefeatedFlagInput(template.interactBattleDefeatedFlag ?? '');
     setNpcBattleRewardsInput(formatNpcItemRewardsInput(template.battleRewards));
     setNpcHealerInput(Boolean(template.healer));
+    setNpcShopIdInput(template.shopId ?? '');
     setNpcInteractionRewardsInput(formatNpcItemRewardsInput(template.interactionRewards));
     setNpcInteractionRewardSetFlagInput(template.interactionRewardSetFlag ?? '');
     setNpcMovementTypeInput(toEditorNpcMovementType(template.movement?.type));
@@ -3840,6 +3945,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           interactBattleDefeatedFlag: template.interactBattleDefeatedFlag,
           battleRewards: template.battleRewards ? template.battleRewards.map((entry) => ({ ...entry })) : undefined,
           healer: template.healer,
+          shopId: template.shopId,
           interactionRewards: template.interactionRewards
             ? template.interactionRewards.map((entry) => ({ ...entry }))
             : undefined,
@@ -3952,6 +4058,16 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     setNpcFirstInteractionSetFlagInput(
       placement.firstInteractionSetFlag ?? character.firstInteractionSetFlag ?? '',
     );
+    setNpcInteractionModeInput(
+      resolveNpcInteractionMode({
+        shopId: placement.shopId ?? character.shopId,
+        firstInteractBattle:
+          typeof placement.firstInteractBattle === 'boolean'
+            ? placement.firstInteractBattle
+            : character.firstInteractBattle,
+        healer: typeof placement.healer === 'boolean' ? placement.healer : character.healer,
+      }),
+    );
     setNpcFirstInteractBattleInput(
       typeof placement.firstInteractBattle === 'boolean'
         ? placement.firstInteractBattle
@@ -3973,6 +4089,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     setNpcHealerInput(
       typeof placement.healer === 'boolean' ? placement.healer : Boolean(character.healer),
     );
+    setNpcShopIdInput(placement.shopId ?? character.shopId ?? '');
     setNpcInteractionRewardsInput(
       formatNpcItemRewardsInput(placement.interactionRewards ?? character.interactionRewards),
     );
@@ -4081,11 +4198,13 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     setNpcDialogueLinesInput((npc.dialogueLines ?? []).join('\n'));
     setNpcDialogueSetFlagInput(npc.dialogueSetFlag ?? '');
     setNpcFirstInteractionSetFlagInput(npc.firstInteractionSetFlag ?? '');
+    setNpcInteractionModeInput(resolveNpcInteractionMode(npc));
     setNpcFirstInteractBattleInput(Boolean(npc.firstInteractBattle));
     setNpcInteractBattleRepeatableInput(Boolean(npc.interactBattleRepeatable));
     setNpcInteractBattleDefeatedFlagInput(npc.interactBattleDefeatedFlag ?? '');
     setNpcBattleRewardsInput(formatNpcItemRewardsInput(npc.battleRewards));
     setNpcHealerInput(Boolean(npc.healer));
+    setNpcShopIdInput(npc.shopId ?? '');
     setNpcInteractionRewardsInput(formatNpcItemRewardsInput(npc.interactionRewards));
     setNpcInteractionRewardSetFlagInput(npc.interactionRewardSetFlag ?? '');
     setNpcBattleTeamsInput((npc.battleTeamIds ?? []).join(', '));
@@ -4170,16 +4289,28 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     }
     const battleTeamIds = parseStringList(npcBattleTeamsInput);
     const interactionRewardSetFlag = npcInteractionRewardSetFlagInput.trim() || undefined;
+    const interactionModeFlags = resolveNpcInteractionFlags(npcInteractionModeInput, npcShopIdInput);
+    const resolvedShopId = interactionModeFlags.shopId;
+    if (npcInteractionModeInput === 'shop') {
+      if (!resolvedShopId) {
+        setError('Shop interaction mode requires a shop selection.');
+        return;
+      }
+      if (knownShopIds.length > 0 && !knownShopIds.includes(resolvedShopId)) {
+        setError(`Shop "${resolvedShopId}" does not exist in the shop catalog.`);
+        return;
+      }
+    }
     const interactBattleFlagError = validateKnownFlagSelection(
       interactBattleDefeatedFlag,
       'Interaction battle transition flag',
-      { required: npcFirstInteractBattleInput },
+      { required: interactionModeFlags.firstInteractBattle },
     );
     if (interactBattleFlagError) {
       setError(interactBattleFlagError);
       return;
     }
-    if (npcFirstInteractBattleInput) {
+    if (interactionModeFlags.firstInteractBattle) {
       if (!battleTeamIds || battleTeamIds.length === 0) {
         setError('Battler NPCs require at least one Battle Team ID.');
         return;
@@ -4250,11 +4381,12 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
             .filter((line) => line.length > 0),
           dialogueSetFlag: npcDialogueSetFlagInput.trim() || undefined,
           firstInteractionSetFlag: npcFirstInteractionSetFlagInput.trim() || undefined,
-          firstInteractBattle: npcFirstInteractBattleInput,
+          firstInteractBattle: interactionModeFlags.firstInteractBattle,
           interactBattleRepeatable: npcInteractBattleRepeatableInput,
           interactBattleDefeatedFlag,
           battleRewards: battleRewardsResult.rewards.length > 0 ? battleRewardsResult.rewards : undefined,
-          healer: npcHealerInput,
+          healer: interactionModeFlags.healer,
+          shopId: resolvedShopId,
           interactionRewards: interactionRewardsResult.rewards.length > 0 ? interactionRewardsResult.rewards : undefined,
           interactionRewardSetFlag,
           battleTeamIds,
@@ -4283,11 +4415,12 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
             .filter((line) => line.length > 0),
           dialogueSetFlag: npcDialogueSetFlagInput.trim() || undefined,
           firstInteractionSetFlag: npcFirstInteractionSetFlagInput.trim() || undefined,
-          firstInteractBattle: npcFirstInteractBattleInput,
+          firstInteractBattle: interactionModeFlags.firstInteractBattle,
           interactBattleRepeatable: npcInteractBattleRepeatableInput,
           interactBattleDefeatedFlag,
           battleRewards: battleRewardsResult.rewards.length > 0 ? battleRewardsResult.rewards : undefined,
-          healer: npcHealerInput,
+          healer: interactionModeFlags.healer,
+          shopId: resolvedShopId,
           interactionRewards: interactionRewardsResult.rewards.length > 0 ? interactionRewardsResult.rewards : undefined,
           interactionRewardSetFlag,
           battleTeamIds,
@@ -4379,11 +4512,12 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           .filter((line) => line.length > 0),
         dialogueSetFlag: npcDialogueSetFlagInput.trim() || undefined,
         firstInteractionSetFlag: npcFirstInteractionSetFlagInput.trim() || undefined,
-        firstInteractBattle: npcFirstInteractBattleInput,
+        firstInteractBattle: interactionModeFlags.firstInteractBattle,
         interactBattleRepeatable: npcInteractBattleRepeatableInput,
         interactBattleDefeatedFlag,
         battleRewards: battleRewardsResult.rewards.length > 0 ? battleRewardsResult.rewards : undefined,
-        healer: npcHealerInput,
+        healer: interactionModeFlags.healer,
+        shopId: resolvedShopId,
         interactionRewards: interactionRewardsResult.rewards.length > 0 ? interactionRewardsResult.rewards : undefined,
         interactionRewardSetFlag,
         battleTeamIds,
@@ -4745,6 +4879,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
               {selectedCharacterInstances.map((placement, index, list) => {
                 const movementType = toEditorNpcMovementType(placement.movement?.type);
                 const battleTeams = (placement.battleTeamIds ?? []).join(', ') || 'No battle team';
+                const interactionMode = resolveNpcInteractionMode(placement);
                 return (
                   <article
                     key={`character-instance-card-${selectedCharacterForInstanceList.id}-${index}`}
@@ -4839,80 +4974,102 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                         />
                       </label>
                       <label>
-                        Enable Interaction Battle?
-                        <input
-                          type="checkbox"
-                          checked={Boolean(placement.firstInteractBattle)}
-                          onChange={(event) =>
-                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
-                              ...entry,
-                              firstInteractBattle: event.target.checked,
-                            }))
-                          }
-                        />
-                      </label>
-                      <label>
-                        Repeat Interaction Battle After Win?
-                        <input
-                          type="checkbox"
-                          checked={Boolean(placement.interactBattleRepeatable)}
-                          onChange={(event) =>
-                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
-                              ...entry,
-                              interactBattleRepeatable: event.target.checked,
-                            }))
-                          }
-                        />
-                      </label>
-                      <label>
-                        Battle Win Transition Flag
+                        Interaction Mode
                         <select
-                          value={placement.interactBattleDefeatedFlag ?? ''}
-                          onChange={(event) =>
-                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
-                              ...entry,
-                              interactBattleDefeatedFlag: event.target.value.trim() || undefined,
-                            }))
-                          }
-                        >
-                          <option value="">(Select existing flag)</option>
-                          {knownFlagIds.map((flagId) => (
-                            <option key={`npc-character-instance-battle-flag-${index}-${flagId}`} value={flagId}>
-                              {flagId}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        Battle Rewards
-                        <input
-                          list="admin-item-options"
-                          value={formatNpcItemRewardsInput(placement.battleRewards)}
+                          value={interactionMode}
                           onChange={(event) =>
                             updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => {
-                              const parsed = parseNpcItemRewardsInput(event.target.value);
+                              const mode = event.target.value as NpcInteractionMode;
+                              const resolved = resolveNpcInteractionFlags(mode, entry.shopId ?? '');
                               return {
                                 ...entry,
-                                battleRewards: parsed.ok && parsed.rewards.length > 0 ? parsed.rewards : undefined,
+                                firstInteractBattle: resolved.firstInteractBattle,
+                                healer: resolved.healer,
+                                shopId: resolved.shopId,
                               };
                             })
                           }
-                          placeholder="lume:25, field-bandage:1"
-                        />
+                        >
+                          <option value="dialogue">Dialogue</option>
+                          <option value="battle">Battle</option>
+                          <option value="healer">Healer</option>
+                          <option value="shop">Shop</option>
+                        </select>
                       </label>
-                      <label>
-                        Healer?
-                        <input
-                          type="checkbox"
-                          checked={Boolean(placement.healer)}
-                          onChange={(event) =>
-                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
-                              ...entry,
-                              healer: event.target.checked,
-                            }))
-                          }
-                        />
-                      </label>
+                      {interactionMode === 'shop' && (
+                        <label>
+                          Shop
+                          <select
+                            value={placement.shopId ?? ''}
+                            onChange={(event) =>
+                              updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                                ...entry,
+                                shopId: event.target.value.trim() || undefined,
+                              }))
+                            }
+                          >
+                            <option value="">(Select shop)</option>
+                            {knownShopIds.map((shopId) => (
+                              <option key={`npc-character-instance-shop-${index}-${shopId}`} value={shopId}>
+                                {shopNameById.get(shopId) ?? shopId} ({shopId})
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      {interactionMode === 'battle' && (
+                        <>
+                          <label>
+                            Repeat Interaction Battle After Win?
+                            <input
+                              type="checkbox"
+                              checked={Boolean(placement.interactBattleRepeatable)}
+                              onChange={(event) =>
+                                updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                                  ...entry,
+                                  interactBattleRepeatable: event.target.checked,
+                                }))
+                              }
+                            />
+                          </label>
+                          <label>
+                            Battle Win Transition Flag
+                            <select
+                              value={placement.interactBattleDefeatedFlag ?? ''}
+                              onChange={(event) =>
+                                updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                                  ...entry,
+                                  interactBattleDefeatedFlag: event.target.value.trim() || undefined,
+                                }))
+                              }
+                            >
+                              <option value="">(Select existing flag)</option>
+                              {knownFlagIds.map((flagId) => (
+                                <option key={`npc-character-instance-battle-flag-${index}-${flagId}`} value={flagId}>
+                                  {flagId}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            Battle Rewards
+                            <input
+                              list="admin-item-options"
+                              value={formatNpcItemRewardsInput(placement.battleRewards)}
+                              onChange={(event) =>
+                                updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => {
+                                  const parsed = parseNpcItemRewardsInput(event.target.value);
+                                  return {
+                                    ...entry,
+                                    battleRewards: parsed.ok && parsed.rewards.length > 0 ? parsed.rewards : undefined,
+                                  };
+                                })
+                              }
+                              placeholder="lume:25, field-bandage:1"
+                            />
+                          </label>
+                        </>
+                      )}
                       <label>
                         Interaction Rewards
                         <input
@@ -6591,43 +6748,59 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                 />
               </label>
               <label>
-                Enable Interaction Battle?
-                <input
-                  type="checkbox"
-                  checked={npcFirstInteractBattleInput}
-                  onChange={(event) => setNpcFirstInteractBattleInput(event.target.checked)}
-                />
-              </label>
-              <label>
-                Repeat Interaction Battle After Win?
-                <input
-                  type="checkbox"
-                  checked={npcInteractBattleRepeatableInput}
-                  onChange={(event) => setNpcInteractBattleRepeatableInput(event.target.checked)}
-                />
-              </label>
-              <label>
-                Battle Win Transition Flag
+                Interaction Mode
                 <select
-                  value={npcInteractBattleDefeatedFlagInput}
-                  onChange={(event) => setNpcInteractBattleDefeatedFlagInput(event.target.value)}
+                  value={npcInteractionModeInput}
+                  onChange={(event) => setNpcInteractionModeInput(event.target.value as NpcInteractionMode)}
                 >
-                  <option value="">(Select existing flag)</option>
-                  {knownFlagIds.map((flagId) => (
-                    <option key={`npc-battle-flag-${flagId}`} value={flagId}>
-                      {flagId}
-                    </option>
-                  ))}
+                  <option value="dialogue">Dialogue</option>
+                  <option value="battle">Battle</option>
+                  <option value="healer">Healer</option>
+                  <option value="shop">Shop</option>
                 </select>
               </label>
-              <label>
-                Healer?
-                <input
-                  type="checkbox"
-                  checked={npcHealerInput}
-                  onChange={(event) => setNpcHealerInput(event.target.checked)}
-                />
-              </label>
+              {npcInteractionModeInput === 'shop' && (
+                <label>
+                  Shop
+                  <select
+                    value={npcShopIdInput}
+                    onChange={(event) => setNpcShopIdInput(event.target.value)}
+                  >
+                    <option value="">Select shop</option>
+                    {knownShopIds.map((shopId) => (
+                      <option key={`npc-shop-option-${shopId}`} value={shopId}>
+                        {shopNameById.get(shopId) ?? shopId} ({shopId})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {npcInteractionModeInput === 'battle' && (
+                <>
+                  <label>
+                    Repeat Interaction Battle After Win?
+                    <input
+                      type="checkbox"
+                      checked={npcInteractBattleRepeatableInput}
+                      onChange={(event) => setNpcInteractBattleRepeatableInput(event.target.checked)}
+                    />
+                  </label>
+                  <label>
+                    Battle Win Transition Flag
+                    <select
+                      value={npcInteractBattleDefeatedFlagInput}
+                      onChange={(event) => setNpcInteractBattleDefeatedFlagInput(event.target.value)}
+                    >
+                      <option value="">(Select existing flag)</option>
+                      {knownFlagIds.map((flagId) => (
+                        <option key={`npc-battle-flag-${flagId}`} value={flagId}>
+                          {flagId}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </>
+              )}
               <label>
                 Movement Type
                 <select
@@ -6705,22 +6878,26 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                 />
               </label>
             )}
-            <label>
-              Battle Team IDs (comma-separated)
-              <input
-                value={npcBattleTeamsInput}
-                onChange={(event) => setNpcBattleTeamsInput(event.target.value)}
-              />
-            </label>
-            <label>
-              Battle Rewards (itemId:qty, comma-separated)
-              <input
-                list="admin-item-options"
-                value={npcBattleRewardsInput}
-                onChange={(event) => setNpcBattleRewardsInput(event.target.value)}
-                placeholder="lume:25, field-bandage:1"
-              />
-            </label>
+            {npcInteractionModeInput === 'battle' && (
+              <>
+                <label>
+                  Battle Team IDs (comma-separated)
+                  <input
+                    value={npcBattleTeamsInput}
+                    onChange={(event) => setNpcBattleTeamsInput(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Battle Rewards (itemId:qty, comma-separated)
+                  <input
+                    list="admin-item-options"
+                    value={npcBattleRewardsInput}
+                    onChange={(event) => setNpcBattleRewardsInput(event.target.value)}
+                    placeholder="lume:25, field-bandage:1"
+                  />
+                </label>
+              </>
+            )}
             <label>
               Interaction Rewards (itemId:qty, comma-separated)
               <input
@@ -7685,6 +7862,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
               )}
               {selectedCharacterInstances.map((placement, index, list) => {
                 const placementMovementType = toEditorNpcMovementType(placement.movement?.type);
+                const interactionMode = resolveNpcInteractionMode(placement);
                 const cardKey = `${selectedCharacterForInstanceList.id}:${index}`;
                 return (
                   <article
@@ -7920,19 +8098,21 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                           />
                         </label>
                       )}
-                      <label>
-                        Battle Team IDs
-                        <input
-                          value={(placement.battleTeamIds ?? []).join(', ')}
-                          onChange={(event) =>
-                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
-                              ...entry,
-                              battleTeamIds: parseStringList(event.target.value),
-                            }))
-                          }
-                          placeholder="moolnir@1, buddo@3"
-                        />
-                      </label>
+                      {interactionMode === 'battle' && (
+                        <label>
+                          Battle Team IDs
+                          <input
+                            value={(placement.battleTeamIds ?? []).join(', ')}
+                            onChange={(event) =>
+                              updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                                ...entry,
+                                battleTeamIds: parseStringList(event.target.value),
+                              }))
+                            }
+                            placeholder="moolnir@1, buddo@3"
+                          />
+                        </label>
+                      )}
                       <label>
                         Dialogue ID
                         <input
@@ -7985,80 +8165,102 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                         />
                       </label>
                       <label>
-                        Enable Interaction Battle?
-                        <input
-                          type="checkbox"
-                          checked={Boolean(placement.firstInteractBattle)}
-                          onChange={(event) =>
-                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
-                              ...entry,
-                              firstInteractBattle: event.target.checked,
-                            }))
-                          }
-                        />
-                      </label>
-                      <label>
-                        Repeat Interaction Battle After Win?
-                        <input
-                          type="checkbox"
-                          checked={Boolean(placement.interactBattleRepeatable)}
-                          onChange={(event) =>
-                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
-                              ...entry,
-                              interactBattleRepeatable: event.target.checked,
-                            }))
-                          }
-                        />
-                      </label>
-                      <label>
-                        Battle Win Transition Flag
+                        Interaction Mode
                         <select
-                          value={placement.interactBattleDefeatedFlag ?? ''}
-                          onChange={(event) =>
-                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
-                              ...entry,
-                              interactBattleDefeatedFlag: event.target.value.trim() || undefined,
-                            }))
-                          }
-                        >
-                          <option value="">(Select existing flag)</option>
-                          {knownFlagIds.map((flagId) => (
-                            <option key={`npc-instance-battle-flag-${index}-${flagId}`} value={flagId}>
-                              {flagId}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        Battle Rewards
-                        <input
-                          list="admin-item-options"
-                          value={formatNpcItemRewardsInput(placement.battleRewards)}
+                          value={interactionMode}
                           onChange={(event) =>
                             updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => {
-                              const parsed = parseNpcItemRewardsInput(event.target.value);
+                              const mode = event.target.value as NpcInteractionMode;
+                              const resolved = resolveNpcInteractionFlags(mode, entry.shopId ?? '');
                               return {
                                 ...entry,
-                                battleRewards: parsed.ok && parsed.rewards.length > 0 ? parsed.rewards : undefined,
+                                firstInteractBattle: resolved.firstInteractBattle,
+                                healer: resolved.healer,
+                                shopId: resolved.shopId,
                               };
                             })
                           }
-                          placeholder="lume:25, field-bandage:1"
-                        />
+                        >
+                          <option value="dialogue">Dialogue</option>
+                          <option value="battle">Battle</option>
+                          <option value="healer">Healer</option>
+                          <option value="shop">Shop</option>
+                        </select>
                       </label>
-                      <label>
-                        Healer?
-                        <input
-                          type="checkbox"
-                          checked={Boolean(placement.healer)}
-                          onChange={(event) =>
-                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
-                              ...entry,
-                              healer: event.target.checked,
-                            }))
-                          }
-                        />
-                      </label>
+                      {interactionMode === 'shop' && (
+                        <label>
+                          Shop
+                          <select
+                            value={placement.shopId ?? ''}
+                            onChange={(event) =>
+                              updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                                ...entry,
+                                shopId: event.target.value.trim() || undefined,
+                              }))
+                            }
+                          >
+                            <option value="">(Select shop)</option>
+                            {knownShopIds.map((shopId) => (
+                              <option key={`npc-instance-shop-${index}-${shopId}`} value={shopId}>
+                                {shopNameById.get(shopId) ?? shopId} ({shopId})
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      {interactionMode === 'battle' && (
+                        <>
+                          <label>
+                            Repeat Interaction Battle After Win?
+                            <input
+                              type="checkbox"
+                              checked={Boolean(placement.interactBattleRepeatable)}
+                              onChange={(event) =>
+                                updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                                  ...entry,
+                                  interactBattleRepeatable: event.target.checked,
+                                }))
+                              }
+                            />
+                          </label>
+                          <label>
+                            Battle Win Transition Flag
+                            <select
+                              value={placement.interactBattleDefeatedFlag ?? ''}
+                              onChange={(event) =>
+                                updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                                  ...entry,
+                                  interactBattleDefeatedFlag: event.target.value.trim() || undefined,
+                                }))
+                              }
+                            >
+                              <option value="">(Select existing flag)</option>
+                              {knownFlagIds.map((flagId) => (
+                                <option key={`npc-instance-battle-flag-${index}-${flagId}`} value={flagId}>
+                                  {flagId}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            Battle Rewards
+                            <input
+                              list="admin-item-options"
+                              value={formatNpcItemRewardsInput(placement.battleRewards)}
+                              onChange={(event) =>
+                                updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => {
+                                  const parsed = parseNpcItemRewardsInput(event.target.value);
+                                  return {
+                                    ...entry,
+                                    battleRewards: parsed.ok && parsed.rewards.length > 0 ? parsed.rewards : undefined,
+                                  };
+                                })
+                              }
+                              placeholder="lume:25, field-bandage:1"
+                            />
+                          </label>
+                        </>
+                      )}
                       <label>
                         Interaction Rewards
                         <input
@@ -8194,6 +8396,7 @@ function placeNpcFromTemplate(
     interactBattleDefeatedFlag: template.interactBattleDefeatedFlag,
     battleRewards: template.battleRewards ? template.battleRewards.map((entry) => ({ ...entry })) : undefined,
     healer: template.healer,
+    shopId: template.shopId,
     interactionRewards: template.interactionRewards ? template.interactionRewards.map((entry) => ({ ...entry })) : undefined,
     interactionRewardSetFlag: template.interactionRewardSetFlag,
     battleTeamIds: template.battleTeamIds ? [...template.battleTeamIds] : undefined,
@@ -8212,6 +8415,7 @@ function placeNpcFromTemplate(
           interactBattleRepeatable: state.interactBattleRepeatable,
           interactBattleDefeatedFlag: state.interactBattleDefeatedFlag,
           battleRewards: state.battleRewards ? state.battleRewards.map((entry) => ({ ...entry })) : undefined,
+          shopId: state.shopId,
           interactionRewards: state.interactionRewards ? state.interactionRewards.map((entry) => ({ ...entry })) : undefined,
           interactionRewardSetFlag: state.interactionRewardSetFlag,
           battleTeamIds: state.battleTeamIds ? [...state.battleTeamIds] : undefined,
@@ -9252,6 +9456,7 @@ function sanitizeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateEntry[] 
       postDefeatSetFlag?: unknown;
       battleRewards?: unknown;
       healer?: unknown;
+      shopId?: unknown;
       interactionRewards?: unknown;
       interactionRewardSetFlag?: unknown;
       battleTeamIds?: unknown;
@@ -9319,6 +9524,7 @@ function sanitizeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateEntry[] 
       interactBattleDefeatedFlag: interactBattleTransitionFlag,
       battleRewards: sanitizeNpcItemRewards(record.battleRewards),
       healer: typeof record.healer === 'boolean' ? record.healer : undefined,
+      shopId: typeof record.shopId === 'string' && record.shopId.trim() ? sanitizeIdentifier(record.shopId, '') : undefined,
       interactionRewards: sanitizeNpcItemRewards(record.interactionRewards),
       interactionRewardSetFlag:
         typeof record.interactionRewardSetFlag === 'string' && record.interactionRewardSetFlag.trim()
@@ -9424,6 +9630,7 @@ function sanitizeNpcStoryStates(raw: unknown): NpcStoryStateDefinition[] | undef
       interactBattleDefeatedFlag: interactBattleTransitionFlag,
       battleRewards: sanitizeNpcItemRewards(record.battleRewards),
       healer: typeof record.healer === 'boolean' ? record.healer : undefined,
+      shopId: typeof record.shopId === 'string' && record.shopId.trim() ? sanitizeIdentifier(record.shopId, '') : undefined,
       interactionRewards: sanitizeNpcItemRewards(record.interactionRewards),
       interactionRewardSetFlag:
         typeof record.interactionRewardSetFlag === 'string' && record.interactionRewardSetFlag.trim()

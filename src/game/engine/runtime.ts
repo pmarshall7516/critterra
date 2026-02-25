@@ -7,6 +7,7 @@ import { BASE_CRITTER_DATABASE } from '@/game/critters/baseDatabase';
 import {
   buildCritterLookup,
   computeCritterDerivedProgress,
+  computeCritterUnlockedEquipSlots,
   createDefaultPlayerCritterProgress,
   missionProgressKey,
   sanitizeCritterDatabase,
@@ -16,11 +17,20 @@ import {
   MAX_SQUAD_SLOTS,
   type CritterDefinition,
   type CritterElement,
+  type CritterStats,
+  type EquippedEquipmentAnchor,
   type EquippedSkillSlots,
   type CritterLevelMissionRequirement,
   type PlayerCritterProgress,
 } from '@/game/critters/types';
 import { areEquippedSkillSlotsEqual, equipSkillInUniqueSlot } from '@/game/critters/equippedSkills';
+import {
+  canEquipAtSlot,
+  removeEquipmentAtSlot,
+  resolveEquipmentState,
+  type EquippedEquipmentSlot,
+  type ResolvedEquipmentState,
+} from '@/game/critters/equipmentSlots';
 import { sanitizeEncounterTableLibrary } from '@/game/encounters/schema';
 import type {
   EncounterTableCritterEntry,
@@ -72,6 +82,10 @@ import {
   setItemInventoryQuantity,
 } from '@/game/items/schema';
 import type { GameItemDefinition, ItemEffectType, PlayerItemInventory } from '@/game/items/types';
+import { sanitizeShopCatalog } from '@/game/shops/schema';
+import type { ShopDefinition, ShopEntryDefinition } from '@/game/shops/types';
+import type { EquipmentEffectDefinition, EquipmentEffectModifier, EquipmentEffectStat } from '@/game/equipmentEffects/types';
+import { sanitizeEquipmentEffectLibrary } from '@/game/equipmentEffects/schema';
 
 interface MoveStep {
   from: Vector2;
@@ -93,6 +107,12 @@ interface DialogueState {
 interface HealPromptState {
   speaker: string;
   text: string;
+}
+
+interface ShopPromptState {
+  npcName: string;
+  title: string;
+  shopId: string;
 }
 
 interface TransientMessage {
@@ -217,6 +237,8 @@ interface BattleCritterState {
   speedModifier: number;
   /** Effect IDs currently applied to this critter (e.g. stat buffs from skills they used). Cleared on switch/KO. */
   activeEffectIds: string[];
+  /** Passive equipment effect IDs active for this critter in battle. */
+  equipmentEffectIds: string[];
   consecutiveSuccessfulGuardCount: number;
   /** Player team only: skill ids for 4 slots. */
   equippedSkillIds?: BattleEquippedSkillSlots;
@@ -240,6 +262,10 @@ interface PendingNpcInteractBattleStart {
   npc: NpcDefinition;
   defeatedFlag: string;
   rewards: NpcItemRewardDefinition[];
+}
+
+interface PendingNpcShopStart {
+  npc: NpcDefinition;
 }
 
 interface PendingGuardBattleDefeat {
@@ -416,6 +442,29 @@ export interface RuntimeSnapshot {
       speaker: string;
       text: string;
     } | null;
+    shopPrompt: {
+      npcName: string;
+      title: string;
+      shopId: string;
+      entries: Array<{
+        entryId: string;
+        kind: 'item' | 'critter';
+        name: string;
+        quantity: number;
+        imageUrl: string;
+        repeatable: boolean;
+        oneTimePurchased: boolean;
+        affordable: boolean;
+        disableReason: string | null;
+        costs: Array<{
+          itemId: string;
+          itemName: string;
+          itemImageUrl: string;
+          requiredQuantity: number;
+          ownedQuantity: number;
+        }>;
+      }>;
+    } | null;
   };
   fishing: {
     isCasting: boolean;
@@ -429,6 +478,21 @@ export interface RuntimeSnapshot {
     totalCount: number;
     unlockedSquadSlots: number;
     maxSquadSlots: number;
+    lockedKnockoutTracker: {
+      selectedCritterId: number | null;
+      selectedCritterName: string | null;
+      eligibleCritterIds: number[];
+      missionRows: Array<{
+        id: string;
+        type: string;
+        targetValue: number;
+        currentValue: number;
+        completed: boolean;
+        knockoutElements?: string[];
+        knockoutCritterIds?: number[];
+        knockoutCritterNames?: string[];
+      }>;
+    };
     squadSlots: Array<{
       index: number;
       unlocked: boolean;
@@ -437,6 +501,22 @@ export interface RuntimeSnapshot {
       level: number | null;
       currentHp: number | null;
       maxHp: number | null;
+      equipmentAdjustedStats: {
+        hp: number;
+        attack: number;
+        defense: number;
+        speed: number;
+      } | null;
+      equipmentSlots: Array<{
+        itemId: string;
+        itemName: string;
+        imageUrl: string;
+        equipSize: number;
+        anchorSlotIndex: number;
+        spanIndex: number;
+        effectIconUrls: string[];
+        effectDescriptions: string[];
+      } | null>;
     }>;
     collection: Array<{
       critterId: number;
@@ -445,6 +525,8 @@ export interface RuntimeSnapshot {
       rarity: string;
       spriteUrl: string;
       unlocked: boolean;
+      lockedKnockoutTargetEligible: boolean;
+      lockedKnockoutTargetSelected: boolean;
       level: number;
       maxLevel: number;
       currentHp: number | null;
@@ -546,6 +628,13 @@ export interface RuntimeSnapshot {
       misuseText: string;
       effectType: ItemEffectType;
       effectSummary: string;
+      equipSize?: number;
+      quantityEquippable?: number;
+      equippedByCritters?: Array<{
+        critterId: number;
+        critterName: string;
+        spriteUrl: string;
+      }>;
       consumable: boolean;
       isActive: boolean;
       quantityOwned: number;
@@ -632,9 +721,13 @@ export class GameRuntime {
   private skillLookupById: Record<string, SkillDefinition> = {};
   private skillEffectLibrary: SkillEffectDefinition[] = [];
   private skillEffectLookupById: Record<string, SkillEffectDefinition> = {};
+  private equipmentEffectLibrary: EquipmentEffectDefinition[] = [];
+  private equipmentEffectLookupById: Record<string, EquipmentEffectDefinition> = {};
   private elementChart: ElementChart = buildDefaultElementChart();
   private itemDatabase: GameItemDefinition[] = [];
   private itemById: Record<string, GameItemDefinition> = {};
+  private shopCatalog: ShopDefinition[] = [];
+  private shopById: Record<string, ShopDefinition> = {};
   private playerItemInventory: PlayerItemInventory = createDefaultPlayerItemInventory();
   private npcSpriteLibrary: NpcSpriteLibraryEntry[] = [
     ...DEFAULT_NPC_SPRITE_LIBRARY,
@@ -655,6 +748,7 @@ export class GameRuntime {
   private heldDirections: Direction[] = [];
   private dialogue: DialogueState | null = null;
   private healPrompt: HealPromptState | null = null;
+  private shopPrompt: ShopPromptState | null = null;
   private flags: Record<string, boolean>;
   private mainStoryStageId: string | null = null;
   private sideStoryStageId: string | null = null;
@@ -686,6 +780,7 @@ export class GameRuntime {
   private pendingGuardDefeat: PendingGuardBattleDefeat | null = null;
   private pendingNpcInteractBattleDefeat: PendingNpcInteractBattleDefeat | null = null;
   private pendingNpcInteractBattleStart: PendingNpcInteractBattleStart | null = null;
+  private pendingNpcShopStart: PendingNpcShopStart | null = null;
   private pendingBattleRewardDialogue: PendingBattleRewardDialogue | null = null;
   private pendingGuardBattle: { npc: NpcDefinition; guard: NpcMovementGuardDefinition } | null = null;
   private nextBattleId = 1;
@@ -746,6 +841,14 @@ export class GameRuntime {
         },
         {} as Record<string, SkillEffectDefinition>,
       );
+      this.equipmentEffectLibrary = sanitizeEquipmentEffectLibrary(storedWorldContent.equipmentEffects ?? []);
+      this.equipmentEffectLookupById = this.equipmentEffectLibrary.reduce(
+        (acc, effect) => {
+          acc[effect.effect_id] = effect;
+          return acc;
+        },
+        {} as Record<string, EquipmentEffectDefinition>,
+      );
       const knownEffectIds = new Set(this.skillEffectLibrary.map((e) => e.effect_id));
       this.skillDatabase = sanitizeSkillLibrary(storedWorldContent.critterSkills, knownEffectIds);
       this.skillLookupById = (this.skillDatabase as SkillDefinition[]).reduce(
@@ -757,8 +860,10 @@ export class GameRuntime {
       );
       this.elementChart = sanitizeElementChart(storedWorldContent.elementChart) ?? buildDefaultElementChart();
       this.itemDatabase = sanitizeItemCatalog(storedWorldContent.items);
+      this.shopCatalog = sanitizeShopCatalog(storedWorldContent.shops);
     }
     this.itemById = buildItemLookup(this.itemDatabase);
+    this.shopById = buildShopLookup(this.shopCatalog);
 
     const save = !options?.forceNewGame ? loadSave() : null;
     const hasUsableSave = Boolean(save && this.isValidSave(save));
@@ -791,6 +896,9 @@ export class GameRuntime {
       state.playerCritterProgress,
       this.critterDatabase,
     );
+    if (this.ensureLockedKnockoutTargetSelectionValid()) {
+      this.dirty = true;
+    }
     this.playerItemInventory = sanitizePlayerItemInventory(state.playerItemInventory, this.itemDatabase);
     if (migratedMainStoryFlags) {
       this.dirty = true;
@@ -842,6 +950,14 @@ export class GameRuntime {
         this.resolveHealPromptChoice(true);
       } else if (key === 'n' || key === 'N' || key === 'Escape') {
         this.resolveHealPromptChoice(false);
+      }
+      return;
+    }
+
+    if (this.shopPrompt) {
+      this.heldDirections = [];
+      if (key === 'Escape') {
+        this.shopPrompt = null;
       }
       return;
     }
@@ -1247,6 +1363,11 @@ export class GameRuntime {
         knownUrls.push(effect.iconUrl);
       }
     }
+    for (const effect of this.equipmentEffectLibrary) {
+      if (effect.iconUrl) {
+        knownUrls.push(effect.iconUrl);
+      }
+    }
 
     for (const url of knownUrls) {
       const root = extractSupabasePublicRoot(url);
@@ -1295,6 +1416,7 @@ export class GameRuntime {
         inputLocked: this.isPlayerControlLocked(),
         starterSelection: this.getStarterSelectionSnapshot(),
         healPrompt: this.getHealPromptSnapshot(),
+        shopPrompt: this.getShopPromptSnapshot(),
       },
       fishing: this.getFishingSnapshot(),
       critters: critterSummary,
@@ -1359,6 +1481,7 @@ export class GameRuntime {
         inputLocked: this.isPlayerControlLocked(),
         starterSelection: this.getStarterSelectionSnapshot(),
         healPrompt: this.getHealPromptSnapshot(),
+        shopPrompt: this.getShopPromptSnapshot(),
       },
       fishing: this.getFishingSnapshot(),
       flags: activeFlags,
@@ -1443,6 +1566,80 @@ export class GameRuntime {
     return this.resolveHealPromptChoice(shouldHeal);
   }
 
+  public closeShopPrompt(): boolean {
+    if (!this.shopPrompt) {
+      return false;
+    }
+    this.shopPrompt = null;
+    return true;
+  }
+
+  public purchaseShopEntry(entryId: string): boolean {
+    const shopPrompt = this.shopPrompt;
+    if (!shopPrompt || !entryId.trim()) {
+      return false;
+    }
+
+    const shop = this.shopById[shopPrompt.shopId];
+    if (!shop) {
+      return false;
+    }
+    const entry = shop.entries.find((candidate) => candidate.id === entryId);
+    if (!entry) {
+      return false;
+    }
+
+    if (this.isShopEntryOneTimePurchased(shop.id, entry)) {
+      this.showMessage('That entry can only be purchased once.', 2200);
+      return false;
+    }
+
+    const affordability = this.getShopEntryAffordability(entry);
+    if (!affordability.canAfford) {
+      this.showMessage(affordability.reason ?? 'You cannot afford that purchase.', 2200);
+      return false;
+    }
+
+    let nextInventory = this.playerItemInventory;
+    for (const cost of entry.costs) {
+      const owned = getItemInventoryQuantity(nextInventory, cost.itemId);
+      if (owned < cost.quantity) {
+        this.showMessage('You do not have enough materials for that purchase.', 2200);
+        return false;
+      }
+      nextInventory = setItemInventoryQuantity(nextInventory, this.itemDatabase, cost.itemId, owned - cost.quantity);
+    }
+
+    let purchaseMessage = '';
+    if (entry.kind === 'item') {
+      const item = this.itemById[entry.itemId];
+      if (!item || !item.isActive) {
+        this.showMessage('That shop entry is unavailable.', 2200);
+        return false;
+      }
+      const before = getItemInventoryQuantity(nextInventory, item.id);
+      nextInventory = setItemInventoryQuantity(nextInventory, this.itemDatabase, item.id, before + entry.quantity);
+      const after = getItemInventoryQuantity(nextInventory, item.id);
+      if (after - before < entry.quantity) {
+        this.showMessage(`${item.name} does not have enough backpack space.`, 2200);
+        return false;
+      }
+      purchaseMessage = `Purchased ${entry.quantity}x ${item.name}.`;
+    } else {
+      this.flags[entry.unlockFlagId] = true;
+      const critterName = this.critterLookup[entry.critterId]?.name ?? `Critter #${entry.critterId}`;
+      purchaseMessage = `Purchased ${critterName}.`;
+    }
+
+    this.playerItemInventory = nextInventory;
+    if (this.isShopEntryOneTime(entry)) {
+      this.flags[this.getShopPurchaseFlagKey(shop.id, entry.id)] = true;
+    }
+    this.markProgressDirty();
+    this.showMessage(purchaseMessage, 2200);
+    return true;
+  }
+
   private tryUseBackpackItem(itemId: string, squadSlotIndex: number | null): boolean {
     if (this.activeBattle) {
       this.showMessage('Backpack items are unavailable during battle.', 2200);
@@ -1470,9 +1667,8 @@ export class GameRuntime {
     let used = false;
     if (item.effectType === 'tool_action') {
       used = this.tryUseToolItem(item);
-    } else if (item.effectType === 'equip_stub') {
-      this.showMessage(this.resolveItemSuccessText(item, 'Equipment support is coming soon.'), 2200);
-      used = true;
+    } else if (item.effectType === 'equip_effect' || item.effectType === 'equip_stub') {
+      used = this.tryUseEquipmentItem(item, squadSlotIndex);
     } else if (item.effectType === 'heal_flat' || item.effectType === 'heal_percent') {
       used = this.tryUseHealingItem(item, squadSlotIndex);
     } else {
@@ -1578,7 +1774,10 @@ export class GameRuntime {
     const derived = computeCritterDerivedProgress(critter, nextLevel);
     progress.statBonus = derived.statBonus;
     progress.effectiveStats = derived.effectiveStats;
-    const nextMaxHp = Math.max(1, derived.effectiveStats.hp);
+    const equipmentState = this.resolveEquipmentStateForCritter(progress, critter, true);
+    const equipmentEffects = this.getEquipmentEffectsFromAnchors(equipmentState.anchors);
+    const adjustedStats = this.applyEquipmentEffectsToStats(derived.effectiveStats, equipmentEffects);
+    const nextMaxHp = Math.max(1, adjustedStats.hp);
     // Unlocks and level-ups both restore HP to full.
     progress.currentHp = nextMaxHp;
     progress.unlockedAbilityIds = derived.unlockedAbilityIds;
@@ -1590,6 +1789,7 @@ export class GameRuntime {
       progress.equippedSkillIds = next;
     }
     const autoAssignedToSquad = currentLevel === 0 && this.tryAutoAssignFirstUnlockedCritter(critter.id);
+    this.ensureLockedKnockoutTargetSelectionValid();
 
     this.markProgressDirty();
     this.showMessage(
@@ -1609,6 +1809,35 @@ export class GameRuntime {
       this.markProgressDirty();
     }
 
+    return true;
+  }
+
+  public setLockedKnockoutTargetCritter(critterId: number | null): boolean {
+    if (critterId === null) {
+      if (this.playerCritterProgress.lockedKnockoutTargetCritterId === null) {
+        return false;
+      }
+      this.playerCritterProgress.lockedKnockoutTargetCritterId = null;
+      this.markProgressDirty();
+      this.showMessage('Cleared locked KO mission target.', 2200);
+      return true;
+    }
+
+    const normalizedCritterId = Number.isFinite(critterId) ? Math.max(1, Math.floor(critterId)) : -1;
+    if (normalizedCritterId < 1) {
+      return false;
+    }
+    const context = this.getLockedKnockoutTargetContext(normalizedCritterId);
+    if (!context) {
+      return false;
+    }
+    if (this.playerCritterProgress.lockedKnockoutTargetCritterId === normalizedCritterId) {
+      return false;
+    }
+
+    this.playerCritterProgress.lockedKnockoutTargetCritterId = normalizedCritterId;
+    this.markProgressDirty();
+    this.showMessage(`Tracking ${context.critter.name}'s KO missions.`, 2200);
     return true;
   }
 
@@ -1699,6 +1928,91 @@ export class GameRuntime {
     }
     progress.equippedSkillIds = next;
     this.markProgressDirty();
+    return true;
+  }
+
+  public equipEquipmentItem(critterId: number, slotIndex: number, itemId: string): boolean {
+    const safeSlotIndex = Number.isFinite(slotIndex) ? Math.floor(slotIndex) : -1;
+    const normalizedItemId = sanitizeRuntimeIdentifier(itemId);
+    if (safeSlotIndex < 0 || !normalizedItemId) {
+      return false;
+    }
+
+    const critter = this.critterLookup[critterId];
+    const progress = this.playerCritterProgress.collection.find((entry) => entry.critterId === critterId);
+    if (!critter || !progress?.unlocked) {
+      return false;
+    }
+    const isInSquad = this.playerCritterProgress.squad.some((entry) => entry === critterId);
+    if (!isInSquad) {
+      return false;
+    }
+
+    const item = this.getEquipmentItemById(normalizedItemId);
+    if (!item || !item.isActive) {
+      return false;
+    }
+    const slotCount = Math.max(0, computeCritterUnlockedEquipSlots(critter, progress.level));
+    if (slotCount <= 0 || safeSlotIndex >= slotCount) {
+      return false;
+    }
+
+    const currentState = this.resolveEquipmentStateForCritter(progress, critter, false);
+    const anchorsWithoutClicked = removeEquipmentAtSlot(currentState, safeSlotIndex);
+    const baseState = resolveEquipmentState(anchorsWithoutClicked, slotCount, (id) => this.getEquipmentItemSizeById(id));
+    const equipSize = this.getEquipmentItemSizeById(item.id);
+    if (
+      !canEquipAtSlot({
+        state: baseState,
+        slotIndex: safeSlotIndex,
+        itemId: item.id,
+        equipSize,
+      })
+    ) {
+      this.showMessage(`${item.name} needs ${equipSize} contiguous empty equip slot${equipSize === 1 ? '' : 's'}.`, 2400);
+      return false;
+    }
+
+    const ownedQuantity = getItemInventoryQuantity(this.playerItemInventory, item.id);
+    const equippedElsewhereCount = this.countEquippedItemCopies(item.id, {
+      critterIdOverride: critterId,
+      anchorsOverride: baseState.anchors,
+    });
+    if (ownedQuantity <= equippedElsewhereCount) {
+      this.showMessage(`No unequipped copies of ${item.name} are available.`, 2200);
+      return false;
+    }
+
+    const nextAnchors = [...baseState.anchors, { itemId: item.id, slotIndex: safeSlotIndex }];
+    const nextState = resolveEquipmentState(nextAnchors, slotCount, (id) => this.getEquipmentItemSizeById(id));
+    progress.equippedEquipmentAnchors = nextState.anchors;
+    this.markProgressDirty();
+    this.showMessage(`Equipped ${item.name}.`, 1800);
+    return true;
+  }
+
+  public unequipEquipmentItem(critterId: number, slotIndex: number): boolean {
+    const safeSlotIndex = Number.isFinite(slotIndex) ? Math.floor(slotIndex) : -1;
+    if (safeSlotIndex < 0) {
+      return false;
+    }
+    const critter = this.critterLookup[critterId];
+    const progress = this.playerCritterProgress.collection.find((entry) => entry.critterId === critterId);
+    if (!critter || !progress?.unlocked) {
+      return false;
+    }
+    const slotCount = Math.max(0, computeCritterUnlockedEquipSlots(critter, progress.level));
+    if (slotCount <= 0 || safeSlotIndex >= slotCount) {
+      return false;
+    }
+    const currentState = this.resolveEquipmentStateForCritter(progress, critter, false);
+    const nextAnchors = removeEquipmentAtSlot(currentState, safeSlotIndex);
+    if (nextAnchors.length === currentState.anchors.length) {
+      return false;
+    }
+    progress.equippedEquipmentAnchors = nextAnchors;
+    this.markProgressDirty();
+    this.showMessage('Unequipped item.', 1600);
     return true;
   }
 
@@ -1947,6 +2261,7 @@ export class GameRuntime {
     let interactBattleDefeatedFlag = baseNpc.interactBattleDefeatedFlag;
     let battleRewards = baseNpc.battleRewards ? baseNpc.battleRewards.map((entry) => ({ ...entry })) : undefined;
     let healer = Boolean(baseNpc.healer);
+    let shopId = typeof baseNpc.shopId === 'string' ? baseNpc.shopId.trim() || undefined : undefined;
     let interactionRewards = baseNpc.interactionRewards
       ? baseNpc.interactionRewards.map((entry) => ({ ...entry }))
       : undefined;
@@ -2021,6 +2336,9 @@ export class GameRuntime {
       if (typeof state.healer === 'boolean') {
         healer = state.healer;
       }
+      if (typeof state.shopId === 'string') {
+        shopId = state.shopId.trim() || undefined;
+      }
       if (Array.isArray(state.interactionRewards)) {
         interactionRewards = state.interactionRewards.map((entry) => ({ ...entry }));
       }
@@ -2075,6 +2393,7 @@ export class GameRuntime {
       interactBattleDefeatedFlag,
       battleRewards,
       healer,
+      shopId,
       interactionRewards,
       interactionRewardSetFlag,
       battleTeamIds,
@@ -2136,6 +2455,7 @@ export class GameRuntime {
             ? character.battleRewards.map((entry) => ({ ...entry }))
             : undefined,
         healer: typeof state.healer === 'boolean' ? state.healer : Boolean(character.healer),
+        shopId: state.shopId ?? character.shopId,
         interactionRewards: state.interactionRewards
           ? state.interactionRewards.map((entry) => ({ ...entry }))
           : character.interactionRewards
@@ -3374,6 +3694,39 @@ export class GameRuntime {
     return true;
   }
 
+  private resolveNpcInteractionMode(npc: NpcDefinition): 'dialogue' | 'battle' | 'healer' | 'shop' {
+    if (typeof npc.shopId === 'string' && npc.shopId.trim()) {
+      return 'shop';
+    }
+    if (npc.firstInteractBattle) {
+      return 'battle';
+    }
+    if (npc.healer) {
+      return 'healer';
+    }
+    return 'dialogue';
+  }
+
+  private startShopPrompt(npc: NpcDefinition): boolean {
+    const shopId = typeof npc.shopId === 'string' ? npc.shopId.trim() : '';
+    if (!shopId) {
+      return false;
+    }
+    const shop = this.shopById[shopId];
+    if (!shop) {
+      this.showMessage(`Shop "${shopId}" was not found. Configure this NPC in NPC Studio.`, 2600);
+      return false;
+    }
+    this.heldDirections = [];
+    const npcName = this.formatStoryText(npc.name);
+    this.shopPrompt = {
+      npcName,
+      title: this.formatStoryText(`${npc.name}'s Shop`),
+      shopId,
+    };
+    return true;
+  }
+
   private startNpcDialogue(npc: NpcDefinition): void {
     const npcState = this.getNpcRuntimeState(npc);
     npcState.facing = oppositeDirection(this.facing);
@@ -3388,11 +3741,19 @@ export class GameRuntime {
       this.markProgressDirty();
     }
 
+    const interactionMode = this.resolveNpcInteractionMode(npc);
+    if (interactionMode === 'shop') {
+      const preShopDialogue = this.resolveNpcDialogueForInteraction(npc);
+      this.pendingNpcShopStart = { npc };
+      this.startDialogue(preShopDialogue.speaker, preShopDialogue.lines, preShopDialogue.setFlag);
+      return;
+    }
+
     const interactionBattleDefeatedFlag =
       typeof npc.interactBattleDefeatedFlag === 'string' ? npc.interactBattleDefeatedFlag.trim() : '';
     let interactionBattleRewards = this.normalizeNpcItemRewards(npc.battleRewards);
     const interactionBattleRepeatable = Boolean(npc.interactBattleRepeatable);
-    if (npc.firstInteractBattle) {
+    if (interactionMode === 'battle') {
       if (interactionBattleRewards.length === 0 && this.itemById.lume?.isActive) {
         interactionBattleRewards = this.normalizeNpcItemRewards([{ itemId: 'lume', quantity: 25 }]);
       }
@@ -3464,7 +3825,7 @@ export class GameRuntime {
         npc.dialogueSpeaker ?? npc.name,
         [...npc.dialogueLines, ...interactionRewardLines],
         npc.dialogueSetFlag,
-        npc.healer,
+        interactionMode === 'healer',
         shouldGrantInteractionRewards ? interactionRewards : undefined,
         shouldGrantInteractionRewards ? interactionRewardSetFlag || undefined : undefined,
       );
@@ -3477,7 +3838,7 @@ export class GameRuntime {
         npc.name,
         ['...', ...interactionRewardLines],
         undefined,
-        npc.healer,
+        interactionMode === 'healer',
         shouldGrantInteractionRewards ? interactionRewards : undefined,
         shouldGrantInteractionRewards ? interactionRewardSetFlag || undefined : undefined,
       );
@@ -3488,7 +3849,7 @@ export class GameRuntime {
       script.speaker,
       [...script.lines, ...interactionRewardLines],
       script.setFlag,
-      npc.healer,
+      interactionMode === 'healer',
       shouldGrantInteractionRewards ? interactionRewards : undefined,
       shouldGrantInteractionRewards ? interactionRewardSetFlag || undefined : undefined,
     );
@@ -3698,6 +4059,14 @@ export class GameRuntime {
       const { npc, guard } = this.pendingGuardBattle;
       this.pendingGuardBattle = null;
       this.startMovementGuardBattle(npc, guard);
+      return;
+    }
+    if (this.pendingNpcShopStart) {
+      const pending = this.pendingNpcShopStart;
+      this.pendingNpcShopStart = null;
+      if (!this.startShopPrompt(pending.npc)) {
+        this.startDialogue(pending.npc.dialogueSpeaker ?? pending.npc.name, ['This shop is unavailable right now.']);
+      }
       return;
     }
     if (this.pendingNpcInteractBattleStart) {
@@ -4054,7 +4423,10 @@ export class GameRuntime {
       return false;
     }
 
-    const maxHp = Math.max(1, progress.effectiveStats.hp);
+    const equipmentState = this.resolveEquipmentStateForCritter(progress, critter, true);
+    const equipmentEffects = this.getEquipmentEffectsFromAnchors(equipmentState.anchors);
+    const adjustedStats = this.applyEquipmentEffectsToStats(progress.effectiveStats, equipmentEffects);
+    const maxHp = Math.max(1, adjustedStats.hp);
     const currentHp = clamp(progress.currentHp, 0, maxHp);
     if (currentHp <= 0) {
       this.showItemMisuse(item, 'Cannot heal a knocked out critter this way. Please use a healer.');
@@ -4116,6 +4488,85 @@ export class GameRuntime {
       }),
       2200,
     );
+    return true;
+  }
+
+  private tryUseEquipmentItem(item: GameItemDefinition, squadSlotIndex: number | null): boolean {
+    if (squadSlotIndex === null || !Number.isInteger(squadSlotIndex)) {
+      this.showItemMisuse(item, 'Choose a squad critter to equip.');
+      return false;
+    }
+    const slotLimit = this.getUnlockedSquadSlotLimit();
+    if (squadSlotIndex < 0 || squadSlotIndex >= slotLimit) {
+      this.showItemMisuse(item, 'Choose a valid squad slot.');
+      return false;
+    }
+    const critterId = this.playerCritterProgress.squad[squadSlotIndex];
+    if (critterId === null) {
+      this.showItemMisuse(item, 'Choose a squad critter to equip.');
+      return false;
+    }
+    const critter = this.critterLookup[critterId];
+    const progress = this.playerCritterProgress.collection.find((entry) => entry.critterId === critterId);
+    if (!critter || !progress?.unlocked) {
+      this.showItemMisuse(item, 'Choose a squad critter to equip.');
+      return false;
+    }
+
+    const equipmentItem = this.getEquipmentItemById(item.id);
+    if (!equipmentItem || !equipmentItem.isActive) {
+      this.showItemMisuse(item, 'That equipment is unavailable.');
+      return false;
+    }
+
+    const slotCount = Math.max(0, computeCritterUnlockedEquipSlots(critter, progress.level));
+    if (slotCount <= 0) {
+      this.showItemMisuse(item, `${critter.name} has no unlocked equip slots.`);
+      return false;
+    }
+
+    const currentState = this.resolveEquipmentStateForCritter(progress, critter, false);
+    const equipSize = this.getEquipmentItemSizeById(equipmentItem.id);
+
+    const ownedQuantity = getItemInventoryQuantity(this.playerItemInventory, equipmentItem.id);
+    const equippedElsewhereCount = this.countEquippedItemCopies(equipmentItem.id);
+    if (ownedQuantity <= equippedElsewhereCount) {
+      this.showItemMisuse(item, `No unequipped copies of ${equipmentItem.name} are available.`);
+      return false;
+    }
+
+    if (currentState.anchors.some((anchor) => anchor.itemId === equipmentItem.id)) {
+      this.showItemMisuse(item, `${critter.name} already has ${equipmentItem.name} equipped.`);
+      return false;
+    }
+
+    let selectedSlot = -1;
+    for (let slotIndex = 0; slotIndex < slotCount; slotIndex += 1) {
+      if (
+        canEquipAtSlot({
+          state: currentState,
+          slotIndex,
+          itemId: equipmentItem.id,
+          equipSize,
+        })
+      ) {
+        selectedSlot = slotIndex;
+        break;
+      }
+    }
+    if (selectedSlot < 0) {
+      this.showItemMisuse(
+        item,
+        `${equipmentItem.name} needs ${equipSize} contiguous empty equip slot${equipSize === 1 ? '' : 's'}.`,
+      );
+      return false;
+    }
+
+    const nextAnchors = [...currentState.anchors, { itemId: equipmentItem.id, slotIndex: selectedSlot }];
+    const nextState = resolveEquipmentState(nextAnchors, slotCount, (id) => this.getEquipmentItemSizeById(id));
+    progress.equippedEquipmentAnchors = nextState.anchors;
+    this.markProgressDirty();
+    this.showMessage(`Equipped ${equipmentItem.name} on ${critter.name}.`, 1800);
     return true;
   }
 
@@ -4238,6 +4689,7 @@ export class GameRuntime {
 
     const encounterLevel = this.resolveEncounterLevel(critter, encounterEntry);
     const opponent = this.buildWildBattleCritter(critter, encounterLevel);
+    this.pendingNpcShopStart = null;
     this.pendingNpcInteractBattleStart = null;
     this.pendingNpcInteractBattleDefeat = null;
     this.pendingBattleRewardDialogue = null;
@@ -4273,6 +4725,7 @@ export class GameRuntime {
 
     const transitionDurationMs = 760;
     this.clearFishingSession();
+    this.pendingNpcShopStart = null;
     this.pendingNpcInteractBattleStart = null;
     this.moveStep = null;
     this.heldDirections = [];
@@ -4439,7 +4892,13 @@ export class GameRuntime {
       const level = Math.max(1, progress.level);
       const derived = computeCritterDerivedProgress(critter, level);
       const effectiveStats = progress.effectiveStats ?? derived.effectiveStats;
-      const maxHp = Math.max(1, effectiveStats.hp);
+      const equipmentState = this.resolveEquipmentStateForCritter(progress, critter, true);
+      const equipmentEffects = this.getEquipmentEffectsFromAnchors(equipmentState.anchors);
+      const equipmentAdjustedStats = this.applyEquipmentEffectsToStats(effectiveStats, equipmentEffects);
+      const equipmentEffectIds = equipmentEffects
+        .map((effect) => effect.effect_id)
+        .filter((id, idx, arr) => arr.indexOf(id) === idx);
+      const maxHp = Math.max(1, equipmentAdjustedStats.hp);
       const currentHp = clamp(progress.currentHp, 0, maxHp);
       team.push({
         slotIndex: index,
@@ -4450,15 +4909,16 @@ export class GameRuntime {
         level,
         maxHp,
         currentHp,
-        attack: Math.max(1, effectiveStats.attack),
-        defense: Math.max(1, effectiveStats.defense),
-        speed: Math.max(1, effectiveStats.speed),
+        attack: Math.max(1, equipmentAdjustedStats.attack),
+        defense: Math.max(1, equipmentAdjustedStats.defense),
+        speed: Math.max(1, equipmentAdjustedStats.speed),
         fainted: currentHp <= 0,
         knockoutProgressCounted: false,
         attackModifier: 1,
         defenseModifier: 1,
         speedModifier: 1,
         activeEffectIds: [],
+        equipmentEffectIds,
         consecutiveSuccessfulGuardCount: 0,
         equippedSkillIds: progress.equippedSkillIds,
       });
@@ -4539,6 +4999,7 @@ export class GameRuntime {
       defenseModifier: 1,
       speedModifier: 1,
       activeEffectIds: [],
+      equipmentEffectIds: [],
       consecutiveSuccessfulGuardCount: 0,
       equippedSkillIds,
     };
@@ -5126,7 +5587,7 @@ export class GameRuntime {
       if (!progress?.unlocked) {
         continue;
       }
-      const maxHp = Math.max(1, progress.effectiveStats.hp);
+      const maxHp = Math.max(1, battleEntry.maxHp);
       const nextHp = clamp(battleEntry.currentHp, 0, maxHp);
       if (progress.currentHp !== nextHp) {
         progress.currentHp = nextHp;
@@ -5185,18 +5646,38 @@ export class GameRuntime {
   }
 
   private mapBattleTeamEntryToSnapshot(entry: BattleCritterState): RuntimeBattleSnapshot['playerTeam'][number] {
-    const activeEffectIds = entry.activeEffectIds ?? [];
+    const activeEffectIds = [...(entry.equipmentEffectIds ?? []), ...(entry.activeEffectIds ?? [])]
+      .filter((id, index, values) => values.indexOf(id) === index);
     const activeEffectIconUrls: string[] = [];
     const activeEffectDescriptions: string[] = [];
     for (const id of activeEffectIds) {
-      const effect = this.skillEffectLookupById[id];
-      const url = effect?.iconUrl;
+      const skillEffect = this.skillEffectLookupById[id];
+      if (skillEffect) {
+        const url = skillEffect.iconUrl;
+        if (typeof url === 'string' && url.length > 0) {
+          activeEffectIconUrls.push(url);
+          const buffLabel = Math.round((skillEffect.buffPercent ?? 0) * 100);
+          activeEffectDescriptions.push(
+            skillEffect.description ? skillEffect.description.replace(/<buff>/g, String(buffLabel)) : '',
+          );
+        }
+        continue;
+      }
+      const equipmentEffect = this.equipmentEffectLookupById[id];
+      if (!equipmentEffect) {
+        continue;
+      }
+      const url = equipmentEffect.iconUrl;
       if (typeof url === 'string' && url.length > 0) {
         activeEffectIconUrls.push(url);
-        const desc = effect?.description;
-        const buffLabel = Math.round((effect?.buffPercent ?? 0) * 100);
-        activeEffectDescriptions.push(desc ? desc.replace(/<buff>/g, String(buffLabel)) : '');
       }
+      activeEffectDescriptions.push(this.summarizeEquipmentEffect(equipmentEffect));
+    }
+    while (activeEffectDescriptions.length < activeEffectIconUrls.length) {
+      activeEffectDescriptions.push('');
+    }
+    if (activeEffectDescriptions.length > activeEffectIconUrls.length) {
+      activeEffectDescriptions.length = activeEffectIconUrls.length;
     }
     return {
       slotIndex: entry.slotIndex,
@@ -5397,7 +5878,7 @@ export class GameRuntime {
   }
 
   private updateWarpHint(): void {
-    if (this.dialogue || this.healPrompt) {
+    if (this.dialogue || this.healPrompt || this.shopPrompt) {
       this.warpHintLabel = null;
       return;
     }
@@ -5440,6 +5921,7 @@ export class GameRuntime {
     return Boolean(
       this.dialogue ||
       this.healPrompt ||
+      this.shopPrompt ||
       this.activeCutscene ||
       this.starterSelection ||
       this.activeScriptedScene ||
@@ -5455,6 +5937,122 @@ export class GameRuntime {
       speaker: this.healPrompt.speaker,
       text: this.healPrompt.text,
     };
+  }
+
+  private getShopPromptSnapshot(): RuntimeSnapshot['story']['shopPrompt'] {
+    if (!this.shopPrompt) {
+      return null;
+    }
+    const shop = this.shopById[this.shopPrompt.shopId];
+    if (!shop) {
+      return null;
+    }
+    const entries = shop.entries
+      .map((entry) => {
+        if (entry.kind === 'item') {
+          const item = this.itemById[entry.itemId];
+          if (!item || !item.isActive) {
+            return null;
+          }
+          const affordability = this.getShopEntryAffordability(entry);
+          return {
+            entryId: entry.id,
+            kind: 'item' as const,
+            name: item.name,
+            quantity: entry.quantity,
+            imageUrl: item.imageUrl,
+            repeatable: entry.repeatable !== false,
+            oneTimePurchased: this.isShopEntryOneTimePurchased(shop.id, entry),
+            affordable: affordability.canAfford,
+            disableReason: affordability.reason,
+            costs: entry.costs.map((cost) => ({
+              itemId: cost.itemId,
+              itemName: this.itemById[cost.itemId]?.name ?? cost.itemId,
+              itemImageUrl: this.itemById[cost.itemId]?.imageUrl ?? '',
+              requiredQuantity: cost.quantity,
+              ownedQuantity: getItemInventoryQuantity(this.playerItemInventory, cost.itemId),
+            })),
+          };
+        }
+
+        const critter = this.critterLookup[entry.critterId];
+        const affordability = this.getShopEntryAffordability(entry);
+        return {
+          entryId: entry.id,
+          kind: 'critter' as const,
+          name: critter?.name ?? `Critter #${entry.critterId}`,
+          quantity: 1,
+          imageUrl: critter?.spriteUrl ?? '',
+          repeatable: false,
+          oneTimePurchased: this.isShopEntryOneTimePurchased(shop.id, entry),
+          affordable: affordability.canAfford,
+          disableReason: affordability.reason,
+          costs: entry.costs.map((cost) => ({
+            itemId: cost.itemId,
+            itemName: this.itemById[cost.itemId]?.name ?? cost.itemId,
+            itemImageUrl: this.itemById[cost.itemId]?.imageUrl ?? '',
+            requiredQuantity: cost.quantity,
+            ownedQuantity: getItemInventoryQuantity(this.playerItemInventory, cost.itemId),
+          })),
+        };
+      })
+      .filter((entry): entry is NonNullable<RuntimeSnapshot['story']['shopPrompt']>['entries'][number] => Boolean(entry));
+
+    return {
+      npcName: this.shopPrompt.npcName,
+      title: this.shopPrompt.title,
+      shopId: this.shopPrompt.shopId,
+      entries,
+    };
+  }
+
+  private getShopPurchaseFlagKey(shopId: string, entryId: string): string {
+    return `shop-purchase:${shopId}:${entryId}`;
+  }
+
+  private isShopEntryOneTime(entry: ShopEntryDefinition): boolean {
+    return entry.kind === 'critter' || entry.repeatable === false;
+  }
+
+  private isShopEntryOneTimePurchased(shopId: string, entry: ShopEntryDefinition): boolean {
+    if (!this.isShopEntryOneTime(entry)) {
+      return false;
+    }
+    return Boolean(this.flags[this.getShopPurchaseFlagKey(shopId, entry.id)]);
+  }
+
+  private getShopEntryAffordability(entry: ShopEntryDefinition): { canAfford: boolean; reason: string | null } {
+    if (!this.shopPrompt) {
+      return { canAfford: false, reason: 'Shop is not open.' };
+    }
+    if (this.isShopEntryOneTimePurchased(this.shopPrompt.shopId, entry)) {
+      return { canAfford: false, reason: 'Already purchased.' };
+    }
+    for (const cost of entry.costs) {
+      const owned = getItemInventoryQuantity(this.playerItemInventory, cost.itemId);
+      if (owned < cost.quantity) {
+        const itemName = this.itemById[cost.itemId]?.name ?? cost.itemId;
+        return { canAfford: false, reason: `Need more ${itemName}.` };
+      }
+    }
+    if (entry.kind === 'item') {
+      const item = this.itemById[entry.itemId];
+      if (!item || !item.isActive) {
+        return { canAfford: false, reason: 'Item is unavailable.' };
+      }
+      const owned = getItemInventoryQuantity(this.playerItemInventory, item.id);
+      const matchingCost = entry.costs.reduce((total, cost) => {
+        if (cost.itemId !== item.id) {
+          return total;
+        }
+        return total + cost.quantity;
+      }, 0);
+      const postCostOwned = Math.max(0, owned - matchingCost);
+      if (postCostOwned + entry.quantity > item.maxStack) {
+        return { canAfford: false, reason: `${item.name} stack is full.` };
+      }
+    }
+    return { canAfford: true, reason: null };
   }
 
   private getStarterSelectionSnapshot(): RuntimeSnapshot['story']['starterSelection'] {
@@ -6055,6 +6653,64 @@ export class GameRuntime {
     }
   }
 
+  private getLockedKnockoutTargetContext(
+    critterId: number,
+  ): {
+    critter: CritterDefinition;
+    progress: PlayerCritterProgress['collection'][number];
+    levelRow: CritterDefinition['levels'][number];
+    knockoutMissions: CritterLevelMissionRequirement[];
+  } | null {
+    const critter = this.critterLookup[critterId];
+    const progress = this.playerCritterProgress.collection.find((entry) => entry.critterId === critterId);
+    if (!critter || !progress || progress.unlocked) {
+      return null;
+    }
+    const currentLevel = Math.max(0, progress.level);
+    const targetLevel = currentLevel + 1;
+    const levelRow = critter.levels.find((entry) => entry.level === targetLevel);
+    if (!levelRow) {
+      return null;
+    }
+    if (this.hasPendingStoryFlagMission(levelRow.missions, levelRow.level, progress.missionProgress)) {
+      return null;
+    }
+    const knockoutMissions = levelRow.missions.filter(
+      (entry): entry is CritterLevelMissionRequirement => entry.type === 'opposing_knockouts',
+    );
+    if (knockoutMissions.length === 0) {
+      return null;
+    }
+    return {
+      critter,
+      progress,
+      levelRow,
+      knockoutMissions,
+    };
+  }
+
+  private getEligibleLockedKnockoutTargetCritterIds(): number[] {
+    const eligible: number[] = [];
+    for (const entry of this.playerCritterProgress.collection) {
+      if (this.getLockedKnockoutTargetContext(entry.critterId)) {
+        eligible.push(entry.critterId);
+      }
+    }
+    return eligible;
+  }
+
+  private ensureLockedKnockoutTargetSelectionValid(): boolean {
+    const selectedCritterId = this.playerCritterProgress.lockedKnockoutTargetCritterId;
+    if (selectedCritterId === null) {
+      return false;
+    }
+    if (this.getLockedKnockoutTargetContext(selectedCritterId)) {
+      return false;
+    }
+    this.playerCritterProgress.lockedKnockoutTargetCritterId = null;
+    return true;
+  }
+
   private recordOpposingKnockoutProgress(opposingCritterId: number, knockoutAttackerCritterId: number | null): void {
     const opposingCritter = this.critterLookup[opposingCritterId];
     if (!opposingCritter) {
@@ -6065,13 +6721,12 @@ export class GameRuntime {
     }
 
     const nowIso = new Date().toISOString();
-    let updatedAny = false;
-    /* Attacker always gets credit. Locked critters (level 1 missions) get credit for any knockout. */
+    let updatedAny = this.ensureLockedKnockoutTargetSelectionValid();
+    // Attacker always gets credit. Optionally also credit one selected locked knockout target.
     const critterIdsToUpdate = new Set<number>([knockoutAttackerCritterId]);
-    for (const entry of this.playerCritterProgress.collection) {
-      if (!entry.unlocked) {
-        critterIdsToUpdate.add(entry.critterId);
-      }
+    const selectedLockedTargetCritterId = this.playerCritterProgress.lockedKnockoutTargetCritterId;
+    if (selectedLockedTargetCritterId !== null) {
+      critterIdsToUpdate.add(selectedLockedTargetCritterId);
     }
     const crittersToUpdate = this.critterDatabase.filter((c) => critterIdsToUpdate.has(c.id));
     for (const critter of crittersToUpdate) {
@@ -6264,13 +6919,190 @@ export class GameRuntime {
     return slots;
   }
 
+  private getEquipmentItemById(itemId: string): GameItemDefinition | null {
+    const item = this.itemById[itemId];
+    if (!item || item.category !== 'equipment') {
+      return null;
+    }
+    if (item.effectType !== 'equip_effect' && item.effectType !== 'equip_stub') {
+      return null;
+    }
+    return item;
+  }
+
+  private getEquipmentItemSizeById(itemId: string): number {
+    const item = this.getEquipmentItemById(itemId);
+    if (!item) {
+      return 1;
+    }
+    const config = item.effectConfig as { equipSize?: number };
+    if (typeof config.equipSize !== 'number' || !Number.isFinite(config.equipSize)) {
+      return 1;
+    }
+    return Math.max(1, Math.min(8, Math.floor(config.equipSize)));
+  }
+
+  private getEquipmentEffectIdsForItem(item: GameItemDefinition): string[] {
+    const config = item.effectConfig as { equipmentEffectIds?: string[] };
+    if (!Array.isArray(config.equipmentEffectIds)) {
+      return [];
+    }
+    return config.equipmentEffectIds
+      .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      .map((entry) => entry.trim())
+      .filter((entry, index, values) => values.indexOf(entry) === index);
+  }
+
+  private resolveEquipmentStateForCritter(
+    progress: PlayerCritterProgress['collection'][number],
+    critter: CritterDefinition,
+    commitIfChanged: boolean,
+  ): ResolvedEquipmentState {
+    const slotCount = Math.max(0, computeCritterUnlockedEquipSlots(critter, progress.level));
+    const rawAnchors = Array.isArray(progress.equippedEquipmentAnchors) ? progress.equippedEquipmentAnchors : [];
+    const state = resolveEquipmentState(rawAnchors, slotCount, (itemId) => this.getEquipmentItemSizeById(itemId));
+    if (commitIfChanged && !areEquipmentAnchorsEqual(rawAnchors, state.anchors)) {
+      progress.equippedEquipmentAnchors = state.anchors;
+      this.markProgressDirty();
+    }
+    return state;
+  }
+
+  private countEquippedItemCopies(
+    itemId: string,
+    options?: { critterIdOverride?: number; anchorsOverride?: EquippedEquipmentAnchor[] },
+  ): number {
+    const normalizedItemId = sanitizeRuntimeIdentifier(itemId);
+    if (!normalizedItemId) {
+      return 0;
+    }
+    let count = 0;
+    for (const entry of this.playerCritterProgress.collection) {
+      const critter = this.critterLookup[entry.critterId];
+      if (!entry.unlocked || !critter) {
+        continue;
+      }
+      const anchors =
+        options?.critterIdOverride === entry.critterId && options.anchorsOverride
+          ? options.anchorsOverride
+          : this.resolveEquipmentStateForCritter(entry, critter, false).anchors;
+      for (const anchor of anchors) {
+        if (anchor.itemId === normalizedItemId) {
+          count += 1;
+        }
+      }
+    }
+    return count;
+  }
+
+  private getEquipmentEffectsFromAnchors(anchors: EquippedEquipmentAnchor[]): EquipmentEffectDefinition[] {
+    const effects: EquipmentEffectDefinition[] = [];
+    for (const anchor of anchors) {
+      const item = this.getEquipmentItemById(anchor.itemId);
+      if (!item) {
+        continue;
+      }
+      const effectIds = this.getEquipmentEffectIdsForItem(item);
+      for (const effectId of effectIds) {
+        const effect = this.equipmentEffectLookupById[effectId];
+        if (!effect) {
+          continue;
+        }
+        effects.push(effect);
+      }
+    }
+    return effects;
+  }
+
+  private applyEquipmentEffectsToStats(
+    baseStats: CritterStats,
+    effects: EquipmentEffectDefinition[],
+  ): CritterStats {
+    const flatByStat: Record<EquipmentEffectStat, number> = {
+      hp: 0,
+      attack: 0,
+      defense: 0,
+      speed: 0,
+    };
+    const percentByStat: Record<EquipmentEffectStat, number> = {
+      hp: 0,
+      attack: 0,
+      defense: 0,
+      speed: 0,
+    };
+    for (const effect of effects) {
+      for (const modifier of effect.modifiers ?? []) {
+        if (modifier.mode === 'flat') {
+          flatByStat[modifier.stat] += modifier.value;
+        } else {
+          percentByStat[modifier.stat] += modifier.value;
+        }
+      }
+    }
+    return {
+      hp: applyStatModifier(baseStats.hp, flatByStat.hp, percentByStat.hp),
+      attack: applyStatModifier(baseStats.attack, flatByStat.attack, percentByStat.attack),
+      defense: applyStatModifier(baseStats.defense, flatByStat.defense, percentByStat.defense),
+      speed: applyStatModifier(baseStats.speed, flatByStat.speed, percentByStat.speed),
+    };
+  }
+
+  private summarizeEquipmentEffect(effect: EquipmentEffectDefinition): string {
+    const description = effect.description.trim();
+    if (description) {
+      return description;
+    }
+    const parts = effect.modifiers.map((modifier: EquipmentEffectModifier) => {
+      const stat = modifier.stat.toUpperCase();
+      if (modifier.mode === 'percent') {
+        const pct = Math.round(modifier.value * 100);
+        return `${pct >= 0 ? '+' : ''}${pct}% ${stat}`;
+      }
+      const flat = Math.round(modifier.value);
+      return `${flat >= 0 ? '+' : ''}${flat} ${stat}`;
+    });
+    return parts.join(', ');
+  }
+
+  private buildEquipmentSlotSnapshot(
+    slot: EquippedEquipmentSlot,
+  ): RuntimeSnapshot['critters']['squadSlots'][number]['equipmentSlots'][number] {
+    const item = this.getEquipmentItemById(slot.itemId);
+    const effectDefs = item ? this.getEquipmentEffectsFromAnchors([{ itemId: item.id, slotIndex: slot.anchorSlotIndex }]) : [];
+    const effectIconUrls = effectDefs
+      .map((effect) => effect.iconUrl)
+      .filter((url): url is string => typeof url === 'string' && url.trim().length > 0);
+    const effectDescriptions = effectDefs
+      .map((effect) => this.summarizeEquipmentEffect(effect))
+      .filter((entry) => entry.length > 0);
+    return {
+      itemId: slot.itemId,
+      itemName: item?.name ?? slot.itemId,
+      imageUrl: item?.imageUrl ?? '',
+      equipSize: slot.equipSize,
+      anchorSlotIndex: slot.anchorSlotIndex,
+      spanIndex: slot.spanIndex,
+      effectIconUrls,
+      effectDescriptions,
+    };
+  }
+
   private getCritterSummary(): RuntimeSnapshot['critters'] {
+    if (this.ensureLockedKnockoutTargetSelectionValid()) {
+      this.markProgressDirty();
+    }
+
     const collectionById = this.playerCritterProgress.collection.reduce<
       Record<number, PlayerCritterProgress['collection'][number]>
     >((registry, entry) => {
       registry[entry.critterId] = entry;
       return registry;
     }, {});
+    const eligibleLockedKnockoutTargetCritterIds = this.getEligibleLockedKnockoutTargetCritterIds();
+    const eligibleLockedKnockoutTargetCritterIdSet = new Set<number>(eligibleLockedKnockoutTargetCritterIds);
+    const selectedLockedKnockoutTargetCritterId = this.playerCritterProgress.lockedKnockoutTargetCritterId;
+    const equipmentStateByCritterId = new Map<number, ResolvedEquipmentState>();
+    const equipmentAdjustedStatsByCritterId = new Map<number, CritterStats>();
 
     const collection = this.critterDatabase.map((critter) => {
       const progress = collectionById[critter.id] ?? null;
@@ -6328,11 +7160,25 @@ export class GameRuntime {
         : null;
       const availableAbilityIds = new Set(progress?.unlockedAbilityIds ?? derived.unlockedAbilityIds);
       const effectiveStats = progress?.effectiveStats ?? derived.effectiveStats;
+      if (unlocked && progress) {
+        const equipmentState = this.resolveEquipmentStateForCritter(progress, critter, true);
+        const equipmentEffects = this.getEquipmentEffectsFromAnchors(equipmentState.anchors);
+        equipmentStateByCritterId.set(critter.id, equipmentState);
+        equipmentAdjustedStatsByCritterId.set(
+          critter.id,
+          this.applyEquipmentEffectsToStats(effectiveStats, equipmentEffects),
+        );
+      } else {
+        equipmentStateByCritterId.set(critter.id, resolveEquipmentState([], 0, () => 1));
+      }
       const maxHp = unlocked ? Math.max(1, effectiveStats.hp) : null;
       const currentHp =
         unlocked && maxHp !== null
           ? clamp(progress?.currentHp ?? maxHp, 0, maxHp)
           : null;
+      const lockedKnockoutTargetEligible = eligibleLockedKnockoutTargetCritterIdSet.has(critter.id);
+      const lockedKnockoutTargetSelected =
+        lockedKnockoutTargetEligible && selectedLockedKnockoutTargetCritterId === critter.id;
 
       return {
         critterId: critter.id,
@@ -6341,6 +7187,8 @@ export class GameRuntime {
         rarity: critter.rarity,
         spriteUrl: critter.spriteUrl,
         unlocked,
+        lockedKnockoutTargetEligible,
+        lockedKnockoutTargetSelected,
         level,
         maxLevel,
         currentHp,
@@ -6378,16 +7226,39 @@ export class GameRuntime {
           : null,
       };
     });
+    const selectedLockedKnockoutTargetEntry =
+      selectedLockedKnockoutTargetCritterId === null
+        ? null
+        : collection.find((entry) => entry.critterId === selectedLockedKnockoutTargetCritterId) ?? null;
+    const selectedLockedKnockoutMissionRows =
+      selectedLockedKnockoutTargetEntry?.activeRequirement?.missions
+        .filter((mission) => mission.type === 'opposing_knockouts')
+        .map((mission) => ({ ...mission })) ?? [];
 
     const squadSlots = this.playerCritterProgress.squad.map((critterId, index) => {
       const unlocked = index < this.playerCritterProgress.unlockedSquadSlots;
       const critter = critterId ? this.critterLookup[critterId] : undefined;
       const progress = critterId ? collectionById[critterId] : undefined;
-      const maxHp = unlocked && progress?.unlocked ? Math.max(1, progress.effectiveStats.hp) : null;
+      const equipmentAdjustedStats =
+        unlocked && critter && progress?.unlocked
+          ? equipmentAdjustedStatsByCritterId.get(critter.id) ??
+            { ...progress.effectiveStats }
+          : null;
+      const equipmentState =
+        unlocked && critter && progress?.unlocked
+          ? equipmentStateByCritterId.get(critter.id) ??
+            this.resolveEquipmentStateForCritter(progress, critter, true)
+          : null;
+      const maxHp =
+        unlocked && progress?.unlocked
+          ? Math.max(1, equipmentAdjustedStats?.hp ?? progress.effectiveStats.hp)
+          : null;
       const currentHp =
         unlocked && progress?.unlocked && maxHp !== null
           ? clamp(progress.currentHp, 0, maxHp)
           : null;
+      const equipmentSlots =
+        equipmentState?.slots.map((slot) => (slot ? this.buildEquipmentSlotSnapshot(slot) : null)) ?? [];
 
       return {
         index,
@@ -6397,6 +7268,8 @@ export class GameRuntime {
         level: unlocked && progress?.unlocked ? progress.level : null,
         currentHp,
         maxHp,
+        equipmentAdjustedStats,
+        equipmentSlots,
       };
     });
 
@@ -6405,16 +7278,56 @@ export class GameRuntime {
       totalCount: this.critterDatabase.length,
       unlockedSquadSlots: this.playerCritterProgress.unlockedSquadSlots,
       maxSquadSlots: MAX_SQUAD_SLOTS,
+      lockedKnockoutTracker: {
+        selectedCritterId: selectedLockedKnockoutTargetEntry?.critterId ?? null,
+        selectedCritterName: selectedLockedKnockoutTargetEntry?.name ?? null,
+        eligibleCritterIds: eligibleLockedKnockoutTargetCritterIds,
+        missionRows: selectedLockedKnockoutMissionRows,
+      },
       squadSlots,
       collection,
     };
   }
 
   private getBackpackSummary(): RuntimeSnapshot['backpack'] {
+    const equippedByItemId = new Map<
+      string,
+      Array<{
+        critterId: number;
+        critterName: string;
+        spriteUrl: string;
+      }>
+    >();
+    for (const entry of this.playerCritterProgress.collection) {
+      if (!entry.unlocked) {
+        continue;
+      }
+      const critter = this.critterLookup[entry.critterId];
+      if (!critter) {
+        continue;
+      }
+      const equipmentState = this.resolveEquipmentStateForCritter(entry, critter, false);
+      for (const anchor of equipmentState.anchors) {
+        const equippedCritters = equippedByItemId.get(anchor.itemId) ?? [];
+        if (equippedCritters.some((equippedCritter) => equippedCritter.critterId === critter.id)) {
+          continue;
+        }
+        equippedCritters.push({
+          critterId: critter.id,
+          critterName: critter.name,
+          spriteUrl: critter.spriteUrl,
+        });
+        equippedByItemId.set(anchor.itemId, equippedCritters);
+      }
+    }
+
     const allItems = [...this.itemDatabase]
       .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }))
       .map((item) => {
         const quantityOwned = getItemInventoryQuantity(this.playerItemInventory, item.id);
+        const equippedByCritters = item.category === 'equipment' ? [...(equippedByItemId.get(item.id) ?? [])] : undefined;
+        const quantityEquippable =
+          item.category === 'equipment' ? Math.max(0, quantityOwned - (equippedByCritters?.length ?? 0)) : undefined;
         const hasUseAction = item.category !== 'material';
         return {
           itemId: item.id,
@@ -6425,11 +7338,17 @@ export class GameRuntime {
           misuseText: item.misuseText,
           effectType: item.effectType,
           effectSummary: describeItemEffect(item),
+          ...(item.category === 'equipment' && { equipSize: this.getEquipmentItemSizeById(item.id) }),
+          ...(item.category === 'equipment' && { quantityEquippable }),
+          ...(item.category === 'equipment' && { equippedByCritters }),
           consumable: item.consumable,
           isActive: item.isActive,
           quantityOwned,
           hasUseAction,
-          canUse: hasUseAction && item.isActive && quantityOwned > 0,
+          canUse:
+            hasUseAction &&
+            item.isActive &&
+            (item.category === 'equipment' ? (quantityEquippable ?? 0) > 0 : quantityOwned > 0),
         };
       });
     const items = allItems.filter((item) => item.quantityOwned > 0);
@@ -6473,6 +7392,10 @@ export class GameRuntime {
           statBonus: { ...entry.statBonus },
           effectiveStats: { ...entry.effectiveStats },
           unlockedAbilityIds: [...entry.unlockedAbilityIds],
+          equippedEquipmentAnchors: (entry.equippedEquipmentAnchors ?? []).map((anchor) => ({
+            itemId: anchor.itemId,
+            slotIndex: anchor.slotIndex,
+          })),
         })),
       },
       playerItemInventory: {
@@ -6623,10 +7546,14 @@ export class GameRuntime {
 
   private isCritterFullyHealthy(critterId: number): boolean {
     const progress = this.playerCritterProgress.collection.find((entry) => entry.critterId === critterId);
-    if (!progress?.unlocked) {
+    const critter = this.critterLookup[critterId];
+    if (!progress?.unlocked || !critter) {
       return false;
     }
-    const maxHp = Math.max(1, progress.effectiveStats.hp);
+    const equipmentState = this.resolveEquipmentStateForCritter(progress, critter, true);
+    const equipmentEffects = this.getEquipmentEffectsFromAnchors(equipmentState.anchors);
+    const adjustedStats = this.applyEquipmentEffectsToStats(progress.effectiveStats, equipmentEffects);
+    const maxHp = Math.max(1, adjustedStats.hp);
     return clamp(progress.currentHp, 0, maxHp) >= maxHp;
   }
 
@@ -6723,7 +7650,14 @@ export class GameRuntime {
       if (!squadIds.has(entry.critterId)) {
         continue;
       }
-      const maxHp = Math.max(1, entry.effectiveStats?.hp ?? 1);
+      const critter = this.critterLookup[entry.critterId];
+      if (!critter) {
+        continue;
+      }
+      const equipmentState = this.resolveEquipmentStateForCritter(entry, critter, true);
+      const equipmentEffects = this.getEquipmentEffectsFromAnchors(equipmentState.anchors);
+      const adjustedStats = this.applyEquipmentEffectsToStats(entry.effectiveStats, equipmentEffects);
+      const maxHp = Math.max(1, adjustedStats.hp);
       entry.currentHp = maxHp;
     }
   }
@@ -6746,7 +7680,9 @@ export class GameRuntime {
     this.heldDirections = [];
     this.dialogue = null;
     this.healPrompt = null;
+    this.shopPrompt = null;
     this.pendingGuardBattle = null;
+    this.pendingNpcShopStart = null;
     this.pendingNpcInteractBattleStart = null;
     this.pendingGuardDefeat = null;
     this.pendingNpcInteractBattleDefeat = null;
@@ -7153,6 +8089,29 @@ export class GameRuntime {
   }
 }
 
+function areEquipmentAnchorsEqual(
+  left: EquippedEquipmentAnchor[] | undefined,
+  right: EquippedEquipmentAnchor[] | undefined,
+): boolean {
+  const safeLeft = Array.isArray(left) ? left : [];
+  const safeRight = Array.isArray(right) ? right : [];
+  if (safeLeft.length !== safeRight.length) {
+    return false;
+  }
+  for (let i = 0; i < safeLeft.length; i += 1) {
+    if (safeLeft[i]?.itemId !== safeRight[i]?.itemId || safeLeft[i]?.slotIndex !== safeRight[i]?.slotIndex) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function applyStatModifier(baseValue: number, flatDelta: number, percentDelta: number): number {
+  const withFlat = baseValue + flatDelta;
+  const withPercent = withFlat * (1 + percentDelta);
+  return Math.max(1, Math.round(withPercent));
+}
+
 function buildMapRegistryFromInputs(
   mapInputs: WorldMapInput[],
   tileDefinitions: Record<string, TileDefinition>,
@@ -7187,6 +8146,13 @@ function buildItemLookup(items: GameItemDefinition[]): Record<string, GameItemDe
   }, {});
 }
 
+function buildShopLookup(shops: ShopDefinition[]): Record<string, ShopDefinition> {
+  return shops.reduce<Record<string, ShopDefinition>>((registry, shop) => {
+    registry[shop.id] = shop;
+    return registry;
+  }, {});
+}
+
 function describeItemEffect(item: GameItemDefinition): string {
   if (item.effectType === 'tool_action') {
     const effect = item.effectConfig as { actionId?: string };
@@ -7195,8 +8161,16 @@ function describeItemEffect(item: GameItemDefinition): string {
     }
     return 'Tool action';
   }
-  if (item.effectType === 'equip_stub') {
-    return 'Equipment (coming soon)';
+  if (item.effectType === 'equip_effect' || item.effectType === 'equip_stub') {
+    const effect = item.effectConfig as { equipSize?: number; equipmentEffectIds?: string[] };
+    const equipSize =
+      typeof effect.equipSize === 'number' && Number.isFinite(effect.equipSize)
+        ? Math.max(1, Math.floor(effect.equipSize))
+        : 1;
+    const effectCount = Array.isArray(effect.equipmentEffectIds) ? effect.equipmentEffectIds.length : 0;
+    return effectCount > 0
+      ? `Equipment (${equipSize} slot${equipSize === 1 ? '' : 's'}) • ${effectCount} effect${effectCount === 1 ? '' : 's'}`
+      : `Equipment (${equipSize} slot${equipSize === 1 ? '' : 's'})`;
   }
   if (item.effectType === 'heal_flat') {
     const effect = item.effectConfig as { healAmount?: number };
@@ -7217,6 +8191,19 @@ function describeItemEffect(item: GameItemDefinition): string {
     return `Special: ${effect.actionId.trim()}`;
   }
   return 'Special item';
+}
+
+function sanitizeRuntimeIdentifier(raw: unknown): string {
+  if (typeof raw !== 'string') {
+    return '';
+  }
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+/g, '')
+    .replace(/-+$/g, '');
 }
 
 function sanitizeRuntimeNpcSpriteLibrary(raw: unknown): NpcSpriteLibraryEntry[] {
@@ -7336,6 +8323,10 @@ function sanitizeRuntimeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateE
             : undefined,
         battleRewards: sanitizeRuntimeNpcItemRewards(stateRecord.battleRewards),
         healer: typeof stateRecord.healer === 'boolean' ? stateRecord.healer : undefined,
+        shopId:
+          typeof stateRecord.shopId === 'string' && stateRecord.shopId.trim()
+            ? sanitizeRuntimeIdentifier(stateRecord.shopId)
+            : undefined,
         interactionRewards: sanitizeRuntimeNpcItemRewards(stateRecord.interactionRewards),
         interactionRewardSetFlag:
           typeof stateRecord.interactionRewardSetFlag === 'string' && stateRecord.interactionRewardSetFlag.trim()
@@ -7373,6 +8364,8 @@ function sanitizeRuntimeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateE
           : undefined,
       battleRewards: sanitizeRuntimeNpcItemRewards(record.battleRewards),
       healer: typeof record.healer === 'boolean' ? record.healer : undefined,
+      shopId:
+        typeof record.shopId === 'string' && record.shopId.trim() ? sanitizeRuntimeIdentifier(record.shopId) : undefined,
       interactionRewards: sanitizeRuntimeNpcItemRewards(record.interactionRewards),
       interactionRewardSetFlag:
         typeof record.interactionRewardSetFlag === 'string' && record.interactionRewardSetFlag.trim()

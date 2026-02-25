@@ -170,7 +170,7 @@ function sanitizeEffectType(raw: unknown, category: ItemCategory): ItemEffectTyp
     return value as ItemEffectType;
   }
   if (category === 'tool') return 'tool_action';
-  if (category === 'equipment') return 'equip_stub';
+  if (category === 'equipment') return 'equip_effect';
   if (category === 'healing') return 'heal_flat';
   return 'other_stub';
 }
@@ -192,8 +192,25 @@ function sanitizeEffectConfig(effectType: ItemEffectType, raw: unknown): ItemEff
       successText: sanitizeOptionalText(record.successText, 160),
     };
   }
-  if (effectType === 'equip_stub') {
+  if (effectType === 'equip_effect' || effectType === 'equip_stub') {
+    const equipSize =
+      typeof record.equipSize === 'number'
+        ? record.equipSize
+        : typeof record.equip_size === 'number'
+          ? record.equip_size
+          : 1;
+    const equipmentEffectIds = Array.isArray(record.equipmentEffectIds)
+      ? record.equipmentEffectIds
+      : Array.isArray(record.equipment_effect_ids)
+        ? record.equipment_effect_ids
+        : [];
     return {
+      equipSize: clampInt(equipSize, 1, 8, 1),
+      equipmentEffectIds: equipmentEffectIds
+        .filter((entry): entry is string => typeof entry === 'string')
+        .map((entry) => sanitizeIdentifier(entry, ''))
+        .filter((entry, index, values) => entry.length > 0 && values.indexOf(entry) === index)
+        .slice(0, 16),
       slot: sanitizeOptionalText(record.slot, 40),
     };
   }

@@ -2,7 +2,7 @@ export const ITEM_CORE_CATEGORIES = ['tool', 'equipment', 'healing', 'material',
 export type CoreItemCategory = (typeof ITEM_CORE_CATEGORIES)[number];
 export type ItemCategory = CoreItemCategory | (string & {});
 
-export const ITEM_EFFECT_TYPES = ['tool_action', 'equip_stub', 'heal_flat', 'heal_percent', 'other_stub'] as const;
+export const ITEM_EFFECT_TYPES = ['tool_action', 'equip_effect', 'equip_stub', 'heal_flat', 'heal_percent', 'other_stub'] as const;
 export type ItemEffectType = (typeof ITEM_EFFECT_TYPES)[number];
 
 export interface ToolItemEffectConfig {
@@ -13,6 +13,8 @@ export interface ToolItemEffectConfig {
 }
 
 export interface EquipmentItemEffectConfig {
+  equipSize?: number;
+  equipmentEffectIds?: string[];
   slot?: string;
 }
 

@@ -28,6 +28,7 @@ export interface NpcCharacterTemplateEntry {
   interactBattleDefeatedFlag?: string;
   battleRewards?: Array<{ itemId: string; quantity: number }>;
   healer?: boolean;
+  shopId?: string;
   interactionRewards?: Array<{ itemId: string; quantity: number }>;
   interactionRewardSetFlag?: string;
   battleTeamIds?: string[];

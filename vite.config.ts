@@ -150,12 +150,20 @@ interface SaveItemsRequestPayload {
   items?: unknown;
 }
 
+interface SaveShopsRequestPayload {
+  shops?: unknown;
+}
+
 interface SaveSkillsRequestPayload {
   critterSkills?: unknown;
 }
 
 interface SaveSkillEffectsRequestPayload {
   skillEffects?: unknown;
+}
+
+interface SaveEquipmentEffectsRequestPayload {
+  equipmentEffects?: unknown;
 }
 
 interface SaveElementChartRequestPayload {
@@ -1264,6 +1272,7 @@ function parseCritterLevels(raw: unknown, abilityIdSet: Set<string>): Array<Reco
         ? (record.statDelta as Record<string, unknown>)
         : {};
     const requiredMissionCount = critterClampInt(record.requiredMissionCount, 0, missions.length, missions.length);
+    const unlockEquipSlots = critterClampInt(record.unlockEquipSlots, 0, 8, level === 1 ? 1 : 0);
     const abilityUnlockIds = Array.isArray(record.abilityUnlockIds)
       ? record.abilityUnlockIds
           .filter((entry): entry is string => typeof entry === 'string')
@@ -1290,6 +1299,7 @@ function parseCritterLevels(raw: unknown, abilityIdSet: Set<string>): Array<Reco
         defense: critterClampInt(statDeltaRecord.defense, -999, 999, 0),
         speed: critterClampInt(statDeltaRecord.speed, -999, 999, 0),
       },
+      unlockEquipSlots,
       abilityUnlockIds,
       skillUnlockIds,
     });
@@ -1400,6 +1410,7 @@ function ensureBuddoStarterStoryMission(critters: Array<Record<string, unknown>>
           defense: 0,
           speed: 0,
         },
+        unlockEquipSlots: 1,
         abilityUnlockIds: [],
         skillUnlockIds: [],
       }),
@@ -1413,6 +1424,7 @@ function ensureBuddoStarterStoryMission(critters: Array<Record<string, unknown>>
         },
       ],
       requiredMissionCount: 1,
+      unlockEquipSlots: critterClampInt(levelOneExisting?.unlockEquipSlots, 0, 8, 1),
     };
 
     const nextLevels = levels.filter((entry) => Number(entry.level) !== 1);
@@ -1579,7 +1591,7 @@ function sanitizeItemIdentifier(raw: unknown): string {
     .replace(/-+$/g, '');
 }
 
-const ITEM_EFFECT_TYPE_OPTIONS = new Set(['tool_action', 'equip_stub', 'heal_flat', 'heal_percent', 'other_stub']);
+const ITEM_EFFECT_TYPE_OPTIONS = new Set(['tool_action', 'equip_effect', 'equip_stub', 'heal_flat', 'heal_percent', 'other_stub']);
 const ITEM_DEFAULT_CATEGORIES = new Set(['tool', 'equipment', 'healing', 'material', 'other']);
 const DEFAULT_SEEDED_ITEMS: Array<Record<string, unknown>> = [
   {
@@ -1600,6 +1612,28 @@ const DEFAULT_SEEDED_ITEMS: Array<Record<string, unknown>> = [
     maxStack: 99,
     isActive: true,
     starterGrantAmount: 3,
+  },
+];
+
+const DEFAULT_SEEDED_SHOPS: Array<Record<string, unknown>> = [
+  {
+    id: 'starter-shop',
+    name: 'Starter Shop',
+    entries: [
+      {
+        id: 'starter-field-bandage',
+        kind: 'item',
+        itemId: 'field-bandage',
+        quantity: 1,
+        repeatable: true,
+        costs: [
+          {
+            itemId: 'lume',
+            quantity: 10,
+          },
+        ],
+      },
+    ],
   },
 ];
 
@@ -1647,7 +1681,7 @@ function parseItemDefinition(raw: unknown, index: number): Record<string, unknow
     : category === 'tool'
       ? 'tool_action'
       : category === 'equipment'
-        ? 'equip_stub'
+        ? 'equip_effect'
         : category === 'healing'
           ? 'heal_flat'
           : 'other_stub';
@@ -1700,6 +1734,24 @@ function parseItemEffectConfig(effectType: string, rawConfig: Record<string, unk
     if (typeof rawConfig.power === 'number' && Number.isFinite(rawConfig.power)) {
       next.power = Math.max(0, Math.min(1, rawConfig.power));
     }
+  } else if (effectType === 'equip_effect' || effectType === 'equip_stub') {
+    const equipSize =
+      typeof rawConfig.equipSize === 'number'
+        ? rawConfig.equipSize
+        : typeof rawConfig.equip_size === 'number'
+          ? rawConfig.equip_size
+          : 1;
+    next.equipSize = critterClampInt(equipSize, 1, 8, 1);
+    const rawEffectIds = Array.isArray(rawConfig.equipmentEffectIds)
+      ? rawConfig.equipmentEffectIds
+      : Array.isArray(rawConfig.equipment_effect_ids)
+        ? rawConfig.equipment_effect_ids
+        : [];
+    next.equipmentEffectIds = rawEffectIds
+      .filter((entry): entry is string => typeof entry === 'string')
+      .map((entry) => sanitizeIdentifier(entry, ''))
+      .filter((entry, index, values) => entry.length > 0 && values.indexOf(entry) === index)
+      .slice(0, 16);
   }
   return next;
 }
@@ -1720,6 +1772,158 @@ function deriveItemValueFromEffectConfig(effectType: string, effectConfig: Recor
     return undefined;
   }
   return undefined;
+}
+
+function parseShopCatalog(
+  raw: unknown,
+  options?: { strictUnique?: boolean; strictEntryUnique?: boolean },
+): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const strictUnique = Boolean(options?.strictUnique);
+  const strictEntryUnique = options?.strictEntryUnique === undefined ? strictUnique : Boolean(options?.strictEntryUnique);
+  const parsed: Array<Record<string, unknown>> = [];
+  const seenShopIds = new Set<string>();
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const shop = parseShopDefinition(raw[index], index, {
+      strictUnique,
+      strictEntryUnique,
+    });
+    if (!shop) {
+      continue;
+    }
+    const shopId = String(shop.id);
+    if (seenShopIds.has(shopId)) {
+      if (strictUnique) {
+        throw new Error(`Duplicate shop ID "${shopId}" is not allowed.`);
+      }
+      continue;
+    }
+    seenShopIds.add(shopId);
+    parsed.push(shop);
+  }
+
+  return parsed;
+}
+
+function parseShopDefinition(
+  raw: unknown,
+  index: number,
+  options: { strictUnique: boolean; strictEntryUnique: boolean },
+): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const id = sanitizeIdentifier(typeof record.id === 'string' ? record.id : '', `shop-${index + 1}`);
+  const name =
+    typeof record.name === 'string' && record.name.trim() ? record.name.trim().slice(0, 80) : `Shop ${index + 1}`;
+  const entriesRaw = Array.isArray(record.entries) ? record.entries : [];
+  const entries: Array<Record<string, unknown>> = [];
+  const seenEntryIds = new Set<string>();
+
+  for (let entryIndex = 0; entryIndex < entriesRaw.length; entryIndex += 1) {
+    const entry = parseShopEntryDefinition(entriesRaw[entryIndex], entryIndex, options.strictUnique);
+    if (!entry) {
+      continue;
+    }
+    const entryId = String(entry.id);
+    if (seenEntryIds.has(entryId)) {
+      if (options.strictEntryUnique) {
+        throw new Error(`Shop "${id}" contains duplicate entry ID "${entryId}".`);
+      }
+      continue;
+    }
+    seenEntryIds.add(entryId);
+    entries.push(entry);
+  }
+
+  return {
+    id,
+    name,
+    entries,
+  };
+}
+
+function parseShopEntryDefinition(raw: unknown, index: number, strict: boolean): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const kind = sanitizeIdentifier(typeof record.kind === 'string' ? record.kind : '', '');
+  if (kind !== 'item' && kind !== 'critter') {
+    return null;
+  }
+  const id = sanitizeIdentifier(typeof record.id === 'string' ? record.id : '', `entry-${index + 1}`);
+  const costs = parseShopCosts(record.costs);
+  if (costs.length === 0) {
+    if (strict) {
+      throw new Error(`Shop entry "${id}" must include at least one cost row.`);
+    }
+    return null;
+  }
+
+  if (kind === 'item') {
+    const itemId = sanitizeItemIdentifier(record.itemId);
+    if (!itemId) {
+      if (strict) {
+        throw new Error(`Shop item entry "${id}" requires itemId.`);
+      }
+      return null;
+    }
+    return {
+      id,
+      kind: 'item',
+      itemId,
+      quantity: critterClampInt(record.quantity, 1, 9999, 1),
+      repeatable: typeof record.repeatable === 'boolean' ? record.repeatable : true,
+      costs,
+    };
+  }
+
+  const critterId = critterClampInt(record.critterId, 1, 999999, -1);
+  if (critterId <= 0) {
+    if (strict) {
+      throw new Error(`Shop critter entry "${id}" requires critterId.`);
+    }
+    return null;
+  }
+  const unlockFlagId = sanitizeFlagId(record.unlockFlagId);
+  if (!unlockFlagId) {
+    if (strict) {
+      throw new Error(`Shop critter entry "${id}" requires unlockFlagId.`);
+    }
+    return null;
+  }
+  return {
+    id,
+    kind: 'critter',
+    critterId,
+    unlockFlagId,
+    costs,
+  };
+}
+
+function parseShopCosts(raw: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const merged = new Map<string, number>();
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const itemId = sanitizeItemIdentifier(record.itemId);
+    if (!itemId) {
+      continue;
+    }
+    const quantity = critterClampInt(record.quantity, 1, 9999, 1);
+    merged.set(itemId, (merged.get(itemId) ?? 0) + quantity);
+  }
+  return Array.from(merged.entries(), ([itemId, quantity]) => ({ itemId, quantity }));
 }
 
 function parseMapEncounterGroups(raw: unknown, mapWidth: number, mapHeight: number): Array<Record<string, unknown>> {
@@ -2412,6 +2616,7 @@ const FLAG_REFERENCE_KEYS = new Set([
   'interactBattleDefeatedFlag',
   'postDefeatSetFlag',
   'interactionRewardSetFlag',
+  'unlockFlagId',
   'storyFlagId',
   'flag',
   'defeatedFlag',
@@ -3033,6 +3238,9 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         !Array.isArray(value)
       ) {
         for (const candidate of Object.keys(value as Record<string, unknown>)) {
+          if (candidate.trim().toLowerCase().startsWith('shop-purchase:')) {
+            continue;
+          }
           const flagId = sanitizeFlagId(candidate);
           if (flagId) {
             sink.add(flagId);
@@ -3115,11 +3323,12 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
   const syncDiscoveredFlags = async (client: PoolClient): Promise<void> => {
     const discovered = new Set<string>(DEFAULT_SYSTEM_FLAGS.map((entry) => sanitizeFlagId(entry)));
 
-    const [mapsResult, npcResult, critterResult, encounterResult, savesResult] = await Promise.all([
+    const [mapsResult, npcResult, critterResult, encounterResult, shopsResult, savesResult] = await Promise.all([
       client.query('SELECT map_data FROM game_maps'),
       client.query('SELECT character_library FROM game_npc_libraries WHERE catalog_key = $1', [GLOBAL_CATALOG_KEY]),
       client.query('SELECT critter_data FROM game_critter_catalog'),
       client.query('SELECT table_data FROM game_encounter_catalog'),
+      client.query('SELECT shop_data FROM game_shops'),
       client.query('SELECT save_data FROM user_saves'),
     ]);
 
@@ -3134,6 +3343,9 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
     }
     for (const row of encounterResult.rows) {
       collectFlagIdsFromUnknown(row.table_data, discovered);
+    }
+    for (const row of shopsResult.rows) {
+      collectFlagIdsFromUnknown(row.shop_data, discovered);
     }
     for (const row of savesResult.rows) {
       collectFlagIdsFromUnknown(row.save_data, discovered);
@@ -3285,6 +3497,14 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       );
     `);
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_shops (
+        shop_id TEXT PRIMARY KEY,
+        shop_name TEXT NOT NULL,
+        shop_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS game_skill_catalog (
         skill_id TEXT PRIMARY KEY,
         skill_data JSONB NOT NULL,
@@ -3293,6 +3513,13 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
     `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS game_skill_effects_catalog (
+        effect_id TEXT PRIMARY KEY,
+        effect_data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_equipment_effects_catalog (
         effect_id TEXT PRIMARY KEY,
         effect_data JSONB NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -3436,6 +3663,28 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
               DO UPDATE SET item_name = EXCLUDED.item_name, item_data = EXCLUDED.item_data, updated_at = NOW()
             `,
             [itemId, itemName, JSON.stringify(item)],
+          );
+        }
+      }
+
+      const shopCountResult = await client.query('SELECT COUNT(*)::int AS count FROM game_shops');
+      const shopCount = Number(shopCountResult.rows[0]?.count ?? 0);
+      if (shopCount === 0) {
+        const seededShops = parseShopCatalog(DEFAULT_SEEDED_SHOPS, { strictUnique: true, strictEntryUnique: true });
+        for (const shop of seededShops) {
+          const shopId = sanitizeIdentifier(typeof shop.id === 'string' ? shop.id : '', '');
+          const shopName = typeof shop.name === 'string' && shop.name.trim() ? shop.name.trim() : '';
+          if (!shopId || !shopName) {
+            continue;
+          }
+          await client.query(
+            `
+              INSERT INTO game_shops (shop_id, shop_name, shop_data, updated_at)
+              VALUES ($1, $2, $3::jsonb, NOW())
+              ON CONFLICT (shop_id)
+              DO UPDATE SET shop_name = EXCLUDED.shop_name, shop_data = EXCLUDED.shop_data, updated_at = NOW()
+            `,
+            [shopId, shopName, JSON.stringify(shop)],
           );
         }
       }
@@ -3622,6 +3871,45 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
     }
   };
 
+  const readGlobalShopCatalog = async (): Promise<Array<Record<string, unknown>>> => {
+    if (!pool) {
+      return [];
+    }
+    const result = await pool.query('SELECT shop_data FROM game_shops ORDER BY shop_id ASC');
+    return parseShopCatalog(result.rows.map((row) => row.shop_data));
+  };
+
+  const writeGlobalShopCatalog = async (shops: Array<Record<string, unknown>>): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM game_shops');
+      for (const shop of shops) {
+        const shopId = sanitizeIdentifier(typeof shop.id === 'string' ? shop.id : '', '');
+        const shopName = typeof shop.name === 'string' ? shop.name.trim() : '';
+        if (!shopId || !shopName) {
+          continue;
+        }
+        await client.query(
+          `
+            INSERT INTO game_shops (shop_id, shop_name, shop_data, updated_at)
+            VALUES ($1, $2, $3::jsonb, NOW())
+          `,
+          [shopId, shopName, JSON.stringify(shop)],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
   const readGlobalSkillCatalog = async (): Promise<Array<Record<string, unknown>>> => {
     if (!pool) {
       return [];
@@ -3684,6 +3972,47 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         await client.query(
           `
             INSERT INTO game_skill_effects_catalog (effect_id, effect_data, updated_at)
+            VALUES ($1, $2::jsonb, NOW())
+          `,
+          [effectId, JSON.stringify(effect)],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
+  const readGlobalEquipmentEffectsCatalog = async (): Promise<Array<Record<string, unknown>>> => {
+    if (!pool) {
+      return [];
+    }
+    const result = await pool.query('SELECT effect_data FROM game_equipment_effects_catalog ORDER BY effect_id ASC');
+    return (result.rows.map((row) => row.effect_data) as Array<Record<string, unknown>>).filter(Boolean);
+  };
+
+  const writeGlobalEquipmentEffectsCatalog = async (effects: Array<Record<string, unknown>>): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM game_equipment_effects_catalog');
+      for (const effect of effects) {
+        const effectId =
+          typeof effect.effect_id === 'string'
+            ? String(effect.effect_id).trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-')
+            : '';
+        if (!effectId) {
+          continue;
+        }
+        await client.query(
+          `
+            INSERT INTO game_equipment_effects_catalog (effect_id, effect_data, updated_at)
             VALUES ($1, $2::jsonb, NOW())
           `,
           [effectId, JSON.stringify(effect)],
@@ -3826,10 +4155,14 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       '/api/admin/encounters/list',
       '/api/admin/items/save',
       '/api/admin/items/list',
+      '/api/admin/shops/save',
+      '/api/admin/shops/list',
       '/api/admin/skills/list',
       '/api/admin/skills/save',
       '/api/admin/skill-effects/list',
       '/api/admin/skill-effects/save',
+      '/api/admin/equipment-effects/list',
+      '/api/admin/equipment-effects/save',
       '/api/admin/element-chart/get',
       '/api/admin/element-chart/save',
       '/api/admin/flags/save',
@@ -4066,7 +4399,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         } finally {
           client.release();
         }
-        const [mapsResult, tilesRowsResult, playerSpriteResult, npcLibraryResult, crittersResult, encounterResult, skills, effects, elementChart, items] = await Promise.all([
+        const [mapsResult, tilesRowsResult, playerSpriteResult, npcLibraryResult, crittersResult, encounterResult, skills, effects, equipmentEffects, elementChart, items, shops] = await Promise.all([
           pool.query('SELECT map_data FROM game_maps ORDER BY updated_at DESC'),
           pool.query('SELECT id, name, primary_code, width, height, y_sort_with_actors, tileset_url, tile_pixel_width, tile_pixel_height, cells FROM game_tiles ORDER BY updated_at DESC'),
           pool.query('SELECT sprite_config FROM game_player_sprite_configs WHERE catalog_key = $1', [GLOBAL_CATALOG_KEY]),
@@ -4075,8 +4408,10 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
           pool.query('SELECT table_data FROM game_encounter_catalog ORDER BY table_id ASC'),
           readGlobalSkillCatalog(),
           readGlobalSkillEffectsCatalog(),
+          readGlobalEquipmentEffectsCatalog(),
           readElementChart(),
           readGlobalItemCatalog(),
+          readGlobalShopCatalog(),
         ]);
         const savedTiles = (tilesRowsResult.rows ?? []).map((row: Record<string, unknown>) => ({
           id: row.id,
@@ -4107,8 +4442,10 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
             encounterTables,
             critterSkills: skills,
             skillEffects: effects,
+            equipmentEffects,
             elementChart,
             items,
+            shops,
           },
         });
         return;
@@ -4620,6 +4957,30 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         return;
       }
 
+      if (url === '/api/admin/shops/list' && req.method === 'GET') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const shops = await readGlobalShopCatalog();
+        sendJson(res, 200, { ok: true, shops });
+        return;
+      }
+
+      if (url === '/api/admin/shops/save' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const body = (await readJsonBody(req)) as SaveShopsRequestPayload;
+        const shops = parseShopCatalog(body.shops, { strictUnique: true, strictEntryUnique: true });
+        await writeGlobalShopCatalog(shops);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
       if (url === '/api/admin/skills/list' && req.method === 'GET') {
         const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
@@ -4666,6 +5027,31 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         const raw = Array.isArray(body.skillEffects) ? body.skillEffects : [];
         const effects = raw.filter((e): e is Record<string, unknown> => e != null && typeof e === 'object');
         await writeGlobalSkillEffectsCatalog(effects);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (url === '/api/admin/equipment-effects/list' && req.method === 'GET') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const equipmentEffects = await readGlobalEquipmentEffectsCatalog();
+        sendJson(res, 200, { ok: true, equipmentEffects });
+        return;
+      }
+
+      if (url === '/api/admin/equipment-effects/save' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const body = (await readJsonBody(req)) as SaveEquipmentEffectsRequestPayload;
+        const raw = Array.isArray(body.equipmentEffects) ? body.equipmentEffects : [];
+        const effects = raw.filter((entry): entry is Record<string, unknown> => entry != null && typeof entry === 'object');
+        await writeGlobalEquipmentEffectsCatalog(effects);
         sendJson(res, 200, { ok: true });
         return;
       }

@@ -16,6 +16,10 @@ import {
 } from '@/game/skills/schema';
 import type { GameItemDefinition } from '@/game/items/types';
 import { sanitizeItemCatalog } from '@/game/items/schema';
+import type { ShopDefinition } from '@/game/shops/types';
+import { sanitizeShopCatalog } from '@/game/shops/schema';
+import type { EquipmentEffectDefinition } from '@/game/equipmentEffects/types';
+import { sanitizeEquipmentEffectLibrary } from '@/game/equipmentEffects/schema';
 
 const WORLD_CONTENT_STORAGE_KEY = 'critterra.world.content.v1';
 
@@ -45,6 +49,8 @@ export interface StoredWorldContent {
   skillEffects: SkillEffectDefinition[];
   elementChart: ElementChart;
   items: GameItemDefinition[];
+  shops: ShopDefinition[];
+  equipmentEffects: EquipmentEffectDefinition[];
 }
 
 interface BootstrapResponse {
@@ -63,6 +69,8 @@ interface BootstrapResponse {
     skillEffects?: unknown;
     elementChart?: unknown;
     items?: unknown;
+    shops?: unknown;
+    equipmentEffects?: unknown;
   };
 }
 
@@ -139,6 +147,8 @@ export function readStoredWorldContent(): StoredWorldContent | null {
       skillEffects: sanitizeSkillEffectLibrary(parsed.skillEffects),
       elementChart: sanitizeElementChart(parsed.elementChart),
       items: sanitizeItemCatalog(parsed.items),
+      shops: sanitizeShopCatalog(parsed.shops),
+      equipmentEffects: sanitizeEquipmentEffectLibrary(parsed.equipmentEffects),
     };
   } catch {
     return null;
@@ -206,6 +216,8 @@ export async function hydrateWorldContentFromServer(): Promise<void> {
     skillEffects,
     elementChart: sanitizeElementChart(content.elementChart),
     items: sanitizeItemCatalog(content.items),
+    shops: sanitizeShopCatalog(content.shops),
+    equipmentEffects: sanitizeEquipmentEffectLibrary(content.equipmentEffects),
   };
 
   persistWorldContent(next);

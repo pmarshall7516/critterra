@@ -126,6 +126,7 @@ export interface NpcStoryStateDefinition {
   /** Rewards granted after winning this interact battle (shown/granted through post-battle dialogue). */
   battleRewards?: NpcItemRewardDefinition[];
   healer?: boolean;
+  shopId?: string;
   /** Rewards granted directly from interaction dialogue/script (supports multiple item IDs and quantities). */
   interactionRewards?: NpcItemRewardDefinition[];
   /** Optional one-time gate flag for interaction rewards. If set and already true, rewards are skipped. */
@@ -160,6 +161,7 @@ export interface NpcDefinition {
   interactBattleDefeatedFlag?: string;
   battleRewards?: NpcItemRewardDefinition[];
   healer?: boolean;
+  shopId?: string;
   interactionRewards?: NpcItemRewardDefinition[];
   interactionRewardSetFlag?: string;
   dialogueId: string;

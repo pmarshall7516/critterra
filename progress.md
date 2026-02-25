@@ -2881,3 +2881,221 @@ Validation
   - Back link calls `onCancelSwap()` to return to main battle action selection.
   - Existing `Esc` handling already routes to `cancelBattleSwapSelection()` in battle; this remains the keyboard path for returning from optional swap selection.
 - Validation: `npm run build` passed.
+
+## 2026-02-24 (Shop NPC system + shop CRUD)
+- Implemented full shop system across backend/admin/runtime/frontend.
+- Added new shop domain modules:
+  - `src/game/shops/types.ts`
+  - `src/game/shops/schema.ts`
+  - `src/game/shops/schema.test.ts`
+- Backend (`vite.config.ts`):
+  - Added `game_shops` table bootstrap + seeded `starter-shop` (`field-bandage` x1 costs `lume` x10, repeatable).
+  - Added admin routes:
+    - `GET /api/admin/shops/list`
+    - `POST /api/admin/shops/save`
+  - Added shops to `/api/content/bootstrap` payload.
+  - Extended discovered-flag scanning to include shop unlock flags and ignore internal one-time purchase flags (`shop-purchase:*`).
+- World content hydration:
+  - Added `shops` support in `src/game/content/worldContentStore.ts`.
+- Admin tooling:
+  - Added new `src/admin/ShopTool.tsx` with shop list CRUD and entry CRUD.
+  - Supports item and critter entries, multi-item costs, item repeatable toggle, critter unlock flag assignment.
+  - Added new Shops route/nav in `src/admin/AdminView.tsx`.
+- NPC model/editor integration:
+  - Added optional `shopId` fields to NPC/story/template types.
+  - Updated `src/admin/MapEditorTool.tsx` for mutually exclusive interaction mode (`dialogue | battle | healer | shop`) and shop selector with validation.
+- Runtime/gameplay:
+  - Added shop catalog state and `shopPrompt` snapshot state in `src/game/engine/runtime.ts`.
+  - Added `purchaseShopEntry(entryId)` with atomic purchase behavior:
+    - validates one-time constraints,
+    - validates all costs,
+    - blocks partial-overflow reward grants,
+    - deducts costs,
+    - grants item reward or sets critter unlock flag,
+    - marks one-time purchase flag for critter and non-repeat item entries.
+  - Added affordability fix for same-item cost/reward entries (capacity checked against post-cost quantity).
+  - Added shop overlay render path to `src/game/engine/GameView.tsx`.
+  - Added shop overlay styling in `src/styles.css`.
+- Tests:
+  - Added `src/game/engine/runtime.shopPurchase.test.ts` covering:
+    - multi-cost success,
+    - missing-cost rejection,
+    - overflow rejection,
+    - non-repeat item one-time behavior,
+    - critter unlock-flag + one-time behavior.
+  - Existing + new tests pass.
+- Validation:
+  - `npm test` passed (21 tests).
+  - `npm run build` passed.
+  - Story Playwright smoke run executed (`output/story-mode/run-20260223-211059/status.json`), failing on existing controls modal backdrop click interception at title screen (`Continue` click blocked), with no console errors reported.
+
+### Follow-up suggestion
+- If desired, update `scripts/story_mode_playwright.js` start-flow to dismiss controls modal/backdrop explicitly before clicking `Continue`, so automated smoke can run through to gameplay consistently.
+
+## 2026-02-24 (Shop follow-up polish)
+- Updated NPC interaction flow so shop NPCs now show their dialogue before opening the shop UI.
+  - Added `pendingNpcShopStart` queue in runtime and trigger-after-dialogue handling in `advanceDialogue()`.
+- Confirmed healer and interact-battle NPC flows already run through dialogue before their action starts; retained that behavior.
+- Shop admin editor cleanup:
+  - removed editable `Entry ID` input from UI,
+  - entry IDs are now auto-generated internally with uniqueness checks for newly added entries.
+- Shop overlay quantity formatting update:
+  - purchasable item cards now always display quantity suffix as `Name xN`,
+  - cost rows now display required amount after item name (`Item xN`).
+- Validation:
+  - `npm test` passed.
+  - `npm run build` passed.
+
+## 2026-02-24 (Knockout mission targeting)
+- Implemented locked knockout mission targeting in critter progression/runtime:
+  - Added persistent `lockedKnockoutTargetCritterId` on `PlayerCritterProgress`.
+  - Sanitization/defaults now preserve this field and clear invalid locked selections.
+  - Refactored KO crediting so:
+    - attacker still always gets credit when their mission matches,
+    - only the selected locked target (if eligible) can also gain KO mission credit,
+    - passive credit for all locked critters was removed.
+  - Added runtime API: `setLockedKnockoutTargetCritter(critterId | null)`.
+- Added runtime snapshot support for mission tracking UI:
+  - collection entries now include:
+    - `lockedKnockoutTargetEligible`
+    - `lockedKnockoutTargetSelected`
+  - critter summary now includes `lockedKnockoutTracker` payload:
+    - selected target id/name,
+    - eligible target ids,
+    - selected target KO mission rows for pinned display.
+- Collection/menu UI updates:
+  - Added “Track KO Mission” + “Clear KO Target” controls on eligible locked critter cards.
+  - Added pinned KO mission tracker panel to root menu:
+    - shows selected target missions,
+    - shows “No KO target selected” when eligible targets exist but none selected,
+    - hidden when there are no eligible locked targets.
+- Tests added/updated:
+  - `src/game/engine/runtime.knockoutTargeting.test.ts`
+    - attacker-only credit behavior with no selected target,
+    - attacker + selected locked target dual credit behavior,
+    - no locked credit without selection,
+    - auto-clearing invalid selected target.
+  - `src/game/engine/GameView.keybinds.test.ts`
+    - KO target button eligibility helper coverage,
+    - pinned tracker state coverage (`selected-target`, `no-target`, `hidden`).
+- Validation:
+  - `npm test -- src/game/engine/runtime.knockoutTargeting.test.ts src/game/engine/GameView.keybinds.test.ts` passed.
+  - `npm run build` passed.
+
+## 2026-02-24 (Squad tab sizing/perf simplification)
+- Removed live squad-card height resizing logic in `GameView`:
+  - deleted `ResizeObserver` + per-frame largest-card measurement loop,
+  - removed dynamic `--squad-slot-target-height` updates that were causing visible card shrink/reflow.
+- Simplified squad slot rendering so all slot states use card-shaped visuals:
+  - occupied slots still render `CritterCard`,
+  - empty and locked slots now render `SquadSlotPlaceholderCard` (`collection-card is-placeholder`) instead of plain text.
+- Simplified squad layout styles:
+  - removed extra `squad-layout` wrapper styling,
+  - set shared slot height from a one-shot largest-equipped-card measurement (no continuous observer),
+  - removed large container borders/padding from `.squad-slot`,
+  - added hover/selected state effects directly on card surfaces.
+- Validation:
+  - `npm run build` passed.
+
+## 2026-02-24 (Squad card layout cleanup)
+- Reworked Squad tab to use clean card presentation aligned with Collection cards:
+  - removed squad-specific card compression/shrinking styles,
+  - removed dynamic slot-height measurement logic from React state/effects,
+  - switched squad layout to a centered two-column card grid.
+- Updated squad slot rendering:
+  - occupied slots render standard `CritterCard` and are click-selectable for swapping,
+  - empty/locked slots render placeholder `collection-card` cards in matching footprint.
+- Added explicit click actions under each unlocked slot card:
+  - `Swap Critter` / `Assign Critter`
+  - `Remove`
+- Validation:
+  - `npm run build` passed.
+
+## 2026-02-24 (Squad card parity follow-up)
+- Made Squad tab use the exact Collection card component/layout path for occupied slots:
+  - squad list now renders in `collection-grid squad-grid`,
+  - occupied slots render direct `CritterCard` (no extra squad slot container/action row wrappers).
+- Removed remaining bulky/custom squad slot styling that changed card appearance/size (`.squad-slot`, shake popup/badge, slot action containers).
+- Kept interactions on cards:
+  - left click on occupied card opens swap picker,
+  - left click on empty unlocked card opens assign picker,
+  - right click on occupied card removes critter (`onCardContextMenu`).
+- Added inline Squad help text: click to assign/swap, right-click to remove.
+- Validation:
+  - `npm run build` passed.
+  - Playwright story-mode smoke script was attempted, but this session could not complete it (sandbox/browser permission + later escalation rejection).
+
+## 2026-02-24 (Equipment System)
+- Implemented full critter equipment foundations and runtime wiring:
+  - Added critter level field `unlockEquipSlots` (default semantics: level 1 => 1, others => 0).
+  - Added persisted critter equipment anchors in progress (`equippedEquipmentAnchors`) and bumped critter progress version to `8`.
+  - Added equipment slot resolution helpers (`src/game/critters/equipmentSlots.ts`) with tests for fit/overlap/duplicate rules.
+- Added equipment effects domain:
+  - New files: `src/game/equipmentEffects/types.ts` and `src/game/equipmentEffects/schema.ts`.
+  - Added bootstrap/hydration support via `worldContentStore` and runtime lookup integration.
+- Upgraded item model for equipment:
+  - Added `equip_effect` item effect type (legacy `equip_stub` still accepted).
+  - Added equipment effect config support (`equipSize`, `equipmentEffectIds[]`) in runtime/admin parsers.
+  - Item admin now has equipment mode with equip-size + searchable equipment-effect picker; generic effect JSON editor is hidden for equipment mode.
+- Added admin tooling:
+  - New `EquipmentEffectsTool` (`/admin/equipment-effects`) with icon picker, modifier authoring, list/save API integration.
+  - Admin nav/route updated in `AdminView`.
+- Server/API updates in `vite.config.ts`:
+  - Added DB table `game_equipment_effects_catalog`.
+  - Added endpoints `/api/admin/equipment-effects/list` and `/api/admin/equipment-effects/save`.
+  - Included equipment effects in `/api/content/bootstrap` payload.
+  - Critter parser now preserves/normalizes `unlockEquipSlots`; item parser supports `equip_effect` fields.
+- Runtime gameplay updates:
+  - Added equip/unequip APIs with constraints:
+    - owned-item enforcement,
+    - contiguous fit from clicked slot,
+    - multi-slot occupancy,
+    - duplicate same item blocked per critter,
+    - cross-critter ownership quantity enforcement.
+  - Equipment effects now modify battle stats and contribute effect icons/tooltips in battle snapshots.
+  - Squad snapshots now include equipment slot occupancy + equipment-adjusted stat payloads.
+- Squad UI updates (`GameView` + `CritterCard`):
+  - Equipment slot grid renders under squad cards as blank/filled squares.
+  - Click slot opens equipment picker (owned equipment only), right-click occupied slot unequips.
+  - Multi-slot equipment displays in every occupied slot.
+  - Squad cards now use squad-slot stat override so stat panel reflects equipment-adjusted stats; collection cards remain unchanged.
+- Added one-time migration script:
+  - `scripts/migrate-critter-equip-slot-unlocks.mjs` updates all critter levels to `unlockEquipSlots` (`L1=1`, all others `0`) with `--dry-run` support.
+- Validation:
+  - `npm test` passed (including new tests: `equipmentSlots`, `items schema`, `runtime equipment`).
+  - `npm run build` passed.
+
+### Remaining TODOs / Follow-up suggestions
+- Consider showing per-item "available to equip" counts in the equipment picker (owned minus equipped elsewhere) and disabling unavailable entries in UI.
+- Consider adding dedicated UI tests for squad equipment slot click/right-click flows (currently covered by runtime/unit tests + build).
+
+## 2026-02-24 (Backpack Equipment Use)
+- Added backpack equipment `Use` flow with squad-target selection in `GameView` (shared picker for heal/equip modes).
+- Updated runtime backpack item usage so `equip_effect`/`equip_stub` routes through a new target-aware equipment use path.
+- Backpack equipment use now auto-places into the first valid contiguous equip-slot span and enforces existing constraints:
+  - target must be a valid occupied squad slot,
+  - no duplicate same equipment on one critter,
+  - ownership quantity across critters,
+  - contiguous slot fit for multi-slot equipment.
+- Backpack summary now exposes `Use` for equipment entries (`hasUseAction=true` for non-material categories).
+- Picker styles were generalized to neutral `backpack-target-*` class names with backward-compatible CSS aliases.
+- Added runtime equipment tests for backpack use path and summary usability flags.
+- Validation:
+  - `npm test` passed.
+  - `npm run build` passed.
+- Updated backpack equip-target picker cards to show each selectable critter's unlocked equipment slots (occupied vs empty) when using an equipment item from backpack.
+- Added `backpack-target-card__equip*` UI styles for compact slot previews in picker cards.
+- Validation: `npm run build` and `npm test` both pass after UI update.
+- Squad equipment popup now hides non-equippable entries:
+  - Uses runtime `quantityEquippable` (owned minus currently equipped copies across critters).
+  - Hides items already equipped on the selected critter (duplicate-prevention UX).
+  - Displays available equippable count in popup labels (`xN`) instead of total owned.
+- Runtime backpack summary now includes `quantityEquippable` for equipment items and sets `canUse=false` when all copies are already equipped.
+- Validation: `npm test` and `npm run build` pass.
+- Backpack equipment cards now show tiny critter sprites after `Owned: X` for critters that currently have that equipment equipped.
+- Added runtime backpack payload `equippedByCritters[]` on equipment items to drive the indicator (critter id/name/sprite).
+- Added/updated runtime equipment summary assertions for `equippedByCritters`.
+- Validation: `npm run build` and `npm test` pass.
+- Backpack equipment cards no longer use full-card `is-locked` grayscale when the item is merely equipped-out (all copies equipped).
+- For equipped-out equipment, only the `Use` button is disabled/greyed while item art and equipped-critter mini sprites remain full visibility.
+- Validation: `npm run build` and `npm test` pass.

@@ -6,9 +6,11 @@ import { CritterTool } from '@/admin/CritterTool';
 import { EncounterTool } from '@/admin/EncounterTool';
 import { MoveTool } from '@/admin/MoveTool';
 import { SkillEffectsTool } from '@/admin/SkillEffectsTool';
+import { EquipmentEffectsTool } from '@/admin/EquipmentEffectsTool';
 import { ElementChartTool } from '@/admin/ElementChartTool';
 import { FlagsTool } from '@/admin/FlagsTool';
 import { ItemTool } from '@/admin/ItemTool';
+import { ShopTool } from '@/admin/ShopTool';
 import { apiFetchJson } from '@/shared/apiClient';
 import { setAuthToken } from '@/shared/authStorage';
 
@@ -22,9 +24,11 @@ type AdminRoute =
   | 'critters'
   | 'encounters'
   | 'items'
+  | 'shops'
   | 'flags'
   | 'moves'
   | 'skill-effects'
+  | 'equipment-effects'
   | 'element-chart';
 
 interface AdminViewProps {
@@ -58,8 +62,10 @@ const ACTIVE_NAV_LINKS: AdminNavLink[] = [
   { id: 'critters', label: 'Critters', type: 'active' },
   { id: 'encounters', label: 'Encounters', type: 'active' },
   { id: 'items', label: 'Items', type: 'active' },
+  { id: 'shops', label: 'Shops', type: 'active' },
   { id: 'moves', label: 'Skills', type: 'active' },
   { id: 'skill-effects', label: 'Skill Effects', type: 'active' },
+  { id: 'equipment-effects', label: 'Equipment Effects', type: 'active' },
   { id: 'element-chart', label: 'Element Chart', type: 'active' },
   { id: 'flags', label: 'Flags', type: 'active' },
 ];
@@ -93,9 +99,11 @@ function parseAdminRoute(pathname: string): AdminRoute {
     route === 'critters' ||
     route === 'encounters' ||
     route === 'items' ||
+    route === 'shops' ||
     route === 'flags' ||
     route === 'moves' ||
     route === 'skill-effects' ||
+    route === 'equipment-effects' ||
     route === 'element-chart'
   ) {
     return route;
@@ -216,11 +224,17 @@ export function AdminView({ gameHref = '/' }: AdminViewProps) {
     if (activeRoute === 'items') {
       return 'Item Catalog';
     }
+    if (activeRoute === 'shops') {
+      return 'Shop Catalog';
+    }
     if (activeRoute === 'moves') {
       return 'Skills';
     }
     if (activeRoute === 'skill-effects') {
       return 'Skill Effects';
+    }
+    if (activeRoute === 'equipment-effects') {
+      return 'Equipment Effects';
     }
     if (activeRoute === 'element-chart') {
       return 'Element Chart';
@@ -333,8 +347,10 @@ export function AdminView({ gameHref = '/' }: AdminViewProps) {
           {activeRoute === 'critters' && <CritterTool />}
           {activeRoute === 'encounters' && <EncounterTool />}
           {activeRoute === 'items' && <ItemTool />}
+          {activeRoute === 'shops' && <ShopTool />}
           {activeRoute === 'moves' && <MoveTool />}
           {activeRoute === 'skill-effects' && <SkillEffectsTool />}
+          {activeRoute === 'equipment-effects' && <EquipmentEffectsTool />}
           {activeRoute === 'element-chart' && <ElementChartTool />}
           {activeRoute === 'flags' && <FlagsTool />}
         </main>

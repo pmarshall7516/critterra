@@ -1,4 +1,4 @@
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { GameRuntime, RuntimeSnapshot } from '@/game/engine/runtime';
 import { TILE_SIZE } from '@/shared/constants';
 import { ELEMENT_SKILL_COLORS } from '@/game/skills/types';
@@ -33,6 +33,9 @@ type BattleSnapshot = NonNullable<RuntimeSnapshot['battle']>;
 type BattleTeamEntry = BattleSnapshot['playerTeam'][number];
 type BackpackSort = 'name' | 'category';
 type BackpackItemEntry = RuntimeSnapshot['backpack']['items'][number];
+type EquipmentPickerEntry = BackpackItemEntry & { category: 'equipment' };
+type BackpackTargetMode = 'heal' | 'equip';
+type BackpackTargetSelection = { itemId: string; mode: BackpackTargetMode };
 type GameViewKeyIntent = 'toggle-fullscreen' | 'battle-cancel' | 'toggle-menu' | 'block-for-menu' | 'forward-to-runtime';
 
 interface ResolveGameViewKeyIntentInput {
@@ -44,13 +47,14 @@ interface ResolveGameViewKeyIntentInput {
 
 export function resolveGameViewKeyIntent(input: ResolveGameViewKeyIntentInput): GameViewKeyIntent {
   const { key, battleActive, storyInputLocked, menuOpen } = input;
+  const isMenuToggleKey = key === 'Escape' || key === 'e' || key === 'E';
   if (key === 'y' || key === 'Y') {
     return 'toggle-fullscreen';
   }
   if (battleActive && key === 'Escape') {
     return 'battle-cancel';
   }
-  if (!battleActive && key === 'Escape') {
+  if (!battleActive && isMenuToggleKey) {
     if (storyInputLocked) {
       return 'block-for-menu';
     }
@@ -62,17 +66,44 @@ export function resolveGameViewKeyIntent(input: ResolveGameViewKeyIntentInput): 
   return 'forward-to-runtime';
 }
 
+export function shouldShowLockedKnockoutTargetButton(
+  entry: Pick<CritterCardEntry, 'unlocked' | 'lockedKnockoutTargetEligible'>,
+): boolean {
+  return !entry.unlocked && entry.lockedKnockoutTargetEligible;
+}
+
+export type PinnedLockedKnockoutTrackerState = 'hidden' | 'no-target' | 'selected-target';
+
+export function resolvePinnedLockedKnockoutTrackerState(
+  critters: RuntimeSnapshot['critters'] | null | undefined,
+): PinnedLockedKnockoutTrackerState {
+  const tracker = critters?.lockedKnockoutTracker;
+  if (!tracker || tracker.eligibleCritterIds.length === 0) {
+    return 'hidden';
+  }
+  if (tracker.selectedCritterId === null) {
+    return 'no-target';
+  }
+  return 'selected-target';
+}
+
+export function shouldShowPinnedLockedKnockoutTracker(
+  critters: RuntimeSnapshot['critters'] | null | undefined,
+): boolean {
+  return resolvePinnedLockedKnockoutTrackerState(critters) !== 'hidden';
+}
+
 export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const runtimeRef = useRef<GameRuntime | null>(null);
-  const squadGridRef = useRef<HTMLDivElement | null>(null);
   const menuOpenRef = useRef(false);
   const battleActiveRef = useRef(false);
   const renderSizeRef = useRef<ViewportSize>(DEFAULT_VIEWPORT);
   const manualStepUntilRef = useRef(0);
   const storyInputLockedRef = useRef(false);
   const healPromptActiveRef = useRef(false);
+  const shopPromptActiveRef = useRef(false);
 
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -82,16 +113,11 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
   const [backpackSearchInput, setBackpackSearchInput] = useState('');
   const [backpackSort, setBackpackSort] = useState<BackpackSort>('name');
   const [backpackCategoryFilter, setBackpackCategoryFilter] = useState<'all' | string>('all');
-  const [backpackHealingItemId, setBackpackHealingItemId] = useState<string | null>(null);
+  const [backpackTargetSelection, setBackpackTargetSelection] = useState<BackpackTargetSelection | null>(null);
   const [squadPickerSlotIndex, setSquadPickerSlotIndex] = useState<number | null>(null);
   const [squadSearchInput, setSquadSearchInput] = useState('');
   const [expandedStatsByCritterId, setExpandedStatsByCritterId] = useState<Record<number, boolean>>({});
-  const [squadLargestOccupiedCardHeight, setSquadLargestOccupiedCardHeight] = useState<number | null>(null);
   const [hoveredStarterCritterId, setHoveredStarterCritterId] = useState<number | null>(null);
-  const [blockedSquadRemovalNotice, setBlockedSquadRemovalNotice] = useState<{ slotIndex: number; attempt: number } | null>(
-    null,
-  );
-  const blockedSquadRemovalTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     menuOpenRef.current = menuOpen;
@@ -102,18 +128,27 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
   }, [snapshot?.battle]);
 
   useEffect(() => {
-    storyInputLockedRef.current = Boolean(snapshot?.story.inputLocked || snapshot?.dialogue || snapshot?.story.healPrompt);
+    storyInputLockedRef.current = Boolean(
+      snapshot?.story.inputLocked || snapshot?.dialogue || snapshot?.story.healPrompt || snapshot?.story.shopPrompt,
+    );
     healPromptActiveRef.current = Boolean(snapshot?.story.healPrompt);
+    shopPromptActiveRef.current = Boolean(snapshot?.story.shopPrompt);
     if (!snapshot?.story.starterSelection) {
       setHoveredStarterCritterId(null);
     }
-  }, [snapshot?.dialogue, snapshot?.story.healPrompt, snapshot?.story.inputLocked, snapshot?.story.starterSelection]);
+  }, [
+    snapshot?.dialogue,
+    snapshot?.story.healPrompt,
+    snapshot?.story.inputLocked,
+    snapshot?.story.shopPrompt,
+    snapshot?.story.starterSelection,
+  ]);
 
   useEffect(() => {
-    if ((snapshot?.dialogue || snapshot?.story.healPrompt) && menuOpen) {
+    if ((snapshot?.dialogue || snapshot?.story.healPrompt || snapshot?.story.shopPrompt) && menuOpen) {
       setMenuOpen(false);
     }
-  }, [menuOpen, snapshot?.dialogue, snapshot?.story.healPrompt]);
+  }, [menuOpen, snapshot?.dialogue, snapshot?.story.healPrompt, snapshot?.story.shopPrompt]);
 
   useEffect(() => {
     if (snapshot?.battle?.id) {
@@ -126,7 +161,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
       setMenuView('root');
       setSquadPickerSlotIndex(null);
       setSquadSearchInput('');
-      setBackpackHealingItemId(null);
+      setBackpackTargetSelection(null);
     }
   }, [menuOpen]);
 
@@ -134,37 +169,11 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     if (menuView !== 'squad') {
       setSquadPickerSlotIndex(null);
       setSquadSearchInput('');
-      setBlockedSquadRemovalNotice(null);
     }
     if (menuView !== 'backpack') {
-      setBackpackHealingItemId(null);
+      setBackpackTargetSelection(null);
     }
   }, [menuView]);
-
-  useEffect(() => {
-    if (!blockedSquadRemovalNotice) {
-      if (blockedSquadRemovalTimeoutRef.current !== null) {
-        window.clearTimeout(blockedSquadRemovalTimeoutRef.current);
-        blockedSquadRemovalTimeoutRef.current = null;
-      }
-      return;
-    }
-
-    if (blockedSquadRemovalTimeoutRef.current !== null) {
-      window.clearTimeout(blockedSquadRemovalTimeoutRef.current);
-    }
-    blockedSquadRemovalTimeoutRef.current = window.setTimeout(() => {
-      setBlockedSquadRemovalNotice(null);
-      blockedSquadRemovalTimeoutRef.current = null;
-    }, 2000);
-
-    return () => {
-      if (blockedSquadRemovalTimeoutRef.current !== null) {
-        window.clearTimeout(blockedSquadRemovalTimeoutRef.current);
-        blockedSquadRemovalTimeoutRef.current = null;
-      }
-    };
-  }, [blockedSquadRemovalNotice]);
 
   useEffect(() => {
     const runtime = new GameRuntime({
@@ -319,6 +328,13 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
         event.preventDefault();
       }
 
+      if (shopPromptActiveRef.current && key === 'Escape') {
+        event.preventDefault();
+        runtime.keyDown(key);
+        setSnapshot(runtime.getSnapshot());
+        return;
+      }
+
       if (keyIntent === 'toggle-menu') {
         event.preventDefault();
         setMenuOpen((open) => !open);
@@ -407,13 +423,34 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     }
   };
 
+  const handleSetLockedKnockoutTarget = (critterId: number | null) => {
+    const runtime = runtimeRef.current;
+    if (!runtime) {
+      return;
+    }
+    const changed = runtime.setLockedKnockoutTargetCritter(critterId);
+    if (changed) {
+      setSnapshot(runtime.getSnapshot());
+    }
+  };
+
   const handleUseBackpackItem = (item: BackpackItemEntry) => {
     const runtime = runtimeRef.current;
     if (!runtime) {
       return;
     }
     if (item.effectType === 'heal_flat' || item.effectType === 'heal_percent') {
-      setBackpackHealingItemId(item.itemId);
+      setBackpackTargetSelection({
+        itemId: item.itemId,
+        mode: 'heal',
+      });
+      return;
+    }
+    if (item.effectType === 'equip_effect' || item.effectType === 'equip_stub') {
+      setBackpackTargetSelection({
+        itemId: item.itemId,
+        mode: 'equip',
+      });
       return;
     }
     const changed = runtime.useBackpackItem(item.itemId);
@@ -423,7 +460,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     }
   };
 
-  const handleUseBackpackHealingItemOnSlot = (itemId: string, slotIndex: number) => {
+  const handleUseBackpackTargetItemOnSlot = (itemId: string, slotIndex: number) => {
     const runtime = runtimeRef.current;
     if (!runtime) {
       return;
@@ -431,7 +468,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     const changed = runtime.useBackpackItemOnSquadSlot(itemId, slotIndex);
     setSnapshot(runtime.getSnapshot());
     if (changed) {
-      setBackpackHealingItemId(null);
+      setBackpackTargetSelection(null);
     }
   };
 
@@ -462,29 +499,8 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     if (!runtime) {
       return;
     }
-    const changed = runtime.clearSquadSlot(slotIndex);
+    runtime.clearSquadSlot(slotIndex);
     setSnapshot(runtime.getSnapshot());
-    if (changed) {
-      setBlockedSquadRemovalNotice(null);
-      return;
-    }
-
-    const assignedCount = squadSlots.reduce(
-      (count, slot) => count + (slot.unlocked && slot.critterId !== null ? 1 : 0),
-      0,
-    );
-    const targetSlot = squadSlots.find((slot) => slot.index === slotIndex);
-    const targetIsDamaged =
-      targetSlot?.currentHp !== null &&
-      targetSlot?.maxHp !== null &&
-      (targetSlot?.currentHp ?? 0) < (targetSlot?.maxHp ?? 0);
-    const hasUnlockedCritter = (critterState?.unlockedCount ?? 0) > 0;
-    if (targetSlot?.critterId !== null && !targetIsDamaged && assignedCount <= 1 && hasUnlockedCritter) {
-      setBlockedSquadRemovalNotice((current) => ({
-        slotIndex,
-        attempt: current?.slotIndex === slotIndex ? current.attempt + 1 : 1,
-      }));
-    }
   };
 
   const handleToggleStatInfo = (critterId: number) => {
@@ -528,6 +544,24 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     if (!runtime) return;
     const changed = runtime.setEquippedSkill(critterId, slotIndex, null);
     if (changed) setSnapshot(runtime.getSnapshot());
+  };
+
+  const handleEquipEquipment = (critterId: number, slotIndex: number, itemId: string) => {
+    const runtime = runtimeRef.current;
+    if (!runtime) {
+      return;
+    }
+    runtime.equipEquipmentItem(critterId, slotIndex, itemId);
+    setSnapshot(runtime.getSnapshot());
+  };
+
+  const handleUnequipEquipment = (critterId: number, slotIndex: number) => {
+    const runtime = runtimeRef.current;
+    if (!runtime) {
+      return;
+    }
+    runtime.unequipEquipmentItem(critterId, slotIndex);
+    setSnapshot(runtime.getSnapshot());
   };
 
   const handleBattleSelectSlot = (slotIndex: number) => {
@@ -618,16 +652,42 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     }
   };
 
+  const handleCloseShopPrompt = () => {
+    const runtime = runtimeRef.current;
+    if (!runtime) {
+      return;
+    }
+    const changed = runtime.closeShopPrompt();
+    if (changed) {
+      setSnapshot(runtime.getSnapshot());
+    }
+  };
+
+  const handlePurchaseShopEntry = (entryId: string) => {
+    const runtime = runtimeRef.current;
+    if (!runtime) {
+      return;
+    }
+    const changed = runtime.purchaseShopEntry(entryId);
+    if (changed) {
+      setSnapshot(runtime.getSnapshot());
+    }
+  };
+
   const closeMenu = () => {
     setMenuOpen(false);
   };
 
   const critterState = snapshot?.critters;
+  const lockedKnockoutTracker = critterState?.lockedKnockoutTracker ?? null;
   const backpackState = snapshot?.backpack;
   const starterSelection = snapshot?.story.starterSelection ?? null;
   const healPrompt = snapshot?.story.healPrompt ?? null;
+  const shopPrompt = snapshot?.story.shopPrompt ?? null;
   const squadSlots = critterState?.squadSlots ?? [];
   const collection = critterState?.collection ?? [];
+  const pinnedLockedKnockoutTrackerState = resolvePinnedLockedKnockoutTrackerState(critterState);
+  const showPinnedLockedKnockoutTracker = pinnedLockedKnockoutTrackerState !== 'hidden';
   const backpackItems = backpackState?.items ?? [];
   const backpackCategories = backpackState?.categories ?? [];
   useEffect(() => {
@@ -726,14 +786,6 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     return assigned;
   }, [squadSlots]);
   const hasAssignedSquadCritter = assignedSquadCritterIds.size > 0;
-  const squadGridStyle = useMemo(() => {
-    if (!Number.isFinite(squadLargestOccupiedCardHeight) || squadLargestOccupiedCardHeight === null) {
-      return undefined;
-    }
-    return {
-      '--squad-slot-target-height': `${Math.ceil(squadLargestOccupiedCardHeight)}px`,
-    } as CSSProperties;
-  }, [squadLargestOccupiedCardHeight]);
   const displayCollection = useMemo(() => {
     const query = collectionSearchInput.trim().toLowerCase();
     const filtered = !query
@@ -777,61 +829,28 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     });
     return filtered;
   }, [backpackCategoryFilter, backpackItems, backpackSearchInput, backpackSort]);
-  const backpackHealingItem = useMemo(
-    () => (backpackHealingItemId ? backpackItems.find((item) => item.itemId === backpackHealingItemId) ?? null : null),
-    [backpackHealingItemId, backpackItems],
+  const backpackTargetItem = useMemo(() => {
+    if (!backpackTargetSelection) {
+      return null;
+    }
+    const selectedItem = backpackItems.find((item) => item.itemId === backpackTargetSelection.itemId) ?? null;
+    if (!selectedItem) {
+      return null;
+    }
+    if (backpackTargetSelection.mode === 'heal') {
+      return selectedItem.effectType === 'heal_flat' || selectedItem.effectType === 'heal_percent' ? selectedItem : null;
+    }
+    return selectedItem.effectType === 'equip_effect' || selectedItem.effectType === 'equip_stub' ? selectedItem : null;
+  }, [backpackItems, backpackTargetSelection]);
+  const equipmentPickerItems = useMemo(
+    () =>
+      backpackItems.filter(
+        (item): item is EquipmentPickerEntry =>
+          item.category === 'equipment' && (item.quantityEquippable ?? item.quantityOwned) > 0 && item.isActive,
+      ),
+    [backpackItems],
   );
-  const backpackHealingTargetSlots = useMemo(() => squadSlots, [squadSlots]);
-
-  useEffect(() => {
-    if (menuView !== 'squad') {
-      setSquadLargestOccupiedCardHeight(null);
-      return;
-    }
-
-    const squadGridNode = squadGridRef.current;
-    if (!squadGridNode) {
-      setSquadLargestOccupiedCardHeight(null);
-      return;
-    }
-
-    const cardSelector = '.squad-slot.is-unlocked .collection-card';
-    const measureLargestCard = () => {
-      const occupiedCards = Array.from(squadGridNode.querySelectorAll<HTMLElement>(cardSelector));
-      if (occupiedCards.length === 0) {
-        setSquadLargestOccupiedCardHeight(null);
-        return;
-      }
-
-      let largestHeight = 0;
-      for (const card of occupiedCards) {
-        largestHeight = Math.max(largestHeight, card.getBoundingClientRect().height);
-      }
-      const nextHeight = largestHeight > 0 ? Math.ceil(largestHeight) : null;
-      setSquadLargestOccupiedCardHeight((current) => (current === nextHeight ? current : nextHeight));
-    };
-
-    let frameHandle = window.requestAnimationFrame(measureLargestCard);
-    const resizeObserver =
-      typeof ResizeObserver !== 'undefined'
-        ? new ResizeObserver(() => {
-            window.cancelAnimationFrame(frameHandle);
-            frameHandle = window.requestAnimationFrame(measureLargestCard);
-          })
-        : null;
-
-    if (resizeObserver) {
-      const occupiedCards = Array.from(squadGridNode.querySelectorAll<HTMLElement>(cardSelector));
-      for (const card of occupiedCards) {
-        resizeObserver.observe(card);
-      }
-    }
-
-    return () => {
-      window.cancelAnimationFrame(frameHandle);
-      resizeObserver?.disconnect();
-    };
-  }, [collection, expandedStatsByCritterId, menuView, squadSlots]);
+  const backpackTargetSlots = useMemo(() => squadSlots, [squadSlots]);
 
   useEffect(() => {
     if (menuView === 'squad' && !hasAssignedSquadCritter) {
@@ -872,6 +891,14 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
             </div>
             <p className="dialogue-box__meta">Press Y or Space for Yes. Press N for No.</p>
           </div>
+        )}
+
+        {shopPrompt && !snapshot?.dialogue && (
+          <ShopOverlay
+            prompt={shopPrompt}
+            onPurchase={handlePurchaseShopEntry}
+            onClose={handleCloseShopPrompt}
+          />
         )}
 
         {snapshot?.battle && (
@@ -925,6 +952,28 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                   Backpack
                 </button>
               </div>
+              {showPinnedLockedKnockoutTracker && (
+                <section className="side-menu__tracker">
+                  <h3>KO Mission Tracker</h3>
+                  {pinnedLockedKnockoutTrackerState === 'selected-target' ? (
+                    <>
+                      <p className="collection-card__mission-summary">
+                        Tracking: {lockedKnockoutTracker?.selectedCritterName ?? `Critter #${lockedKnockoutTracker?.selectedCritterId}`}
+                      </p>
+                      <ul>
+                        {(lockedKnockoutTracker?.missionRows ?? []).map((mission) => (
+                          <li key={`tracker-${mission.id}`}>
+                            <span>{formatMissionTypeLabel(mission)}</span>
+                            <span>{Math.min(mission.currentValue, mission.targetValue)}/{mission.targetValue}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : (
+                    <p className="collection-card__mission-summary">No KO target selected.</p>
+                  )}
+                </section>
+              )}
               <div className="side-menu__actions">
                 <button type="button" className="primary" onClick={handleManualSave}>
                   Save
@@ -950,81 +999,50 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
               <p className="side-menu__meta">
                 {critterState?.unlockedSquadSlots ?? 0}/{critterState?.maxSquadSlots ?? 0} slots unlocked.
               </p>
+              <p className="side-menu__meta">Click cards to assign or swap. Right-click a filled card to remove.</p>
               {snapshot?.message && <p className="side-menu__notice">{snapshot.message}</p>}
-              <div className={`squad-layout ${squadPickerSlotIndex !== null ? 'is-picking' : ''}`}>
-                <div className="squad-grid" ref={squadGridRef} style={squadGridStyle}>
-                  {squadSlots.map((slot) => {
-                    const slottedCritter = slot.critterId ? collectionById.get(slot.critterId) ?? null : null;
-                    const isKnockedOutSlot =
-                      slot.unlocked &&
-                      slot.critterId !== null &&
-                      slot.currentHp !== null &&
-                      slot.currentHp <= 0;
-                    const isBlockedRemovalSlot = blockedSquadRemovalNotice?.slotIndex === slot.index;
-                    const blockedRemovalAnimationName =
-                      blockedSquadRemovalNotice && isBlockedRemovalSlot
-                        ? blockedSquadRemovalNotice.attempt % 2 === 0
-                          ? 'squad-slot-shake-b'
-                          : 'squad-slot-shake-a'
-                        : undefined;
+              <div className="collection-grid squad-grid">
+                {squadSlots.map((slot) => {
+                  const slottedCritter = slot.critterId ? collectionById.get(slot.critterId) ?? null : null;
+                  if (!slot.unlocked || !slottedCritter) {
                     return (
-                      <div
+                      <SquadSlotPlaceholderCard
                         key={`squad-slot-${slot.index}`}
-                        className={`squad-slot ${slot.unlocked ? 'is-unlocked' : 'is-locked'} ${
-                          slot.index === squadPickerSlotIndex ? 'is-selected' : ''
-                        } ${isBlockedRemovalSlot ? 'is-removal-blocked' : ''} ${
-                          isKnockedOutSlot ? 'is-knocked-out' : ''
-                        }`}
-                        style={
-                          blockedRemovalAnimationName
-                            ? ({ '--squad-slot-shake-name': blockedRemovalAnimationName } as CSSProperties)
-                            : undefined
-                        }
-                        onClick={() => {
-                          if (!slot.unlocked) {
-                            return;
-                          }
-                          handleOpenSquadPicker(slot.index);
-                        }}
-                        onContextMenu={(event) => {
-                          if (!slot.unlocked || slot.critterId === null) {
-                            return;
-                          }
-                          event.preventDefault();
-                          handleRemoveSquadCritter(slot.index);
-                        }}
-                      >
-                        {!slot.unlocked ? (
-                          'Locked'
-                        ) : slottedCritter ? (
-                          <CritterCard
-                            entry={slottedCritter}
-                            elementLogoBucketRoot={elementLogoBucketRoot}
-                            iconsBucketRoot={iconsBucketRoot}
-                            showStatBreakdown={Boolean(expandedStatsByCritterId[slottedCritter.critterId])}
-                            onToggleStatInfo={() => handleToggleStatInfo(slottedCritter.critterId)}
-                            onEquipSkill={handleEquipSkill}
-                            onUnequipSkill={handleUnequipSkill}
-                            healthProgress={
-                              slot.currentHp !== null && slot.maxHp !== null
-                                ? {
-                                    currentHp: slot.currentHp,
-                                    maxHp: slot.maxHp,
-                                  }
-                                : undefined
-                            }
-                          />
-                        ) : (
-                          <span className="squad-slot__placeholder">Empty</span>
-                        )}
-                        {isKnockedOutSlot && <div className="squad-slot__ko-badge">Knocked Out</div>}
-                        {isBlockedRemovalSlot && (
-                          <div className="squad-slot__blocked-popup">You need at least 1 Critter!</div>
-                        )}
-                      </div>
+                        slotIndex={slot.index}
+                        locked={!slot.unlocked}
+                        onClick={slot.unlocked ? () => handleOpenSquadPicker(slot.index) : undefined}
+                      />
                     );
-                  })}
-                </div>
+                  }
+                  return (
+                    <CritterCard
+                      key={`squad-slot-${slot.index}`}
+                      entry={slottedCritter}
+                      elementLogoBucketRoot={elementLogoBucketRoot}
+                      iconsBucketRoot={iconsBucketRoot}
+                      showStatBreakdown={Boolean(expandedStatsByCritterId[slottedCritter.critterId])}
+                      onToggleStatInfo={() => handleToggleStatInfo(slottedCritter.critterId)}
+                      onSelectCritter={() => handleOpenSquadPicker(slot.index)}
+                      onCardContextMenu={(event) => {
+                        event.preventDefault();
+                        handleRemoveSquadCritter(slot.index);
+                      }}
+                      statOverride={slot.equipmentAdjustedStats ?? undefined}
+                      equipmentSlots={slot.equipmentSlots}
+                      equipmentOptions={equipmentPickerItems}
+                      onEquipEquipment={handleEquipEquipment}
+                      onUnequipEquipment={handleUnequipEquipment}
+                      healthProgress={
+                        slot.currentHp !== null && slot.maxHp !== null
+                          ? {
+                              currentHp: slot.currentHp,
+                              maxHp: slot.maxHp,
+                            }
+                          : undefined
+                      }
+                    />
+                  );
+                })}
               </div>
               {squadPickerSlotIndex !== null && (
                 <div className="squad-picker-modal" role="dialog" aria-modal="true" aria-label="Choose squad critter">
@@ -1129,62 +1147,104 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                   <p className="collection-card__mission-summary">No items match that search/filter.</p>
                 )}
               </div>
-              {backpackHealingItem && (
-                <section className="backpack-heal-picker">
-                  <p className="side-menu__meta">Select a squad critter to use {backpackHealingItem.name}.</p>
-                  <div className="backpack-heal-picker__grid">
-                    {backpackHealingTargetSlots.map((slot) => {
+              {backpackTargetSelection && backpackTargetItem && (
+                <section className="backpack-target-picker">
+                  <p className="side-menu__meta">
+                    Select a squad critter to {backpackTargetSelection.mode === 'equip' ? 'equip' : 'use'} {backpackTargetItem.name}.
+                  </p>
+                  <div className="backpack-target-picker__grid">
+                    {backpackTargetSlots.map((slot) => {
                       const critterEntry = slot.critterId ? collectionById.get(slot.critterId) ?? null : null;
                       const isSelectable = slot.unlocked && slot.critterId !== null;
+                      const showEquipSlotPreview = backpackTargetSelection.mode === 'equip' && isSelectable;
+                      const equipSlots = showEquipSlotPreview ? slot.equipmentSlots : [];
                       const critterName = slot.critterName ?? critterEntry?.name ?? (slot.unlocked ? 'Empty' : 'Locked');
                       const maxHp = Math.max(1, slot.maxHp ?? critterEntry?.effectiveStats.hp ?? 1);
                       const currentHp = Math.max(0, Math.min(slot.currentHp ?? 0, maxHp));
                       const hpPercent = Math.max(0, Math.min(100, Math.round((currentHp / maxHp) * 100)));
                       const hpTier = hpPercent <= 25 ? 'critical' : hpPercent <= 55 ? 'warning' : 'healthy';
                       const hpStyle = {
-                        '--backpack-heal-hp-fill': `${hpPercent}%`,
+                        '--backpack-target-hp-fill': `${hpPercent}%`,
                       } as CSSProperties;
                       return (
                         <button
-                          key={`backpack-heal-slot-${slot.index}`}
+                          key={`backpack-target-slot-${slot.index}`}
                           type="button"
-                          className={`backpack-heal-target-card ${currentHp <= 0 ? 'is-knocked-out' : ''} ${
+                          className={`backpack-target-card ${currentHp <= 0 ? 'is-knocked-out' : ''} ${
                             isSelectable ? '' : 'is-disabled'
                           }`}
-                          onClick={() => handleUseBackpackHealingItemOnSlot(backpackHealingItem.itemId, slot.index)}
+                          onClick={() => handleUseBackpackTargetItemOnSlot(backpackTargetItem.itemId, slot.index)}
                           disabled={!isSelectable}
                           title={`Slot ${slot.index + 1}: ${critterName}`}
                         >
-                          <span className="backpack-heal-target-card__slot">Slot {slot.index + 1}</span>
-                          <span className="backpack-heal-target-card__name">{critterName}</span>
+                          <span className="backpack-target-card__slot">Slot {slot.index + 1}</span>
+                          <span className="backpack-target-card__name">{critterName}</span>
                           {critterEntry?.spriteUrl ? (
                             <img
                               src={critterEntry.spriteUrl}
                               alt={critterName}
-                              className="backpack-heal-target-card__sprite"
+                              className="backpack-target-card__sprite"
                               loading="lazy"
                               decoding="async"
                             />
                           ) : (
-                            <div className="backpack-heal-target-card__sprite backpack-heal-target-card__sprite--missing">
+                            <div className="backpack-target-card__sprite backpack-target-card__sprite--missing">
                               No Sprite
                             </div>
                           )}
                           {isSelectable ? (
-                            <div className={`backpack-heal-target-card__hp is-${hpTier}`} style={hpStyle}>
-                              <span className="backpack-heal-target-card__hp-fill" />
-                              <span className="backpack-heal-target-card__hp-label">
-                                HP {currentHp}/{maxHp}
-                              </span>
-                            </div>
+                            <>
+                              <div className={`backpack-target-card__hp is-${hpTier}`} style={hpStyle}>
+                                <span className="backpack-target-card__hp-fill" />
+                                <span className="backpack-target-card__hp-label">
+                                  HP {currentHp}/{maxHp}
+                                </span>
+                              </div>
+                              {showEquipSlotPreview && (
+                                <div className="backpack-target-card__equip">
+                                  <span className="backpack-target-card__equip-label">Equip</span>
+                                  <div className="backpack-target-card__equip-grid">
+                                    {equipSlots.length > 0 ? (
+                                      equipSlots.map((equipSlot, equipSlotIndex) => (
+                                        <span
+                                          key={`backpack-target-equip-${slot.index}-${equipSlotIndex}`}
+                                          className={`backpack-target-card__equip-slot ${equipSlot ? 'is-filled' : 'is-empty'}`}
+                                          title={
+                                            equipSlot
+                                              ? `Slot ${equipSlotIndex + 1}: ${equipSlot.itemName}`
+                                              : `Slot ${equipSlotIndex + 1}: Empty`
+                                          }
+                                        >
+                                          {equipSlot ? (
+                                            equipSlot.imageUrl ? (
+                                              <img
+                                                src={equipSlot.imageUrl}
+                                                alt={equipSlot.itemName}
+                                                className="backpack-target-card__equip-slot-image"
+                                                loading="lazy"
+                                                decoding="async"
+                                              />
+                                            ) : (
+                                              <span className="backpack-target-card__equip-slot-dot" />
+                                            )
+                                          ) : null}
+                                        </span>
+                                      ))
+                                    ) : (
+                                      <span className="backpack-target-card__equip-empty-note">No slots</span>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+                            </>
                           ) : (
-                            <span className="backpack-heal-target-card__status">{slot.unlocked ? 'No critter' : 'Locked slot'}</span>
+                            <span className="backpack-target-card__status">{slot.unlocked ? 'No critter' : 'Locked slot'}</span>
                           )}
                         </button>
                       );
                     })}
                   </div>
-                  <button type="button" className="secondary" onClick={() => setBackpackHealingItemId(null)}>
+                  <button type="button" className="secondary" onClick={() => setBackpackTargetSelection(null)}>
                     Cancel
                   </button>
                 </section>
@@ -1238,6 +1298,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                     showStatBreakdown={Boolean(expandedStatsByCritterId[entry.critterId])}
                     onToggleStatInfo={() => handleToggleStatInfo(entry.critterId)}
                     onAdvanceCritter={handleAdvanceCritter}
+                    onSetLockedKnockoutTarget={handleSetLockedKnockoutTarget}
                     onEquipSkill={handleEquipSkill}
                     onUnequipSkill={handleUnequipSkill}
                     healthProgress={
@@ -1288,8 +1349,11 @@ interface BackpackItemCardProps {
 
 function BackpackItemCard({ item, onUse }: BackpackItemCardProps) {
   const detailsText = item.description.trim() || item.effectSummary;
+  const equippedCritters = item.category === 'equipment' ? item.equippedByCritters ?? [] : [];
+  const isEquippedOutEquipment = item.category === 'equipment' && item.quantityOwned > 0 && (item.quantityEquippable ?? 0) <= 0;
+  const shouldLockCard = item.hasUseAction && !item.canUse && !isEquippedOutEquipment;
   return (
-    <article className={`collection-card backpack-card ${item.hasUseAction && !item.canUse ? 'is-locked' : ''}`}>
+    <article className={`collection-card backpack-card ${shouldLockCard ? 'is-locked' : ''}`}>
       <div className="collection-card__body">
         <header className="backpack-card__head">
           <span className="backpack-card__name">{item.name}</span>
@@ -1302,7 +1366,34 @@ function BackpackItemCard({ item, onUse }: BackpackItemCardProps) {
             <div className="collection-card__sprite collection-card__sprite--missing">No Image</div>
           )}
         </div>
-        <p className="backpack-card__owned">Owned: {item.quantityOwned}</p>
+        <div className="backpack-card__owned-row">
+          <p className="backpack-card__owned">Owned: {item.quantityOwned}</p>
+          {equippedCritters.length > 0 && (
+            <span className="backpack-card__equipped-critters" aria-label="Critters currently equipped with this item">
+              {equippedCritters.map((critter) => (
+                <span
+                  key={`backpack-equipped-${item.itemId}-${critter.critterId}`}
+                  className="backpack-card__equipped-critter"
+                  title={`${critter.critterName} has ${item.name} equipped`}
+                >
+                  {critter.spriteUrl ? (
+                    <img
+                      src={critter.spriteUrl}
+                      alt={critter.critterName}
+                      className="backpack-card__equipped-critter-sprite"
+                      loading="lazy"
+                      decoding="async"
+                    />
+                  ) : (
+                    <span className="backpack-card__equipped-critter-fallback" aria-hidden="true">
+                      *
+                    </span>
+                  )}
+                </span>
+              ))}
+            </span>
+          )}
+        </div>
         <section className="backpack-card__details">
           <p className="collection-card__mission-summary">{detailsText || 'No details set.'}</p>
         </section>
@@ -1325,6 +1416,36 @@ function BackpackItemCard({ item, onUse }: BackpackItemCardProps) {
   );
 }
 
+interface SquadSlotPlaceholderCardProps {
+  slotIndex: number;
+  locked: boolean;
+  onClick?: () => void;
+}
+
+function SquadSlotPlaceholderCard({ slotIndex, locked, onClick }: SquadSlotPlaceholderCardProps) {
+  return (
+    <article
+      className={`collection-card is-placeholder squad-slot__placeholder-card ${locked ? 'is-locked-slot' : 'is-empty-slot'} ${
+        !locked && onClick ? 'collection-card--selectable' : ''
+      }`}
+      onClick={onClick}
+    >
+      <div className="collection-card__body">
+        <header className="collection-card__head">
+          <span className="collection-card__id">Slot {slotIndex + 1}</span>
+          <span className="collection-card__name">{locked ? 'Locked' : 'Empty'}</span>
+        </header>
+        <section className="collection-card__missions">
+          <h3>{locked ? 'Unlock Required' : 'Awaiting Assignment'}</h3>
+          <p className="collection-card__mission-summary">
+            {locked ? 'Unlock more squad slots to use this position.' : 'Click this card to assign an unlocked critter.'}
+          </p>
+        </section>
+      </div>
+    </article>
+  );
+}
+
 interface CritterCardProps {
   entry: CritterCardEntry;
   elementLogoBucketRoot: string | null;
@@ -1332,9 +1453,21 @@ interface CritterCardProps {
   showStatBreakdown: boolean;
   onToggleStatInfo: () => void;
   onAdvanceCritter?: (critterId: number) => void;
+  onSetLockedKnockoutTarget?: (critterId: number | null) => void;
   onSelectCritter?: (critterId: number) => void;
+  onCardContextMenu?: (event: MouseEvent<HTMLElement>) => void;
   onEquipSkill?: (critterId: number, slotIndex: number, skillId: string | null) => void;
   onUnequipSkill?: (critterId: number, slotIndex: number) => void;
+  onEquipEquipment?: (critterId: number, slotIndex: number, itemId: string) => void;
+  onUnequipEquipment?: (critterId: number, slotIndex: number) => void;
+  equipmentSlots?: RuntimeSnapshot['critters']['squadSlots'][number]['equipmentSlots'];
+  equipmentOptions?: EquipmentPickerEntry[];
+  statOverride?: {
+    hp: number;
+    attack: number;
+    defense: number;
+    speed: number;
+  };
   isSelectionDisabled?: boolean;
   healthProgress?: {
     currentHp: number;
@@ -1362,6 +1495,20 @@ function buildSkillSlotTooltip(slot: {
   }
   if (slot.effectDescriptions && slot.effectDescriptions.trim()) {
     lines.push(`Effect: ${slot.effectDescriptions.trim()}`);
+  }
+  return lines.join('\n');
+}
+
+function buildEquipmentSlotTooltip(slot: {
+  itemName: string;
+  equipSize: number;
+  effectDescriptions: string[];
+}): string {
+  const lines = [slot.itemName, `Size: ${slot.equipSize} slot${slot.equipSize === 1 ? '' : 's'}`];
+  for (const effect of slot.effectDescriptions) {
+    if (effect.trim()) {
+      lines.push(`Effect: ${effect.trim()}`);
+    }
   }
   return lines.join('\n');
 }
@@ -1413,13 +1560,21 @@ function CritterCard({
   showStatBreakdown,
   onToggleStatInfo,
   onAdvanceCritter,
+  onSetLockedKnockoutTarget,
   onSelectCritter,
+  onCardContextMenu,
   onEquipSkill,
   onUnequipSkill,
+  onEquipEquipment,
+  onUnequipEquipment,
+  equipmentSlots = [],
+  equipmentOptions = [],
+  statOverride,
   isSelectionDisabled = false,
   healthProgress,
 }: CritterCardProps) {
   const [skillPopup, setSkillPopup] = useState<{ slotIndex: number } | null>(null);
+  const [equipmentPopupSlotIndex, setEquipmentPopupSlotIndex] = useState<number | null>(null);
   const equippedSlots = entry.equippedSkillSlots ?? [null, null, null, null];
   const unlockedOptions = entry.unlockedSkillOptions ?? [];
   const equippedCount = equippedSlots.filter((s) => s !== null).length;
@@ -1460,6 +1615,18 @@ function CritterCard({
     '--health-progress-color-start': healthFillStart,
     '--health-progress-color-end': healthFillEnd,
   } as CSSProperties;
+  const showLockedKnockoutTargetButton = shouldShowLockedKnockoutTargetButton(entry);
+  const equippedEquipmentItemIds = new Set(
+    equipmentSlots
+      .map((slot) => slot?.itemId ?? null)
+      .filter((itemId): itemId is string => typeof itemId === 'string' && itemId.length > 0),
+  );
+  const equippableEquipmentOptions = equipmentOptions.filter((option) => {
+    if (equippedEquipmentItemIds.has(option.itemId)) {
+      return false;
+    }
+    return (option.quantityEquippable ?? option.quantityOwned) > 0;
+  });
   return (
     <article
       className={`collection-card ${entry.unlocked ? 'is-unlocked' : 'is-locked'} ${
@@ -1467,6 +1634,7 @@ function CritterCard({
       } ${isSelectionDisabled ? 'collection-card--disabled' : ''}`}
       style={cardStyle}
       onClick={onSelectCritter && !isSelectionDisabled ? () => onSelectCritter(entry.critterId) : undefined}
+      onContextMenu={onCardContextMenu}
     >
       <div className="collection-card__body">
       <header className="collection-card__head">
@@ -1526,10 +1694,10 @@ function CritterCard({
       <section className="collection-card__stats">
         <h3>Stats</h3>
         <dl>
-          <div><dt>HP</dt><dd>{formatStatValue(entry.baseStats.hp, entry.statBonus.hp, showStatBreakdown)}</dd></div>
-          <div><dt>ATK</dt><dd>{formatStatValue(entry.baseStats.attack, entry.statBonus.attack, showStatBreakdown)}</dd></div>
-          <div><dt>DEF</dt><dd>{formatStatValue(entry.baseStats.defense, entry.statBonus.defense, showStatBreakdown)}</dd></div>
-          <div><dt>SPD</dt><dd>{formatStatValue(entry.baseStats.speed, entry.statBonus.speed, showStatBreakdown)}</dd></div>
+          <div><dt>HP</dt><dd>{statOverride ? String(statOverride.hp) : formatStatValue(entry.baseStats.hp, entry.statBonus.hp, showStatBreakdown)}</dd></div>
+          <div><dt>ATK</dt><dd>{statOverride ? String(statOverride.attack) : formatStatValue(entry.baseStats.attack, entry.statBonus.attack, showStatBreakdown)}</dd></div>
+          <div><dt>DEF</dt><dd>{statOverride ? String(statOverride.defense) : formatStatValue(entry.baseStats.defense, entry.statBonus.defense, showStatBreakdown)}</dd></div>
+          <div><dt>SPD</dt><dd>{statOverride ? String(statOverride.speed) : formatStatValue(entry.baseStats.speed, entry.statBonus.speed, showStatBreakdown)}</dd></div>
         </dl>
       </section>
       <section className="collection-card__skills">
@@ -1620,6 +1788,104 @@ function CritterCard({
           </div>
         )}
       </section>
+      {equipmentSlots.length > 0 && (
+        <section className="collection-card__skills">
+          <h3>Equipment</h3>
+          <div className="collection-card__equip-grid">
+            {equipmentSlots.map((slot, slotIndex) => {
+              const tooltip = slot ? buildEquipmentSlotTooltip(slot) : undefined;
+              return (
+                <button
+                  key={`equip-${entry.critterId}-${slotIndex}`}
+                  type="button"
+                  className={`collection-card__equip-slot ${slot ? 'is-filled' : 'is-empty'}`}
+                  onClick={(event) => {
+                    if (!onEquipEquipment) {
+                      return;
+                    }
+                    event.stopPropagation();
+                    setEquipmentPopupSlotIndex(slotIndex);
+                  }}
+                  onContextMenu={(event) => {
+                    if (!slot || !onUnequipEquipment) {
+                      return;
+                    }
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onUnequipEquipment(entry.critterId, slotIndex);
+                  }}
+                  title={tooltip || (onEquipEquipment ? 'Empty equip slot - click to equip' : undefined)}
+                >
+                  {slot ? (
+                    <>
+                      {slot.imageUrl ? (
+                        <img src={slot.imageUrl} alt={slot.itemName} className="collection-card__equip-slot-image" loading="lazy" decoding="async" />
+                      ) : (
+                        <span className="collection-card__equip-slot-label">{slot.itemName.slice(0, 2).toUpperCase()}</span>
+                      )}
+                      {slot.effectIconUrls.length > 0 && (
+                        <span className="collection-card__equip-slot-icons">
+                          {slot.effectIconUrls.map((url, iconIndex) => (
+                            <img
+                              key={`${url}-${iconIndex}`}
+                              src={url}
+                              alt=""
+                              className="collection-card__equip-slot-effect-icon"
+                              loading="lazy"
+                              decoding="async"
+                            />
+                          ))}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="collection-card__equip-slot-empty">+</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          {equipmentPopupSlotIndex !== null && onEquipEquipment && (
+            <div
+              className="collection-card__skill-popup"
+              role="dialog"
+              aria-label="Equip equipment"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <p className="collection-card__skill-popup-title">Equip item (slot {equipmentPopupSlotIndex + 1})</p>
+              <div className="collection-card__skill-popup-list">
+                {equippableEquipmentOptions.map((option) => (
+                  <button
+                    key={`equip-option-${option.itemId}`}
+                    type="button"
+                    className="secondary collection-card__skill-popup-option"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onEquipEquipment(entry.critterId, equipmentPopupSlotIndex, option.itemId);
+                      setEquipmentPopupSlotIndex(null);
+                    }}
+                  >
+                    {option.name} (x{option.quantityEquippable ?? option.quantityOwned}){option.equipSize ? ` - ${option.equipSize} slot${option.equipSize === 1 ? '' : 's'}` : ''}
+                  </button>
+                ))}
+                {equippableEquipmentOptions.length === 0 && (
+                  <p className="collection-card__mission-summary">No equippable equipment.</p>
+                )}
+              </div>
+              <button
+                type="button"
+                className="secondary"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setEquipmentPopupSlotIndex(null);
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </section>
+      )}
       {entry.abilities.length > 0 && (
         <section className="collection-card__abilities">
           <h3>Abilities</h3>
@@ -1653,6 +1919,33 @@ function CritterCard({
           <p className="collection-card__mission-summary">{isMaxLevel ? 'MAX LEVEL' : 'No mission requirements configured.'}</p>
         )}
       </section>
+      {showLockedKnockoutTargetButton && onSetLockedKnockoutTarget && (
+        <div className="collection-card__tracker-actions">
+          <button
+            type="button"
+            className="secondary"
+            onClick={(event) => {
+              event.stopPropagation();
+              onSetLockedKnockoutTarget(entry.critterId);
+            }}
+            disabled={entry.lockedKnockoutTargetSelected}
+          >
+            {entry.lockedKnockoutTargetSelected ? 'Tracking KO Mission' : 'Track KO Mission'}
+          </button>
+          {entry.lockedKnockoutTargetSelected && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={(event) => {
+                event.stopPropagation();
+                onSetLockedKnockoutTarget(null);
+              }}
+            >
+              Clear KO Target
+            </button>
+          )}
+        </div>
+      )}
       </div>
       {entry.canAdvance && entry.advanceActionLabel && onAdvanceCritter && (
         <button
@@ -1677,6 +1970,93 @@ interface StarterSelectionOverlayProps {
   onSelectCritter: (critterId: number) => void;
   onConfirm: () => void;
   onCancel: () => void;
+}
+
+interface ShopOverlayProps {
+  prompt: NonNullable<RuntimeSnapshot['story']['shopPrompt']>;
+  onPurchase: (entryId: string) => void;
+  onClose: () => void;
+}
+
+function ShopOverlay({ prompt, onPurchase, onClose }: ShopOverlayProps) {
+  return (
+    <div className="shop-overlay">
+      <section className="shop-overlay__panel">
+        <header className="shop-overlay__header">
+          <div>
+            <p className="shop-overlay__speaker">{prompt.npcName}</p>
+            <h3>{prompt.title}</h3>
+          </div>
+          <button type="button" className="secondary shop-overlay__close" onClick={onClose}>
+            Close
+          </button>
+        </header>
+        <div className="shop-overlay__grid">
+          {prompt.entries.length === 0 ? (
+            <p className="shop-overlay__empty">This shop has no entries.</p>
+          ) : (
+            prompt.entries.map((entry) => (
+              <article
+                key={`shop-entry-${entry.entryId}`}
+                className={`shop-overlay__card ${entry.oneTimePurchased ? 'is-purchased' : ''}`}
+              >
+                <p className="shop-overlay__card-title">
+                  {entry.name}
+                  {entry.kind === 'item' ? ` x${entry.quantity}` : ''}
+                </p>
+                <div className="shop-overlay__sprite-wrap">
+                  {entry.imageUrl ? (
+                    <img src={entry.imageUrl} alt={entry.name} className="shop-overlay__sprite" loading="lazy" decoding="async" />
+                  ) : (
+                    <div className="shop-overlay__sprite shop-overlay__sprite--missing">No Image</div>
+                  )}
+                </div>
+                <div className="shop-overlay__costs">
+                  {entry.costs.map((cost) => (
+                    <div key={`shop-cost-${entry.entryId}-${cost.itemId}`} className="shop-overlay__cost-row">
+                      {cost.itemImageUrl ? (
+                        <img
+                          src={cost.itemImageUrl}
+                          alt={cost.itemName}
+                          className="shop-overlay__cost-icon"
+                          loading="lazy"
+                          decoding="async"
+                        />
+                      ) : (
+                        <div className="shop-overlay__cost-icon shop-overlay__cost-icon--missing">?</div>
+                      )}
+                      <span>
+                        {cost.itemName} x{cost.requiredQuantity}
+                      </span>
+                      <span>
+                        {cost.ownedQuantity}/{cost.requiredQuantity}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div
+                  className={`shop-overlay__action-wrap ${entry.oneTimePurchased ? 'has-tooltip' : ''}`}
+                  data-tooltip={entry.oneTimePurchased ? entry.disableReason ?? 'Already purchased.' : undefined}
+                >
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={!entry.affordable}
+                    onClick={() => onPurchase(entry.entryId)}
+                    title={entry.oneTimePurchased ? entry.disableReason ?? 'Already purchased.' : undefined}
+                  >
+                    {entry.oneTimePurchased ? 'Purchased' : 'Purchase'}
+                  </button>
+                </div>
+                {entry.disableReason && !entry.oneTimePurchased ? <p className="shop-overlay__reason">{entry.disableReason}</p> : null}
+              </article>
+            ))
+          )}
+        </div>
+        <p className="shop-overlay__hint">Press Esc to close.</p>
+      </section>
+    </div>
+  );
 }
 
 function StarterSelectionOverlay({

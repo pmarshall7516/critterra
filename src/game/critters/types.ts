@@ -47,6 +47,7 @@ export interface CritterLevelRequirement {
   missions: CritterLevelMissionRequirement[];
   requiredMissionCount: number;
   statDelta: CritterStatDelta;
+  unlockEquipSlots: number;
   abilityUnlockIds: string[];
   skillUnlockIds: string[];
 }
@@ -66,6 +67,11 @@ export interface CritterDefinition {
 /** Four skill slots; null = empty. Same order as battle 2x2 button layout. */
 export type EquippedSkillSlots = [string | null, string | null, string | null, string | null];
 
+export interface EquippedEquipmentAnchor {
+  itemId: string;
+  slotIndex: number;
+}
+
 export interface PlayerCritterCollectionEntry {
   critterId: number;
   unlocked: boolean;
@@ -78,6 +84,7 @@ export interface PlayerCritterCollectionEntry {
   effectiveStats: CritterStats;
   unlockedAbilityIds: string[];
   equippedSkillIds: EquippedSkillSlots;
+  equippedEquipmentAnchors: EquippedEquipmentAnchor[];
   lastProgressAt: string | null;
 }
 
@@ -86,8 +93,9 @@ export interface PlayerCritterProgress {
   unlockedSquadSlots: number;
   squad: Array<number | null>;
   collection: PlayerCritterCollectionEntry[];
+  lockedKnockoutTargetCritterId: number | null;
 }
 
-export const PLAYER_CRITTER_PROGRESS_VERSION = 6;
+export const PLAYER_CRITTER_PROGRESS_VERSION = 8;
 export const MAX_SQUAD_SLOTS = 8;
 export const STARTING_UNLOCKED_SQUAD_SLOTS = 2;

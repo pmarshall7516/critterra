@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { sanitizeItemCatalog, sanitizeItemDefinition } from '@/game/items/schema';
 import { ITEM_CORE_CATEGORIES, ITEM_EFFECT_TYPES, type GameItemDefinition } from '@/game/items/types';
 import { apiFetchJson } from '@/shared/apiClient';
+import { sanitizeEquipmentEffectLibrary } from '@/game/equipmentEffects/schema';
+import type { EquipmentEffectDefinition } from '@/game/equipmentEffects/types';
 
 interface ItemListResponse {
   ok: boolean;
@@ -11,6 +13,12 @@ interface ItemListResponse {
 
 interface ItemSaveResponse {
   ok: boolean;
+  error?: string;
+}
+
+interface EquipmentEffectsListResponse {
+  ok: boolean;
+  equipmentEffects?: unknown;
   error?: string;
 }
 
@@ -39,6 +47,8 @@ interface ItemDraft {
   successText: string;
   effectType: string;
   effectConfigJson: string;
+  equipSizeInput: string;
+  equipmentEffectIds: string[];
   valueInput: string;
   consumable: boolean;
   maxStack: string;
@@ -64,6 +74,9 @@ export function ItemTool() {
   const [selectedImagePath, setSelectedImagePath] = useState('');
   const [imageEntries, setImageEntries] = useState<SupabaseSpriteSheetListItem[]>([]);
   const [isLoadingImages, setIsLoadingImages] = useState(false);
+  const [equipmentEffects, setEquipmentEffects] = useState<EquipmentEffectDefinition[]>([]);
+  const [equipmentEffectSearchInput, setEquipmentEffectSearchInput] = useState('');
+  const [equipmentEffectDropdownOpen, setEquipmentEffectDropdownOpen] = useState(false);
 
   const sortedItems = useMemo(
     () => [...items].sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })),
@@ -103,6 +116,26 @@ export function ItemTool() {
     );
   }, [imageEntries, imageSearchInput]);
 
+  const selectedEquipmentEffectIds = useMemo(() => draft.equipmentEffectIds ?? [], [draft.equipmentEffectIds]);
+
+  const filteredEquipmentEffects = useMemo(() => {
+    const query = equipmentEffectSearchInput.trim().toLowerCase();
+    const selected = new Set(selectedEquipmentEffectIds);
+    return equipmentEffects
+      .filter((effect) => !selected.has(effect.effect_id))
+      .filter((effect) => {
+        if (!query) {
+          return true;
+        }
+        return (
+          effect.effect_id.toLowerCase().includes(query) ||
+          effect.effect_name.toLowerCase().includes(query)
+        );
+      })
+      .sort((left, right) => left.effect_id.localeCompare(right.effect_id))
+      .slice(0, 16);
+  }, [equipmentEffects, equipmentEffectSearchInput, selectedEquipmentEffectIds]);
+
   const loadItems = async () => {
     setIsLoading(true);
     setError('');
@@ -127,6 +160,19 @@ export function ItemTool() {
       setError(caughtError instanceof Error ? caughtError.message : 'Unable to load item catalog.');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const loadEquipmentEffects = async () => {
+    try {
+      const result = await apiFetchJson<EquipmentEffectsListResponse>('/api/admin/equipment-effects/list');
+      if (!result.ok) {
+        throw new Error(result.error ?? result.data?.error ?? 'Unable to load equipment effects.');
+      }
+      const loaded = sanitizeEquipmentEffectLibrary(result.data?.equipmentEffects);
+      setEquipmentEffects(loaded);
+    } catch {
+      setEquipmentEffects([]);
     }
   };
 
@@ -160,6 +206,7 @@ export function ItemTool() {
   useEffect(() => {
     void loadItems();
     void loadImages();
+    void loadEquipmentEffects();
     // Run once on mount with defaults.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -217,14 +264,22 @@ export function ItemTool() {
     setError('');
     setStatus('');
 
+    const isEquipmentCategory = draft.category === 'equipment';
+    const parsedValue = isEquipmentCategory ? undefined : parseOptionalNumberInput(draft.valueInput);
     const parsedEffectConfig = parseEffectConfigJson(draft.effectConfigJson);
-    if (!parsedEffectConfig.ok) {
+    if (!isEquipmentCategory && !parsedEffectConfig.ok) {
       setError(parsedEffectConfig.error);
       return;
     }
-
-    const parsedValue = parseOptionalNumberInput(draft.valueInput);
-    const syncedEffectConfig = syncEffectConfigWithValue(draft.effectType, parsedEffectConfig.value, parsedValue);
+    const equipSizeRaw = Number.parseInt(draft.equipSizeInput, 10);
+    const equipmentConfig = {
+      equipSize: Number.isFinite(equipSizeRaw) ? Math.max(1, Math.min(8, Math.floor(equipSizeRaw))) : 1,
+      equipmentEffectIds: [...new Set((draft.equipmentEffectIds ?? []).map((entry) => entry.trim()).filter((entry) => entry.length > 0))],
+    };
+    const syncedEffectConfig = isEquipmentCategory
+      ? equipmentConfig
+      : syncEffectConfigWithValue(draft.effectType, parsedEffectConfig.ok ? parsedEffectConfig.value : {}, parsedValue);
+    const effectType = isEquipmentCategory ? 'equip_effect' : draft.effectType;
 
     const parsed = sanitizeItemDefinition(
       {
@@ -235,10 +290,10 @@ export function ItemTool() {
         imageUrl: draft.imageUrl,
         misuseText: draft.misuseText,
         successText: draft.successText,
-        effectType: draft.effectType,
+        effectType,
         effectConfig: syncedEffectConfig,
         value: parsedValue,
-        consumable: draft.consumable,
+        consumable: isEquipmentCategory ? false : draft.consumable,
         maxStack: Number.parseInt(draft.maxStack, 10),
         isActive: draft.isActive,
         starterGrantAmount: Number.parseInt(draft.starterGrantAmount, 10),
@@ -435,7 +490,18 @@ export function ItemTool() {
               Category
               <select
                 value={draft.category}
-                onChange={(event) => setDraft((current) => ({ ...current, category: event.target.value }))}
+                onChange={(event) =>
+                  setDraft((current) => {
+                    const nextCategory = event.target.value;
+                    const nextIsEquipment = nextCategory === 'equipment';
+                    return {
+                      ...current,
+                      category: nextCategory,
+                      effectType: nextIsEquipment ? 'equip_effect' : current.effectType,
+                      consumable: nextIsEquipment ? false : current.consumable,
+                    };
+                  })
+                }
               >
                 {categoryOptions.map((category) => (
                   <option key={category} value={category}>
@@ -444,29 +510,50 @@ export function ItemTool() {
                 ))}
               </select>
             </label>
-            <label>
-              Effect Type
-              <select
-                value={draft.effectType}
-                onChange={(event) => setDraft((current) => ({ ...current, effectType: event.target.value }))}
-              >
-                {ITEM_EFFECT_TYPES.map((type) => (
-                  <option key={type} value={type}>
-                    {type}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Value (Optional Number)
-              <input
-                type="number"
-                step="any"
-                value={draft.valueInput}
-                onChange={(event) => setDraft((current) => ({ ...current, valueInput: event.target.value }))}
-                placeholder="heal_flat: healAmount | tool_action: power"
-              />
-            </label>
+            {draft.category === 'equipment' ? (
+              <>
+                <label>
+                  Effect Type
+                  <input value="equip_effect" readOnly />
+                </label>
+                <label>
+                  Equip Size
+                  <input
+                    type="number"
+                    min={1}
+                    max={8}
+                    value={draft.equipSizeInput}
+                    onChange={(event) => setDraft((current) => ({ ...current, equipSizeInput: event.target.value }))}
+                  />
+                </label>
+              </>
+            ) : (
+              <>
+                <label>
+                  Effect Type
+                  <select
+                    value={draft.effectType}
+                    onChange={(event) => setDraft((current) => ({ ...current, effectType: event.target.value }))}
+                  >
+                    {ITEM_EFFECT_TYPES.filter((type) => type !== 'equip_effect').map((type) => (
+                      <option key={type} value={type}>
+                        {type}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Value (Optional Number)
+                  <input
+                    type="number"
+                    step="any"
+                    value={draft.valueInput}
+                    onChange={(event) => setDraft((current) => ({ ...current, valueInput: event.target.value }))}
+                    placeholder="heal_flat: healAmount | tool_action: power"
+                  />
+                </label>
+              </>
+            )}
           </div>
 
           <label>
@@ -600,6 +687,7 @@ export function ItemTool() {
               <input
                 type="checkbox"
                 checked={draft.consumable}
+                disabled={draft.category === 'equipment'}
                 onChange={(event) => setDraft((current) => ({ ...current, consumable: event.target.checked }))}
               />{' '}
               Consumable
@@ -613,21 +701,102 @@ export function ItemTool() {
               Active
             </label>
           </div>
-          <label>
-            Effect Config (JSON)
-            <textarea
-              value={draft.effectConfigJson}
-              onChange={(event) => setDraft((current) => ({ ...current, effectConfigJson: event.target.value }))}
-              rows={8}
-              className="admin-json"
-            />
-          </label>
-          <p className="admin-note">
-            Examples: tool <code>{'{"actionId":"fishing","requiresFacingTileKeyword":["water"]}'}</code>; heal flat{' '}
-            <code>{'{"healAmount":20}'}</code>; heal percent <code>{'{"healPercent":0.35}'}</code>.
-            Success Text supports <code>{'<Critter>'}</code> and <code>X</code> tokens. Value sync rules: <code>heal_flat</code>{' '}
-            updates <code>effectConfig.healAmount</code>, and <code>tool_action</code> updates <code>effectConfig.power</code>.
-          </p>
+          {draft.category === 'equipment' ? (
+            <>
+              <label className="admin-effect-picker-wrap">
+                <span>Equipment Effects</span>
+                <div className="admin-effect-picker" onClick={() => setEquipmentEffectDropdownOpen(true)}>
+                  {selectedEquipmentEffectIds.map((id) => {
+                    const effect = equipmentEffects.find((entry) => entry.effect_id === id);
+                    return (
+                      <span key={id} className="admin-effect-picker__chip">
+                        {effect ? `${effect.effect_name} (${effect.effect_id})` : id}
+                        <button
+                          type="button"
+                          className="admin-effect-picker__chip-remove"
+                          aria-label={`Remove ${id}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setDraft((current) => ({
+                              ...current,
+                              equipmentEffectIds: current.equipmentEffectIds.filter((entry) => entry !== id),
+                            }));
+                          }}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    );
+                  })}
+                  <input
+                    type="text"
+                    className="admin-effect-picker__input"
+                    value={equipmentEffectSearchInput}
+                    onChange={(event) => setEquipmentEffectSearchInput(event.target.value)}
+                    onFocus={() => setEquipmentEffectDropdownOpen(true)}
+                    onBlur={() => setTimeout(() => setEquipmentEffectDropdownOpen(false), 150)}
+                    onKeyDown={(event) => {
+                      if ((event.key === 'Backspace' || event.key === 'Delete') && !equipmentEffectSearchInput && selectedEquipmentEffectIds.length > 0) {
+                        setDraft((current) => ({
+                          ...current,
+                          equipmentEffectIds: current.equipmentEffectIds.slice(0, -1),
+                        }));
+                      }
+                    }}
+                    placeholder={selectedEquipmentEffectIds.length === 0 ? 'Search equipment effects…' : 'Add another effect'}
+                  />
+                  {equipmentEffectDropdownOpen && (
+                    <div className="admin-effect-picker__dropdown" onMouseDown={(event) => event.preventDefault()}>
+                      {filteredEquipmentEffects.length === 0 ? (
+                        <div className="admin-effect-picker__dropdown-empty">
+                          {equipmentEffectSearchInput.trim() ? 'No matching equipment effects' : 'All effects selected'}
+                        </div>
+                      ) : (
+                        filteredEquipmentEffects.map((effect) => (
+                          <button
+                            key={effect.effect_id}
+                            type="button"
+                            className="admin-effect-picker__dropdown-item"
+                            onMouseDown={() => {
+                              setDraft((current) => ({
+                                ...current,
+                                equipmentEffectIds: [...current.equipmentEffectIds, effect.effect_id],
+                              }));
+                              setEquipmentEffectSearchInput('');
+                              setEquipmentEffectDropdownOpen(false);
+                            }}
+                          >
+                            {effect.effect_name} ({effect.effect_id})
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              </label>
+              <p className="admin-note">
+                Equipment is non-consumable and is equipped from the Squad screen. Choose one or more equipment effects and an equip size.
+              </p>
+            </>
+          ) : (
+            <>
+              <label>
+                Effect Config (JSON)
+                <textarea
+                  value={draft.effectConfigJson}
+                  onChange={(event) => setDraft((current) => ({ ...current, effectConfigJson: event.target.value }))}
+                  rows={8}
+                  className="admin-json"
+                />
+              </label>
+              <p className="admin-note">
+                Examples: tool <code>{'{"actionId":"fishing","requiresFacingTileKeyword":["water"]}'}</code>; heal flat{' '}
+                <code>{'{"healAmount":20}'}</code>; heal percent <code>{'{"healPercent":0.35}'}</code>.
+                Success Text supports <code>{'<Critter>'}</code> and <code>X</code> tokens. Value sync rules: <code>heal_flat</code>{' '}
+                updates <code>effectConfig.healAmount</code>, and <code>tool_action</code> updates <code>effectConfig.power</code>.
+              </p>
+            </>
+          )}
         </section>
       </section>
     </section>
@@ -646,6 +815,8 @@ function createEmptyDraft(existingItems: GameItemDefinition[]): ItemDraft {
     successText: '',
     effectType: 'other_stub',
     effectConfigJson: JSON.stringify({ actionId: 'other-action' }, null, 2),
+    equipSizeInput: '1',
+    equipmentEffectIds: [],
     valueInput: '',
     consumable: true,
     maxStack: '99',
@@ -656,6 +827,16 @@ function createEmptyDraft(existingItems: GameItemDefinition[]): ItemDraft {
 
 function itemToDraft(item: GameItemDefinition): ItemDraft {
   const derivedValue = deriveValueFromItem(item);
+  const equipmentConfig = item.effectConfig as { equipSize?: number; equipmentEffectIds?: string[] };
+  const equipSize =
+    typeof equipmentConfig.equipSize === 'number' && Number.isFinite(equipmentConfig.equipSize)
+      ? Math.max(1, Math.min(8, Math.floor(equipmentConfig.equipSize)))
+      : 1;
+  const equipmentEffectIds = Array.isArray(equipmentConfig.equipmentEffectIds)
+    ? equipmentConfig.equipmentEffectIds
+        .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+        .map((entry) => entry.trim())
+    : [];
   return {
     id: item.id,
     name: item.name,
@@ -666,6 +847,8 @@ function itemToDraft(item: GameItemDefinition): ItemDraft {
     successText: item.successText ?? '',
     effectType: item.effectType,
     effectConfigJson: JSON.stringify(item.effectConfig ?? {}, null, 2),
+    equipSizeInput: String(equipSize),
+    equipmentEffectIds,
     valueInput: typeof derivedValue === 'number' && Number.isFinite(derivedValue) ? String(derivedValue) : '',
     consumable: item.consumable,
     maxStack: String(item.maxStack),

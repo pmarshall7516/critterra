@@ -319,6 +319,34 @@ export const germaniaMap = createMap({
       ],
       requiredFacing: 'up',
       requireInteract: false
+    },
+    {
+      id: 'germania_warp_4',
+      from: {
+        x: 17,
+        y: 16
+      },
+      fromPositions: [
+        {
+          x: 17,
+          y: 16
+        }
+      ],
+      toMapId: 'germania-shop',
+      to: {
+        x: 4,
+        y: 7
+      },
+      toPositions: [
+        {
+          x: 4,
+          y: 7
+        }
+      ],
+      requireInteract: false,
+      requiredFacing: 'up',
+      label: 'To Germania Market',
+      toFacing: 'up'
     }
   ],
   encounterGroups: [

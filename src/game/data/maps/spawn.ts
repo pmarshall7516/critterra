@@ -128,5 +128,92 @@ export const spawnMap = createMap({
       requiredFacing: 'up',
       requireInteract: false
     }
+  ],
+  encounterGroups: [
+    {
+      id: 'fishing-group',
+      tilePositions: [
+        {
+          x: 0,
+          y: 7
+        },
+        {
+          x: 1,
+          y: 7
+        },
+        {
+          x: 2,
+          y: 7
+        },
+        {
+          x: 3,
+          y: 7
+        },
+        {
+          x: 4,
+          y: 7
+        },
+        {
+          x: 5,
+          y: 7
+        },
+        {
+          x: 0,
+          y: 8
+        },
+        {
+          x: 2,
+          y: 8
+        },
+        {
+          x: 1,
+          y: 8
+        },
+        {
+          x: 3,
+          y: 8
+        },
+        {
+          x: 4,
+          y: 8
+        },
+        {
+          x: 5,
+          y: 8
+        },
+        {
+          x: 6,
+          y: 8
+        },
+        {
+          x: 7,
+          y: 8
+        },
+        {
+          x: 8,
+          y: 8
+        },
+        {
+          x: 9,
+          y: 8
+        },
+        {
+          x: 10,
+          y: 8
+        },
+        {
+          x: 10,
+          y: 7
+        },
+        {
+          x: 9,
+          y: 7
+        }
+      ],
+      walkEncounterTableId: null,
+      fishEncounterTableId: 'germania-fishing',
+      walkFrequency: 0,
+      fishFrequency: 0.5
+    }
   ]
 });
