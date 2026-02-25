@@ -1,16 +1,29 @@
 import { CSSProperties, ChangeEvent, MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { SAVED_PAINT_TILE_DATABASE } from '@/game/world/customTiles';
 import {
+  normalizeCoreStoryNpcCharacters,
   type NpcCharacterTemplateEntry,
   type NpcSpriteLibraryEntry,
 } from '@/game/world/npcCatalog';
 import { BLANK_TILE_CODE, TILE_DEFINITIONS } from '@/game/world/tiles';
+import { sanitizeCritterDatabase } from '@/game/critters/schema';
 import { getAdminDbValue, setAdminDbValue } from '@/admin/indexedDbStore';
+import { sanitizeEncounterTableLibrary } from '@/game/encounters/schema';
+import type { EncounterTableDefinition, MapEncounterGroupDefinition } from '@/game/encounters/types';
+import { sanitizeItemCatalog } from '@/game/items/schema';
+import type { GameItemDefinition } from '@/game/items/types';
+import { parseShopCatalog } from '@/game/shops/schema';
+import type { ShopDefinition } from '@/game/shops/types';
 import { apiFetchJson } from '@/shared/apiClient';
+import { loadAdminFlags, type AdminFlagEntry } from '@/admin/flagsApi';
+import type { CritterDefinition } from '@/game/critters/types';
 import type {
   InteractionDefinition,
+  NpcInteractionActionDefinition,
+  NpcItemRewardDefinition,
+  NpcMovementGuardDefinition,
   NpcMovementDefinition,
   NpcSpriteConfig,
+  NpcStoryStateDefinition,
   NpcDefinition,
   WarpDefinition,
 } from '@/game/world/types';
@@ -24,6 +37,8 @@ import {
   composeEditableTiles,
   createBlankEditableMap,
   createBlankLayer,
+  decodeTileTransform,
+  encodeTileTransform,
   editableMapToJson,
   editableMapToTypeScript,
   floodFill,
@@ -33,12 +48,16 @@ import {
   getTileCodeAt,
   isKnownTileCode,
   parseEditableMapJson,
+  parseLayerOrderId,
   resizeEditableMap,
+  sortEditableLayersById,
   updateCollisionEdgeMask,
   updateTile,
 } from '@/admin/mapEditorUtils';
 
 type PaintTool =
+  | 'select'
+  | 'encounter-select'
   | 'paint'
   | 'paint-rotated'
   | 'erase'
@@ -48,8 +67,16 @@ type PaintTool =
   | 'npc-paint'
   | 'npc-erase'
   | 'collision-edge'
+  | 'rotate-left'
+  | 'rotate-right'
+  | 'mirror-horizontal'
+  | 'mirror-vertical'
   | 'warp-from'
-  | 'warp-to';
+  | 'warp-to'
+  | 'camera-preview'
+  | 'camera-point';
+type EditorNpcMovementType = 'static' | 'static-turning' | 'wander' | 'path';
+type NpcInteractionMode = 'dialogue' | 'battle' | 'healer' | 'shop';
 type EdgeSide = 'top' | 'right' | 'bottom' | 'left';
 type CollisionPaintMode = 'add' | 'remove';
 
@@ -77,7 +104,12 @@ interface SavedPaintTile {
   primaryCode: EditorTileCode;
   width: number;
   height: number;
+  ySortWithActors: boolean;
   cells: SavedPaintTileCell[];
+  /** When set, this tile's preview and game rendering use this tileset image (e.g. Supabase URL). */
+  tilesetUrl?: string;
+  tilePixelWidth?: number;
+  tilePixelHeight?: number;
 }
 
 interface SavedPaintTileCell {
@@ -85,6 +117,14 @@ interface SavedPaintTileCell {
   atlasIndex: number;
   dx: number;
   dy: number;
+}
+
+interface TileRenderSource {
+  atlasIndex: number;
+  hasOwnTileset: boolean;
+  tilesetUrl: string | null;
+  columns: number;
+  rows: number;
 }
 
 interface SaveMapResponse {
@@ -140,10 +180,54 @@ interface LoadSupabaseSpriteSheetsResponse {
   error?: string;
 }
 
+interface GameMapRow {
+  mapId: string;
+  mapData: unknown;
+}
+
 interface LoadMapsResponse {
   ok: boolean;
-  maps?: unknown[];
+  maps?: GameMapRow[];
   error?: string;
+}
+
+interface LoadEncounterLibraryResponse {
+  ok: boolean;
+  encounterTables?: unknown;
+  error?: string;
+}
+
+interface LoadCritterLibraryResponse {
+  ok: boolean;
+  critters?: unknown;
+  error?: string;
+}
+
+interface LoadItemLibraryResponse {
+  ok: boolean;
+  items?: unknown;
+  error?: string;
+}
+
+interface LoadShopLibraryResponse {
+  ok: boolean;
+  shops?: unknown;
+  error?: string;
+}
+
+interface NpcCharacterInstanceMarker {
+  type: 'character-instance';
+  key: string;
+  characterId: string;
+  characterLabel: string;
+  name: string;
+  order: number;
+  mapId: string;
+  position: Vector2;
+  requiresFlag?: string;
+  color: string;
+  movementType: string;
+  facing?: Direction;
 }
 
 type BaseTileCode = keyof typeof TILE_DEFINITIONS;
@@ -155,7 +239,58 @@ const MIN_CELL_SIZE = 14;
 const MAX_CELL_SIZE = 52;
 const ATLAS_PREVIEW_SIZE = 28;
 const MAX_ATLAS_PREVIEW_CELLS = 4096;
-const DEFAULT_SUPABASE_BUCKET = 'character-spritesheets';
+const DEFAULT_TILESET_SUPABASE_BUCKET = 'tilesets';
+const DEFAULT_NPC_SUPABASE_BUCKET = 'character-spritesheets';
+
+function resolveNpcInteractionMode(input: {
+  firstInteractBattle?: boolean;
+  healer?: boolean;
+  shopId?: string;
+}): NpcInteractionMode {
+  if (typeof input.shopId === 'string' && input.shopId.trim().length > 0) {
+    return 'shop';
+  }
+  if (input.firstInteractBattle) {
+    return 'battle';
+  }
+  if (input.healer) {
+    return 'healer';
+  }
+  return 'dialogue';
+}
+
+function resolveNpcInteractionFlags(mode: NpcInteractionMode, shopIdInput: string): {
+  firstInteractBattle: boolean;
+  healer: boolean;
+  shopId: string | undefined;
+} {
+  if (mode === 'battle') {
+    return {
+      firstInteractBattle: true,
+      healer: false,
+      shopId: undefined,
+    };
+  }
+  if (mode === 'healer') {
+    return {
+      firstInteractBattle: false,
+      healer: true,
+      shopId: undefined,
+    };
+  }
+  if (mode === 'shop') {
+    return {
+      firstInteractBattle: false,
+      healer: false,
+      shopId: shopIdInput.trim() || undefined,
+    };
+  }
+  return {
+    firstInteractBattle: false,
+    healer: false,
+    shopId: undefined,
+  };
+}
 const TILE_CODE_GENERATION_RANGES: Array<[number, number]> = [
   [0xe000, 0xf8ff],
   [0x3400, 0x4dbf],
@@ -187,6 +322,7 @@ const DEFAULT_TILESET_INDEX: Record<BaseTileCode, number> = {
 };
 
 const MAX_EDITOR_DIMENSION = 128;
+const DEFAULT_CAMERA_TILES = { widthTiles: 19, heightTiles: 15 };
 const EMPTY_EDITABLE_MAP: EditableMap = {
   id: '',
   name: '',
@@ -194,9 +330,12 @@ const EMPTY_EDITABLE_MAP: EditableMap = {
   npcs: [],
   warps: [],
   interactions: [],
+  encounterGroups: [],
+  cameraSize: DEFAULT_CAMERA_TILES,
+  cameraPoint: null,
 };
 
-export type MapEditorSection = 'full' | 'map' | 'tiles' | 'npcs';
+export type MapEditorSection = 'full' | 'map' | 'tiles' | 'npcs' | 'npc-sprites' | 'npc-characters';
 
 interface MapEditorToolProps {
   section?: MapEditorSection;
@@ -204,13 +343,25 @@ interface MapEditorToolProps {
 }
 
 export function MapEditorTool({ section = 'full', embedded = false }: MapEditorToolProps) {
-  const [sourceMaps, setSourceMaps] = useState<EditableMap[]>([]);
-  const sourceMapIds = useMemo(() => sourceMaps.map((map) => map.id), [sourceMaps]);
+  const [sourceMapRows, setSourceMapRows] = useState<GameMapRow[]>([]);
+  const sourceMaps = useMemo(() => {
+    return sourceMapRows
+      .map((row) => {
+        try {
+          const parsed = parseEditableMapJson(JSON.stringify(row.mapData));
+          return { ...parsed, id: row.mapId } as EditableMap;
+        } catch {
+          return null;
+        }
+      })
+      .filter((m): m is EditableMap => m !== null);
+  }, [sourceMapRows]);
+  const sourceMapIds = useMemo(() => sourceMapRows.map((row) => row.mapId), [sourceMapRows]);
   const [selectedSourceMapId, setSelectedSourceMapId] = useState('');
   const [loadedSourceMapIdForSave, setLoadedSourceMapIdForSave] = useState<string | null>(null);
   const [editableMap, setEditableMap] = useState<EditableMap>(EMPTY_EDITABLE_MAP);
 
-  const [tool, setTool] = useState<PaintTool>('paint');
+  const [tool, setTool] = useState<PaintTool>('select');
   const [selectedTileCode, setSelectedTileCode] = useState<EditorTileCode>('');
   const [selectedPaintTileId, setSelectedPaintTileId] = useState('');
   const [brushRotationQuarter, setBrushRotationQuarter] = useState(0);
@@ -221,6 +372,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   const [cellSize, setCellSize] = useState(24);
   const [isDrawing, setIsDrawing] = useState(false);
   const [hoveredCell, setHoveredCell] = useState<Vector2 | null>(null);
+  const [selectedCellKeys, setSelectedCellKeys] = useState<string[]>([]);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSavingMapFile, setIsSavingMapFile] = useState(false);
@@ -229,6 +381,12 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   const [tilesetUrl, setTilesetUrl] = useState('');
   const [tilePixelWidthInput, setTilePixelWidthInput] = useState(section === 'tiles' ? '16' : '');
   const [tilePixelHeightInput, setTilePixelHeightInput] = useState(section === 'tiles' ? '16' : '');
+  const [tilesetBucketInput, setTilesetBucketInput] = useState(DEFAULT_TILESET_SUPABASE_BUCKET);
+  const [tilesetPrefixInput, setTilesetPrefixInput] = useState('');
+  const [tilesetSearchInput, setTilesetSearchInput] = useState('');
+  const [tilesetSupabaseAssets, setTilesetSupabaseAssets] = useState<SupabaseSpriteSheetListItem[]>([]);
+  const [isLoadingTilesetSupabaseAssets, setIsLoadingTilesetSupabaseAssets] = useState(false);
+  const [selectedTilesetSupabasePath, setSelectedTilesetSupabasePath] = useState('');
   const [atlasMeta, setAtlasMeta] = useState<TileAtlasMeta>({
     loaded: false,
     width: 0,
@@ -244,23 +402,46 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   const [savedPaintTiles, setSavedPaintTiles] = useState<SavedPaintTile[]>([]);
   const [manualPaintTileName, setManualPaintTileName] = useState('');
   const [npcSpriteLibrary, setNpcSpriteLibrary] = useState<NpcSpriteLibraryEntry[]>([]);
+  const [npcSpriteEditorMode, setNpcSpriteEditorMode] = useState<'create' | 'edit'>('create');
+  const [editingNpcSpriteId, setEditingNpcSpriteId] = useState('');
   const [selectedNpcSpriteId, setSelectedNpcSpriteId] = useState('');
   const [npcSpriteLabelInput, setNpcSpriteLabelInput] = useState('');
   const [npcCharacterLibrary, setNpcCharacterLibrary] = useState<NpcCharacterTemplateEntry[]>([]);
+  const [shopCatalog, setShopCatalog] = useState<ShopDefinition[]>([]);
+  const [flagEntries, setFlagEntries] = useState<AdminFlagEntry[]>([]);
   const [selectedNpcCharacterId, setSelectedNpcCharacterId] = useState('');
+  const [selectedMapNpcId, setSelectedMapNpcId] = useState('');
+  const [selectedCharacterInstanceKey, setSelectedCharacterInstanceKey] = useState('');
+  const [showClearTilesConfirm, setShowClearTilesConfirm] = useState(false);
   const [npcCharacterLabelInput, setNpcCharacterLabelInput] = useState('');
   const [npcCharacterNameInput, setNpcCharacterNameInput] = useState('');
   const [npcCharacterColorInput, setNpcCharacterColorInput] = useState('#9b73b8');
+  const [npcFacingInput, setNpcFacingInput] = useState<Direction>('down');
   const [npcDialogueIdInput, setNpcDialogueIdInput] = useState('');
   const [npcDialogueSpeakerInput, setNpcDialogueSpeakerInput] = useState('');
   const [npcDialogueLinesInput, setNpcDialogueLinesInput] = useState('');
   const [npcDialogueSetFlagInput, setNpcDialogueSetFlagInput] = useState('');
+  const [npcFirstInteractionSetFlagInput, setNpcFirstInteractionSetFlagInput] = useState('');
+  const [npcInteractionModeInput, setNpcInteractionModeInput] = useState<NpcInteractionMode>('dialogue');
+  const [npcFirstInteractBattleInput, setNpcFirstInteractBattleInput] = useState(false);
+  const [npcInteractBattleRepeatableInput, setNpcInteractBattleRepeatableInput] = useState(false);
+  const [npcInteractBattleDefeatedFlagInput, setNpcInteractBattleDefeatedFlagInput] = useState('');
+  const [npcBattleRewardsInput, setNpcBattleRewardsInput] = useState('');
+  const [npcHealerInput, setNpcHealerInput] = useState(false);
+  const [npcShopIdInput, setNpcShopIdInput] = useState('');
+  const [npcInteractionRewardsInput, setNpcInteractionRewardsInput] = useState('');
+  const [npcInteractionRewardSetFlagInput, setNpcInteractionRewardSetFlagInput] = useState('');
   const [npcBattleTeamsInput, setNpcBattleTeamsInput] = useState('');
-  const [npcMovementTypeInput, setNpcMovementTypeInput] = useState<'static' | 'loop' | 'random'>('static');
+  const [npcStoryStatesInput, setNpcStoryStatesInput] = useState('[]');
+  const [npcMovementGuardsInput, setNpcMovementGuardsInput] = useState('[]');
+  const [npcInteractionScriptInput, setNpcInteractionScriptInput] = useState('[]');
+  const [npcMovementTypeInput, setNpcMovementTypeInput] = useState<EditorNpcMovementType>('static');
   const [npcMovementPatternInput, setNpcMovementPatternInput] = useState('');
   const [npcStepIntervalInput, setNpcStepIntervalInput] = useState('850');
+  const [npcMovementPathModeInput, setNpcMovementPathModeInput] = useState<'loop' | 'pingpong'>('loop');
+  const [npcWanderLeashRadiusInput, setNpcWanderLeashRadiusInput] = useState('');
   const [npcSpriteUrl, setNpcSpriteUrl] = useState('');
-  const [npcSpriteBucketInput, setNpcSpriteBucketInput] = useState(DEFAULT_SUPABASE_BUCKET);
+  const [npcSpriteBucketInput, setNpcSpriteBucketInput] = useState(DEFAULT_NPC_SUPABASE_BUCKET);
   const [npcSpritePrefixInput, setNpcSpritePrefixInput] = useState('');
   const [npcSpriteSearchInput, setNpcSpriteSearchInput] = useState('');
   const [npcSupabaseSpriteSheets, setNpcSupabaseSpriteSheets] = useState<SupabaseSpriteSheetListItem[]>([]);
@@ -348,24 +529,44 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   const [npcJsonDraft, setNpcJsonDraft] = useState('');
   const [interactionJsonDraft, setInteractionJsonDraft] = useState('');
   const [importJsonDraft, setImportJsonDraft] = useState('');
+  const [encounterTables, setEncounterTables] = useState<EncounterTableDefinition[]>([]);
+  const [isLoadingEncounterTables, setIsLoadingEncounterTables] = useState(false);
+  const [encounterCritters, setEncounterCritters] = useState<CritterDefinition[]>([]);
+  const [itemCatalog, setItemCatalog] = useState<GameItemDefinition[]>([]);
+  const [selectedEncounterGroupId, setSelectedEncounterGroupId] = useState('');
+  const [encounterGroupIdInput, setEncounterGroupIdInput] = useState('');
+  const [encounterWalkTableIdInput, setEncounterWalkTableIdInput] = useState('');
+  const [encounterFishTableIdInput, setEncounterFishTableIdInput] = useState('');
+  const [encounterWalkFrequencyPercent, setEncounterWalkFrequencyPercent] = useState(0);
+  const [encounterFishFrequencyPercent, setEncounterFishFrequencyPercent] = useState(0);
+  const [encounterManualTileXInput, setEncounterManualTileXInput] = useState('');
+  const [encounterManualTileYInput, setEncounterManualTileYInput] = useState('');
+  const [healTileInteractionIdPrefixInput, setHealTileInteractionIdPrefixInput] = useState('heal-tile');
 
   const uploadedObjectUrlRef = useRef<string | null>(null);
   const hasAutoLoadedLibrariesRef = useRef(false);
+  const tilesetPreviewCacheRef = useRef<Record<string, { width: number; height: number }>>({});
+  const [tilesetPreviewCacheVersion, setTilesetPreviewCacheVersion] = useState(0);
 
   const isMapSection = section === 'map';
   const isTilesSection = section === 'tiles';
   const isNpcsSection = section === 'npcs';
-  const showMapEditing = section === 'full' || isMapSection;
+  const isNpcSpritesSection = section === 'npc-sprites';
+  const isNpcCharactersSection = section === 'npc-characters';
+  const showMapEditing = section === 'full' || isMapSection || isNpcsSection;
   const showTilesLibrary = section === 'full' || isTilesSection;
-  const showNpcStudio = section === 'full' || isNpcsSection;
+  const showNpcStudio = section === 'full' || isNpcsSection || isNpcSpritesSection || isNpcCharactersSection;
+  const showNpcSpriteStudio = section === 'full' || isNpcSpritesSection;
+  const showNpcCharacterStudio = section === 'full' || isNpcsSection || isNpcCharactersSection;
   const showTwoColumnLayout = showMapEditing;
 
   const mapSize = useMemo(() => getMapSize(editableMap), [editableMap]);
+  const orderedLayers = useMemo(() => sortEditableLayersById(editableMap.layers), [editableMap.layers]);
   const hasMapLoaded = mapSize.width > 0 && mapSize.height > 0;
   const composedTiles = useMemo(() => composeEditableTiles(editableMap), [editableMap]);
   const activeLayer = useMemo(
-    () => (activeLayerId ? getLayerById(editableMap, activeLayerId) : editableMap.layers[0] ?? null),
-    [activeLayerId, editableMap],
+    () => (activeLayerId ? getLayerById(editableMap, activeLayerId) : orderedLayers[0] ?? null),
+    [activeLayerId, editableMap, orderedLayers],
   );
   const exportTypeScript = useMemo(
     () => (hasMapLoaded ? editableMapToTypeScript(editableMap) : ''),
@@ -377,6 +578,30 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     () => editableMap.warps.find((warp) => warp.id === selectedWarpId) ?? null,
     [editableMap.warps, selectedWarpId],
   );
+  const selectedEncounterGroup = useMemo(
+    () => editableMap.encounterGroups.find((group) => group.id === selectedEncounterGroupId) ?? null,
+    [editableMap.encounterGroups, selectedEncounterGroupId],
+  );
+  const encounterTablesById = useMemo(() => {
+    const lookup = new Map<string, EncounterTableDefinition>();
+    for (const table of encounterTables) {
+      lookup.set(table.id, table);
+    }
+    return lookup;
+  }, [encounterTables]);
+  const selectedCellSet = useMemo(() => new Set(selectedCellKeys), [selectedCellKeys]);
+  const encounterGroupTileLookup = useMemo(() => {
+    const lookup = new Map<string, string[]>();
+    for (const group of editableMap.encounterGroups) {
+      for (const position of group.tilePositions) {
+        const key = `${position.x},${position.y}`;
+        const next = lookup.get(key) ?? [];
+        next.push(group.id);
+        lookup.set(key, next);
+      }
+    }
+    return lookup;
+  }, [editableMap.encounterGroups]);
   const selectableWarpMapIds = useMemo(() => {
     const ids: string[] = [];
     const pushUnique = (value: string | null | undefined) => {
@@ -401,6 +626,14 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     return ids;
   }, [editableMap.id, editableMap.warps, selectedWarp?.toMapId, sourceMapIds]);
 
+  const sortedSavedPaintTiles = useMemo(() => {
+    return [...savedPaintTiles].sort((a, b) => {
+      const nameA = (a.name || '').toLowerCase();
+      const nameB = (b.name || '').toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+  }, [savedPaintTiles]);
+
   const selectedPaintTile = useMemo(
     () => savedPaintTiles.find((tile) => tile.id === selectedPaintTileId) ?? null,
     [savedPaintTiles, selectedPaintTileId],
@@ -409,10 +642,113 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     () => npcCharacterLibrary.find((template) => template.id === selectedNpcCharacterId) ?? null,
     [npcCharacterLibrary, selectedNpcCharacterId],
   );
-  const selectedNpcSprite = useMemo(
-    () => npcSpriteLibrary.find((sprite) => sprite.id === selectedNpcSpriteId) ?? null,
-    [npcSpriteLibrary, selectedNpcSpriteId],
+  const selectedMapNpc = useMemo(
+    () => editableMap.npcs.find((npc) => npc.id === selectedMapNpcId) ?? null,
+    [editableMap.npcs, selectedMapNpcId],
   );
+  const characterInstanceMarkers = useMemo(() => {
+    const markers: NpcCharacterInstanceMarker[] = [];
+    for (const character of npcCharacterLibrary) {
+      const placements = getCharacterPlacementInstances(character);
+      for (let index = 0; index < placements.length; index += 1) {
+        const placement = placements[index];
+        if (!placement.mapId || !placement.position) {
+          continue;
+        }
+        markers.push({
+          type: 'character-instance',
+          key: `${character.id}:${index}`,
+          characterId: character.id,
+          characterLabel: character.label,
+          name: character.npcName,
+          order: index + 1,
+          mapId: placement.mapId,
+          position: { ...placement.position },
+          requiresFlag: placement.requiresFlag,
+          color: character.color || '#9b73b8',
+          movementType: placement.movement?.type ?? character.movement?.type ?? 'static',
+          facing: placement.facing ?? character.facing,
+        });
+      }
+    }
+    return markers;
+  }, [npcCharacterLibrary]);
+  const characterMarkersOnActiveMap = useMemo(
+    () => characterInstanceMarkers.filter((entry) => entry.mapId === editableMap.id),
+    [characterInstanceMarkers, editableMap.id],
+  );
+  const mapNpcCards = useMemo(() => {
+    const cards = [
+      ...editableMap.npcs.map((npc) => ({
+        type: 'map-npc' as const,
+        id: npc.id,
+        name: npc.name,
+        position: npc.position,
+        movementType: npc.movement?.type ?? 'static',
+        facing: npc.facing,
+      })),
+      ...characterMarkersOnActiveMap.map((marker) => ({
+        type: 'character-instance' as const,
+        id: marker.key,
+        name: marker.name,
+        position: marker.position,
+        movementType: marker.movementType,
+        facing: marker.facing,
+        requiresFlag: marker.requiresFlag,
+        order: marker.order,
+        characterId: marker.characterId,
+      })),
+    ];
+    return cards.sort((left, right) => {
+      if (left.position.y !== right.position.y) {
+        return left.position.y - right.position.y;
+      }
+      if (left.position.x !== right.position.x) {
+        return left.position.x - right.position.x;
+      }
+      return left.id.localeCompare(right.id);
+    });
+  }, [characterMarkersOnActiveMap, editableMap.npcs]);
+  const selectedCharacterInstance = useMemo(() => {
+    if (!selectedCharacterInstanceKey) {
+      return null;
+    }
+    const [characterId, indexText] = selectedCharacterInstanceKey.split(':');
+    const index = Number.parseInt(indexText, 10);
+    if (!characterId || !Number.isFinite(index)) {
+      return null;
+    }
+    const character = npcCharacterLibrary.find((entry) => entry.id === characterId);
+    if (!character) {
+      return null;
+    }
+    const placements = getCharacterPlacementInstances(character);
+    const placement = placements[index];
+    if (!placement) {
+      return null;
+    }
+    return {
+      character,
+      placement,
+      index,
+      key: selectedCharacterInstanceKey,
+    };
+  }, [npcCharacterLibrary, selectedCharacterInstanceKey]);
+  const selectedCharacterForInstanceList = selectedCharacterInstance?.character ?? selectedNpcCharacter;
+  const selectedCharacterInstances = useMemo(
+    () => (selectedCharacterForInstanceList ? getCharacterPlacementInstances(selectedCharacterForInstanceList) : []),
+    [selectedCharacterForInstanceList],
+  );
+  const selectedNpcSpriteForEditor = useMemo(
+    () => npcSpriteLibrary.find((sprite) => sprite.id === editingNpcSpriteId) ?? null,
+    [editingNpcSpriteId, npcSpriteLibrary],
+  );
+  const charactersUsingSelectedNpcSpriteForEditor = useMemo(() => {
+    if (!editingNpcSpriteId) {
+      return [];
+    }
+    return npcCharacterLibrary.filter((entry) => entry.spriteId === editingNpcSpriteId);
+  }, [editingNpcSpriteId, npcCharacterLibrary]);
   const filteredNpcSupabaseSpriteSheets = useMemo(() => {
     const query = npcSpriteSearchInput.trim().toLowerCase();
     const sorted = [...npcSupabaseSpriteSheets].sort((left, right) =>
@@ -425,6 +761,47 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       (entry) => entry.name.toLowerCase().includes(query) || entry.path.toLowerCase().includes(query),
     );
   }, [npcSupabaseSpriteSheets, npcSpriteSearchInput]);
+  const knownFlagIds = useMemo(
+    () =>
+      [...new Set(flagEntries.map((entry) => entry.flagId.trim()).filter((entry) => entry.length > 0))].sort((left, right) =>
+        left.localeCompare(right, undefined, { sensitivity: 'base' }),
+      ),
+    [flagEntries],
+  );
+  const knownFlagIdSet = useMemo(() => new Set(knownFlagIds), [knownFlagIds]);
+  const knownItemIds = useMemo(
+    () =>
+      [...new Set(itemCatalog.map((entry) => entry.id.trim()).filter((entry) => entry.length > 0))].sort((left, right) =>
+        left.localeCompare(right, undefined, { sensitivity: 'base' }),
+      ),
+    [itemCatalog],
+  );
+  const knownShopIds = useMemo(
+    () =>
+      [...new Set(shopCatalog.map((entry) => entry.id.trim()).filter((entry) => entry.length > 0))].sort((left, right) =>
+        left.localeCompare(right, undefined, { sensitivity: 'base' }),
+      ),
+    [shopCatalog],
+  );
+  const shopNameById = useMemo(() => {
+    const lookup = new Map<string, string>();
+    for (const shop of shopCatalog) {
+      lookup.set(shop.id, shop.name);
+    }
+    return lookup;
+  }, [shopCatalog]);
+  const filteredTilesetSupabaseAssets = useMemo(() => {
+    const query = tilesetSearchInput.trim().toLowerCase();
+    const sorted = [...tilesetSupabaseAssets].sort((left, right) =>
+      left.path.localeCompare(right.path, undefined, { sensitivity: 'base' }),
+    );
+    if (!query) {
+      return sorted;
+    }
+    return sorted.filter(
+      (entry) => entry.name.toLowerCase().includes(query) || entry.path.toLowerCase().includes(query),
+    );
+  }, [tilesetSupabaseAssets, tilesetSearchInput]);
 
   const atlasCellCount = useMemo(() => Math.max(0, atlasMeta.columns * atlasMeta.rows), [atlasMeta]);
   const npcAtlasCellCount = useMemo(() => Math.max(0, npcSpriteMeta.columns * npcSpriteMeta.rows), [npcSpriteMeta]);
@@ -460,15 +837,40 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     [selectedAtlasEndIndex, selectedAtlasStartIndex, atlasMeta.columns, atlasMeta.rows],
   );
 
-  const atlasIndexByCode = useMemo(() => {
-    const lookup = new Map<string, number>();
+  const tileRenderSourceByCode = useMemo(() => {
+    const lookup = new Map<EditorTileCode, TileRenderSource>();
     for (const tile of savedPaintTiles) {
+      const rawUrl = tile.tilesetUrl?.trim() ?? '';
+      const tilePixelWidth = tile.tilePixelWidth ?? 0;
+      const tilePixelHeight = tile.tilePixelHeight ?? 0;
+      const hasOwnTileset = rawUrl.length > 0 && tilePixelWidth > 0 && tilePixelHeight > 0;
+      let resolvedTilesetUrl: string | null = null;
+      let columns = 0;
+      let rows = 0;
+
+      if (hasOwnTileset) {
+        const dims = tilesetPreviewCacheRef.current[rawUrl];
+        if (dims && dims.width > 0 && dims.height > 0) {
+          columns = Math.floor(dims.width / tilePixelWidth);
+          rows = Math.floor(dims.height / tilePixelHeight);
+          if (columns > 0 && rows > 0) {
+            resolvedTilesetUrl = rawUrl;
+          }
+        }
+      }
+
       for (const cell of tile.cells) {
-        lookup.set(cell.code, cell.atlasIndex);
+        lookup.set(cell.code, {
+          atlasIndex: cell.atlasIndex,
+          hasOwnTileset,
+          tilesetUrl: resolvedTilesetUrl,
+          columns,
+          rows,
+        });
       }
     }
     return lookup;
-  }, [savedPaintTiles]);
+  }, [savedPaintTiles, tilesetPreviewCacheVersion]);
 
   const warpMarkersByCell = useMemo(() => {
     const markers = new Map<string, string[]>();
@@ -489,6 +891,20 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     }
     return lookup;
   }, [editableMap.npcs]);
+  const npcMarkerByCell = useMemo(() => {
+    const lookup = new Map<
+      string,
+      | { source: 'map'; npc: NpcDefinition }
+      | { source: 'character'; marker: NpcCharacterInstanceMarker }
+    >();
+    for (const npc of editableMap.npcs) {
+      lookup.set(`${npc.position.x},${npc.position.y}`, { source: 'map', npc });
+    }
+    for (const marker of characterMarkersOnActiveMap) {
+      lookup.set(`${marker.position.x},${marker.position.y}`, { source: 'character', marker });
+    }
+    return lookup;
+  }, [characterMarkersOnActiveMap, editableMap.npcs]);
 
   const savedCustomTileCodes = useMemo(() => {
     const codes = new Set<string>();
@@ -533,12 +949,12 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     return lookup;
   }, [activeLayer, hasMapLoaded, mapSize.height, mapSize.width]);
   const visibleLayerCellsByPosition = useMemo(() => {
-    const lookup = new Map<string, Array<{ layerId: string; code: EditorTileCode; rotation: number }>>();
+    const lookup = new Map<string, Array<{ layerId: string; code: EditorTileCode; tileTransform: number }>>();
     if (!hasMapLoaded) {
       return lookup;
     }
 
-    for (const layer of editableMap.layers) {
+    for (const layer of orderedLayers) {
       if (!layer.visible) {
         continue;
       }
@@ -559,7 +975,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           stack.push({
             layerId: layer.id,
             code,
-            rotation: Number.isFinite(parsedRotation) ? parsedRotation % 4 : 0,
+            tileTransform: Number.isFinite(parsedRotation) ? Math.floor(Math.abs(parsedRotation)) % 8 : 0,
           });
           lookup.set(key, stack);
         }
@@ -567,7 +983,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     }
 
     return lookup;
-  }, [editableMap.layers, hasMapLoaded, mapSize.height, mapSize.width]);
+  }, [hasMapLoaded, mapSize.height, mapSize.width, orderedLayers]);
   const hoverStampCells = useMemo(() => {
     if (
       !hasMapLoaded ||
@@ -621,12 +1037,25 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     if (!hasMapLoaded) {
       setResizeWidthInput('');
       setResizeHeightInput('');
+      setSelectedCellKeys([]);
       return;
     }
 
     setResizeWidthInput(String(mapSize.width));
     setResizeHeightInput(String(mapSize.height));
   }, [hasMapLoaded, mapSize.height, mapSize.width]);
+
+  useEffect(() => {
+    setSelectedCellKeys((current) =>
+      current.filter((key) => {
+        const parsed = parseCellKey(key);
+        if (!parsed) {
+          return false;
+        }
+        return parsed.x >= 0 && parsed.y >= 0 && parsed.x < mapSize.width && parsed.y < mapSize.height;
+      }),
+    );
+  }, [mapSize.height, mapSize.width]);
 
   useEffect(() => {
     if (!hasMapLoaded) {
@@ -655,6 +1084,39 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   }, [editableMap.warps, selectedWarpId]);
 
   useEffect(() => {
+    if (!selectedEncounterGroupId) {
+      return;
+    }
+    if (editableMap.encounterGroups.some((group) => group.id === selectedEncounterGroupId)) {
+      return;
+    }
+    setSelectedEncounterGroupId(editableMap.encounterGroups[0]?.id ?? '');
+  }, [editableMap.encounterGroups, selectedEncounterGroupId]);
+
+  useEffect(() => {
+    if (!selectedEncounterGroup) {
+      return;
+    }
+
+    setEncounterGroupIdInput(selectedEncounterGroup.id);
+    setEncounterWalkTableIdInput(selectedEncounterGroup.walkEncounterTableId ?? '');
+    setEncounterFishTableIdInput(selectedEncounterGroup.fishEncounterTableId ?? '');
+    setEncounterWalkFrequencyPercent(Math.round((selectedEncounterGroup.walkFrequency ?? 0) * 100));
+    setEncounterFishFrequencyPercent(Math.round((selectedEncounterGroup.fishFrequency ?? 0) * 100));
+    setSelectedCellKeys(selectedEncounterGroup.tilePositions.map((position) => `${position.x},${position.y}`));
+  }, [selectedEncounterGroup]);
+
+  useEffect(() => {
+    if (selectedEncounterGroupId) {
+      return;
+    }
+    if (encounterGroupIdInput.trim()) {
+      return;
+    }
+    setEncounterGroupIdInput(suggestEncounterGroupId(editableMap.encounterGroups));
+  }, [editableMap.encounterGroups, encounterGroupIdInput, selectedEncounterGroupId]);
+
+  useEffect(() => {
     if (!selectedWarp) {
       setWarpFromXListInput('');
       setWarpFromYListInput('');
@@ -681,8 +1143,8 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       return;
     }
 
-    setActiveLayerId(editableMap.layers[0]?.id ?? '');
-  }, [activeLayerId, editableMap.layers, hasMapLoaded]);
+    setActiveLayerId(orderedLayers[0]?.id ?? '');
+  }, [activeLayerId, editableMap.layers, hasMapLoaded, orderedLayers]);
 
   useEffect(() => {
     if (!selectedPaintTileId) {
@@ -734,6 +1196,51 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   }, [npcSpriteLibrary, selectedNpcSpriteId]);
 
   useEffect(() => {
+    if (!editingNpcSpriteId) {
+      if (npcSpriteEditorMode === 'edit') {
+        setNpcSpriteEditorMode('create');
+      }
+      return;
+    }
+    if (npcSpriteLibrary.some((sprite) => sprite.id === editingNpcSpriteId)) {
+      return;
+    }
+    setEditingNpcSpriteId('');
+    setNpcSpriteEditorMode('create');
+  }, [editingNpcSpriteId, npcSpriteEditorMode, npcSpriteLibrary]);
+
+  useEffect(() => {
+    if (!selectedMapNpcId) {
+      return;
+    }
+    if (editableMap.npcs.some((entry) => entry.id === selectedMapNpcId)) {
+      return;
+    }
+    setSelectedMapNpcId('');
+  }, [editableMap.npcs, selectedMapNpcId]);
+
+  useEffect(() => {
+    if (!selectedCharacterInstanceKey) {
+      return;
+    }
+    const [characterId, indexText] = selectedCharacterInstanceKey.split(':');
+    const index = Number.parseInt(indexText, 10);
+    if (!characterId || !Number.isFinite(index)) {
+      setSelectedCharacterInstanceKey('');
+      return;
+    }
+    const character = npcCharacterLibrary.find((entry) => entry.id === characterId);
+    if (!character) {
+      setSelectedCharacterInstanceKey('');
+      return;
+    }
+    const placements = getCharacterPlacementInstances(character);
+    if (index < 0 || index >= placements.length) {
+      setSelectedCharacterInstanceKey('');
+    }
+  }, [npcCharacterLibrary, selectedCharacterInstanceKey]);
+
+  useEffect(() => {
     if (npcAnimationNames.length === 0) {
       setSelectedNpcAnimationName('');
       return;
@@ -766,14 +1273,16 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     const tilePixelWidth = parseInteger(tilePixelWidthInput);
     const tilePixelHeight = parseInteger(tilePixelHeightInput);
 
-    if (!tilesetUrl) {
+    if (!tilesetUrl || tilesetUrl.startsWith('blob:') || tilesetUrl.startsWith('http://localhost')) {
       setAtlasMeta({
         loaded: false,
         width: 0,
         height: 0,
         columns: 0,
         rows: 0,
-        error: null,
+        error: tilesetUrl && (tilesetUrl.startsWith('blob:') || tilesetUrl.startsWith('http://localhost'))
+          ? 'Use a Supabase tileset URL. Select an image from Supabase Tilesets below.'
+          : null,
       });
       return () => {
         cancelled = true;
@@ -841,6 +1350,37 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       cancelled = true;
     };
   }, [tilePixelHeightInput, tilePixelWidthInput, tilesetUrl]);
+
+  useEffect(() => {
+    const urls = new Set<string>();
+    for (const tile of savedPaintTiles) {
+      if (
+        tile.tilesetUrl &&
+        tile.tilesetUrl.trim() &&
+        !tile.tilesetUrl.startsWith('blob:') &&
+        !tile.tilesetUrl.startsWith('http://localhost')
+      ) {
+        urls.add(tile.tilesetUrl.trim());
+      }
+    }
+    let pending = urls.size;
+    if (pending === 0) return;
+    const cache = tilesetPreviewCacheRef.current;
+    for (const url of urls) {
+      if (cache[url]) continue;
+      const img = new Image();
+      img.onload = () => {
+        cache[url] = { width: img.width, height: img.height };
+        pending -= 1;
+        if (pending <= 0) setTilesetPreviewCacheVersion((v) => v + 1);
+      };
+      img.onerror = () => {
+        pending -= 1;
+        if (pending <= 0) setTilesetPreviewCacheVersion((v) => v + 1);
+      };
+      img.src = url;
+    }
+  }, [savedPaintTiles]);
 
   useEffect(() => {
     let cancelled = false;
@@ -933,6 +1473,13 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     setSavedPaintTiles((current) => {
       let changed = false;
       const next = current.map((tile) => {
+        // CRITICAL: Don't clamp atlasIndex for tiles with their own tileset
+        // These tiles use a different tileset and their atlasIndex values are valid for that tileset
+        if (tile.tilesetUrl && tile.tilePixelWidth && tile.tilePixelHeight) {
+          return tile; // Keep original cells unchanged
+        }
+
+        // Only clamp tiles that use the global editor tileset
         const nextCells = tile.cells.map((cell) => ({
           ...cell,
           atlasIndex: clampInt(cell.atlasIndex, 0, atlasCellCount - 1),
@@ -998,12 +1545,62 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     setStatusMessage(null);
   };
 
+  const toggleTool = (nextTool: PaintTool) => {
+    setTool((current) => {
+      if (isNpcsSection) {
+        if (nextTool === 'npc-paint' || nextTool === 'npc-erase') {
+          return nextTool;
+        }
+        return current;
+      }
+      if (nextTool === 'select' || nextTool === 'encounter-select') {
+        return nextTool;
+      }
+      return current === nextTool ? 'select' : nextTool;
+    });
+  };
+
   const persistSavedPaintTiles = async (nextTiles: SavedPaintTile[]) => {
     try {
-      await setAdminDbValue(SAVED_PAINT_TILES_DB_KEY, nextTiles);
+      const normalizedTiles = nextTiles.map((tile) => {
+        const url = tile.tilesetUrl?.trim();
+        const tilePxW = tile.tilePixelWidth ?? 0;
+        const tilePxH = tile.tilePixelHeight ?? 0;
+        if (!url || tilePxW <= 0 || tilePxH <= 0) {
+          return tile;
+        }
+
+        const dims = tilesetPreviewCacheRef.current[url];
+        if (!dims) {
+          return tile;
+        }
+        const columns = Math.floor(dims.width / tilePxW);
+        const rows = Math.floor(dims.height / tilePxH);
+        if (columns <= 0 || rows <= 0) {
+          return tile;
+        }
+        const maxIndex = columns * rows - 1;
+        const nextCells = tile.cells.map((cell) => ({
+          ...cell,
+          atlasIndex: clampInt(cell.atlasIndex, 0, maxIndex),
+        }));
+        const changed = nextCells.some((cell, index) => cell.atlasIndex !== tile.cells[index].atlasIndex);
+        return changed
+          ? {
+              ...tile,
+              cells: nextCells,
+            }
+          : tile;
+      });
+
+      await setAdminDbValue(SAVED_PAINT_TILES_DB_KEY, normalizedTiles);
       const tilePixelWidth = parseInteger(tilePixelWidthInput);
       const tilePixelHeight = parseInteger(tilePixelHeightInput);
 
+      const useTilesetUrl =
+        tilesetUrl &&
+        !tilesetUrl.startsWith('blob:') &&
+        !tilesetUrl.startsWith('http://localhost');
       const result = await apiFetchJson<SaveTileDatabaseResponse>('/api/admin/tiles/save', {
         method: 'POST',
         headers: {
@@ -1011,9 +1608,9 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
         },
         body: JSON.stringify({
           map: editableMap,
-          savedPaintTiles: nextTiles,
+          savedPaintTiles: normalizedTiles,
           tileset:
-            tilesetUrl && tilePixelWidth && tilePixelHeight
+            useTilesetUrl && tilePixelWidth && tilePixelHeight
               ? {
                   url: tilesetUrl,
                   tilePixelWidth,
@@ -1075,50 +1672,58 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
         throw new Error(result.error ?? result.data?.error ?? 'Unable to load maps.');
       }
 
-      const loadedMaps = Array.isArray(result.data?.maps)
-        ? result.data.maps
-            .map((entry) => {
-              try {
-                return parseEditableMapJson(JSON.stringify(entry));
-              } catch {
-                return null;
-              }
-            })
-            .filter((entry): entry is EditableMap => entry !== null)
-        : [];
-      setSourceMaps(loadedMaps);
+      const raw = result.data?.maps;
+      const rows: GameMapRow[] = [];
+      if (Array.isArray(raw)) {
+        for (const entry of raw) {
+          if (entry == null || typeof entry !== 'object') continue;
+          // New format: { mapId, mapData }; or snake_case from server
+          const mapId =
+            (entry as GameMapRow).mapId ??
+            (entry as { map_id?: string }).map_id ??
+            (entry as { id?: string }).id;
+          const mapData =
+            (entry as GameMapRow).mapData ??
+            (entry as { map_data?: unknown }).map_data ??
+            entry;
+          if (typeof mapId === 'string') {
+            rows.push({ mapId, mapData });
+          }
+        }
+      }
+      setSourceMapRows(rows);
     } catch {
       setError('Unable to load maps from database.');
     }
   };
 
   const loadSavedPaintTilesFromDatabase = async () => {
+    setErrorMessage(null);
+    let loadedFromIndexedDb: SavedPaintTile[] = [];
     try {
-      const raw = await getAdminDbValue<unknown>(SAVED_PAINT_TILES_DB_KEY);
-      const loadedFromIndexedDb = sanitizeSavedPaintTiles(raw);
-      const loadedFromProjectDb = sanitizeSavedPaintTiles(SAVED_PAINT_TILE_DATABASE as unknown);
+      try {
+        const raw = await getAdminDbValue<unknown>(SAVED_PAINT_TILES_DB_KEY);
+        loadedFromIndexedDb = sanitizeSavedPaintTiles(raw);
+      } catch {
+        loadedFromIndexedDb = [];
+      }
       const tilesResponse = await apiFetchJson<LoadTileLibraryResponse>('/api/admin/tiles/list');
       const loadedFromServer = sanitizeSavedPaintTiles(tilesResponse.data?.savedPaintTiles as unknown);
-      const mergedById = new Map<string, SavedPaintTile>();
-      for (const tile of loadedFromProjectDb) {
-        mergedById.set(tile.id, tile);
-      }
-      for (const tile of loadedFromServer) {
-        mergedById.set(tile.id, tile);
-      }
-      for (const tile of loadedFromIndexedDb) {
-        mergedById.set(tile.id, tile);
-      }
-      const loaded = Array.from(mergedById.values());
+      const loaded = loadedFromServer;
       setSavedPaintTiles(loaded);
-      await setAdminDbValue(SAVED_PAINT_TILES_DB_KEY, loaded);
+      try {
+        await setAdminDbValue(SAVED_PAINT_TILES_DB_KEY, loaded);
+      } catch {
+        // Non-fatal: tiles are already in state
+      }
       const first = loaded[0];
       setSelectedPaintTileId(first?.id ?? '');
       setSelectedTileCode(first?.primaryCode ?? '');
       const serverTileset = tilesResponse.data?.tileset;
-      if (serverTileset?.url && typeof serverTileset.url === 'string') {
-        setTilesetUrlInput(serverTileset.url);
-        setTilesetUrl(serverTileset.url);
+      const serverUrl = serverTileset?.url && typeof serverTileset.url === 'string' ? serverTileset.url.trim() : '';
+      if (serverUrl && !serverUrl.startsWith('blob:') && !serverUrl.startsWith('http://localhost')) {
+        setTilesetUrlInput(serverUrl);
+        setTilesetUrl(serverUrl);
       }
       if (typeof serverTileset?.tilePixelWidth === 'number' && serverTileset.tilePixelWidth > 0) {
         setTilePixelWidthInput(String(serverTileset.tilePixelWidth));
@@ -1126,16 +1731,24 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       if (typeof serverTileset?.tilePixelHeight === 'number' && serverTileset.tilePixelHeight > 0) {
         setTilePixelHeightInput(String(serverTileset.tilePixelHeight));
       }
-      if (loaded.length > loadedFromServer.length) {
-        void persistSavedPaintTiles(loaded);
-      }
       setStatus(
         loaded.length > 0
           ? `Loaded ${loaded.length} saved paint tile(s) from tile database.`
           : 'No saved paint tiles found in tile database.',
       );
     } catch {
-      setError('Unable to load saved paint tiles from tile database.');
+      const fallback = loadedFromIndexedDb;
+      setSavedPaintTiles(fallback);
+      if (fallback.length > 0) {
+        const first = fallback[0];
+        setSelectedPaintTileId(first?.id ?? '');
+        setSelectedTileCode(first?.primaryCode ?? '');
+        setStatus(`Loaded ${fallback.length} tile(s) from IndexedDB (server unavailable).`);
+      } else {
+        setSelectedPaintTileId('');
+        setSelectedTileCode('');
+      }
+      setError('Unable to load saved paint tiles from database.');
     }
   };
 
@@ -1150,31 +1763,31 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       const loadedSprites = sanitizeNpcSpriteLibrary(rawSpriteLibrary);
       const loadedCharacters = sanitizeNpcCharacterLibrary(rawCharacterLibrary);
       const mergedSpriteById = new Map<string, NpcSpriteLibraryEntry>();
-      for (const sprite of serverSprites) {
-        mergedSpriteById.set(sprite.id, sprite);
-      }
       for (const sprite of loadedSprites) {
         mergedSpriteById.set(sprite.id, sprite);
       }
-      const mergedCharacterById = new Map<string, NpcCharacterTemplateEntry>();
-      for (const character of serverCharacters) {
-        mergedCharacterById.set(character.id, character);
+      for (const sprite of serverSprites) {
+        mergedSpriteById.set(sprite.id, sprite);
       }
+      const mergedCharacterById = new Map<string, NpcCharacterTemplateEntry>();
       for (const character of loadedCharacters) {
         mergedCharacterById.set(character.id, character);
       }
+      for (const character of serverCharacters) {
+        mergedCharacterById.set(character.id, character);
+      }
       const mergedSprites = Array.from(mergedSpriteById.values());
-      const mergedCharacters = Array.from(mergedCharacterById.values());
+      const mergedCharacters = normalizeCoreStoryNpcCharacters(Array.from(mergedCharacterById.values()));
 
       setNpcSpriteLibrary(mergedSprites);
       setNpcCharacterLibrary(mergedCharacters);
+      setNpcSpriteEditorMode('create');
+      setEditingNpcSpriteId('');
       setSelectedNpcSpriteId(mergedSprites[0]?.id ?? '');
       setSelectedNpcCharacterId(mergedCharacters[0]?.id ?? '');
       await setAdminDbValue(NPC_SPRITE_LIBRARY_DB_KEY, mergedSprites);
       await setAdminDbValue(NPC_CHARACTER_LIBRARY_DB_KEY, mergedCharacters);
-      if (mergedSprites.length > serverSprites.length || mergedCharacters.length > serverCharacters.length) {
-        void persistNpcLibraries(mergedSprites, mergedCharacters);
-      }
+      void persistNpcLibraries(mergedSprites, mergedCharacters);
       setStatus(
         mergedCharacters.length > 0 || mergedSprites.length > 0
           ? `Loaded ${mergedSprites.length} NPC sprite(s) and ${mergedCharacters.length} NPC character(s).`
@@ -1185,22 +1798,101 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     }
   };
 
+  const loadFlagsFromDatabase = async () => {
+    try {
+      const loaded = await loadAdminFlags();
+      setFlagEntries(loaded);
+    } catch {
+      setFlagEntries([]);
+    }
+  };
+
+  const loadEncounterDataFromDatabase = async () => {
+    setIsLoadingEncounterTables(true);
+    try {
+      const [encounterResult, critterResult] = await Promise.all([
+        apiFetchJson<LoadEncounterLibraryResponse>('/api/admin/encounters/list'),
+        apiFetchJson<LoadCritterLibraryResponse>('/api/admin/critters/list'),
+      ]);
+      if (!encounterResult.ok) {
+        throw new Error(encounterResult.error ?? encounterResult.data?.error ?? 'Unable to load encounter tables.');
+      }
+      if (!critterResult.ok) {
+        throw new Error(critterResult.error ?? critterResult.data?.error ?? 'Unable to load critter list.');
+      }
+
+      const loadedTables = sanitizeEncounterTableLibrary(encounterResult.data?.encounterTables);
+      const loadedCritters = sanitizeCritterDatabase(critterResult.data?.critters);
+      setEncounterTables(loadedTables);
+      setEncounterCritters(loadedCritters);
+      setStatus(`Loaded ${loadedTables.length} encounter table(s).`);
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : 'Unable to load encounter tables.';
+      setError(message);
+    } finally {
+      setIsLoadingEncounterTables(false);
+    }
+  };
+
+  const loadItemCatalogFromDatabase = async () => {
+    try {
+      const result = await apiFetchJson<LoadItemLibraryResponse>('/api/admin/items/list');
+      if (!result.ok || !result.data?.ok) {
+        throw new Error(result.error ?? result.data?.error ?? 'Unable to load item catalog.');
+      }
+      setItemCatalog(sanitizeItemCatalog(result.data.items));
+    } catch {
+      setItemCatalog([]);
+    }
+  };
+
+  const loadShopCatalogFromDatabase = async () => {
+    try {
+      const result = await apiFetchJson<LoadShopLibraryResponse>('/api/admin/shops/list');
+      if (!result.ok || !result.data?.ok) {
+        throw new Error(result.error ?? result.data?.error ?? 'Unable to load shop catalog.');
+      }
+      setShopCatalog(parseShopCatalog(result.data.shops));
+    } catch {
+      setShopCatalog([]);
+    }
+  };
+
   useEffect(() => {
     if (section === 'full' || hasAutoLoadedLibrariesRef.current) {
       return;
     }
 
-    if (isMapSection) {
+    if (isMapSection || isNpcsSection || isNpcCharactersSection) {
       void loadSourceMapsFromDatabase();
     }
-    if (isMapSection || isTilesSection) {
+    if (isMapSection || isTilesSection || isNpcsSection) {
       void loadSavedPaintTilesFromDatabase();
     }
-    if (isMapSection || isNpcsSection) {
+    if (isMapSection || isNpcsSection || isNpcSpritesSection || isNpcCharactersSection) {
       void loadNpcTemplatesFromDatabase();
     }
+    if (isMapSection || isNpcsSection || isNpcCharactersSection) {
+      void loadFlagsFromDatabase();
+    }
+    if (isNpcsSection || isNpcCharactersSection) {
+      void loadItemCatalogFromDatabase();
+      void loadShopCatalogFromDatabase();
+    }
+    if (isMapSection) {
+      void loadEncounterDataFromDatabase();
+    }
     hasAutoLoadedLibrariesRef.current = true;
-  }, [isMapSection, isNpcsSection, isTilesSection, section]);
+  }, [isMapSection, isNpcsSection, isNpcSpritesSection, isNpcCharactersSection, isTilesSection, section]);
+
+  useEffect(() => {
+    if (!isNpcsSection) {
+      return;
+    }
+    if (tool !== 'npc-paint' && tool !== 'npc-erase') {
+      setTool('npc-paint');
+    }
+  }, [isNpcsSection, tool]);
 
   const applyPaintTileStamp = (
     map: EditableMap,
@@ -1233,13 +1925,15 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
 
       const row = layer.tiles[y];
       const rotationRow = layer.rotations[y] ?? '0'.repeat(row.length);
-      const rotationChar = String(cell.rotationQuarter);
-      if (row[x] === cell.code && (rotationRow[x] ?? '0') === rotationChar) {
+      const transformChar = String(
+        cell.code === BLANK_TILE_CODE ? 0 : encodeTileTransform(cell.rotationQuarter, cell.mirrorHorizontal),
+      );
+      if (row[x] === cell.code && (rotationRow[x] ?? '0') === transformChar) {
         continue;
       }
 
       layer.tiles[y] = `${row.slice(0, x)}${cell.code}${row.slice(x + 1)}`;
-      layer.rotations[y] = `${rotationRow.slice(0, x)}${rotationChar}${rotationRow.slice(x + 1)}`;
+      layer.rotations[y] = `${rotationRow.slice(0, x)}${transformChar}${rotationRow.slice(x + 1)}`;
       changed = true;
     }
 
@@ -1295,10 +1989,10 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       const rotationRow = layer.rotations[current.y] ?? '0'.repeat(row.length);
       const delta = Math.abs(current.x - startX) + Math.abs(current.y - startY);
       const rotationQuarter = normalizeQuarter(baseRotationQuarter + (delta % 4));
-      const rotationChar = String(code === BLANK_TILE_CODE ? 0 : rotationQuarter);
-      if (row[current.x] !== code || (rotationRow[current.x] ?? '0') !== rotationChar) {
+      const transformChar = String(code === BLANK_TILE_CODE ? 0 : encodeTileTransform(rotationQuarter, false));
+      if (row[current.x] !== code || (rotationRow[current.x] ?? '0') !== transformChar) {
         layer.tiles[current.y] = `${row.slice(0, current.x)}${code}${row.slice(current.x + 1)}`;
-        layer.rotations[current.y] = `${rotationRow.slice(0, current.x)}${rotationChar}${rotationRow.slice(current.x + 1)}`;
+        layer.rotations[current.y] = `${rotationRow.slice(0, current.x)}${transformChar}${rotationRow.slice(current.x + 1)}`;
         changed = true;
       }
 
@@ -1311,8 +2005,106 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     return changed ? next : map;
   };
 
-  const applyPaintTool = (x: number, y: number, source: 'drag' | 'click') => {
+  const applyPaintTool = (
+    x: number,
+    y: number,
+    source: 'drag' | 'click',
+    options?: { appendSelection?: boolean; removeSelection?: boolean },
+  ) => {
     if (!hasMapLoaded) {
+      return;
+    }
+
+    if (tool === 'camera-point') {
+      setEditableMap((current) => ({ ...cloneEditableMap(current), cameraPoint: { x, y } }));
+      setStatus(`Camera point set to (${x}, ${y}).`);
+      return;
+    }
+    if (tool === 'camera-preview') {
+      return;
+    }
+
+    if (tool === 'encounter-select') {
+      const cellCode = getTileCodeAt(editableMap, x, y);
+      if (!cellCode || cellCode === BLANK_TILE_CODE) {
+        if (source === 'click') {
+          setError('Encounter selection only targets non-empty map cells.');
+        }
+        return;
+      }
+      const key = `${x},${y}`;
+      setSelectedCellKeys((current) => {
+        if (options?.removeSelection) {
+          return current.filter((entry) => entry !== key);
+        }
+        if (source === 'drag' || options?.appendSelection) {
+          if (current.includes(key)) {
+            return current;
+          }
+          return [...current, key];
+        }
+        return [key];
+      });
+      return;
+    }
+
+    if (tool === 'select') {
+      return;
+    }
+
+    if (
+      tool === 'rotate-left' ||
+      tool === 'rotate-right' ||
+      tool === 'mirror-horizontal' ||
+      tool === 'mirror-vertical'
+    ) {
+      setEditableMap((current) => {
+        const next = cloneEditableMap(current);
+        const activeCandidate = activeLayer ? getLayerById(next, activeLayer.id) : null;
+        const activeHasTile =
+          Boolean(activeCandidate?.tiles[y]) &&
+          Boolean(activeCandidate?.tiles[y]?.[x]) &&
+          activeCandidate?.tiles[y]?.[x] !== BLANK_TILE_CODE;
+        const targetLayer =
+          (activeHasTile ? activeCandidate : null) ??
+          [...next.layers]
+            .reverse()
+            .find((layer) => layer.visible && layer.tiles[y] && layer.tiles[y][x] && layer.tiles[y][x] !== BLANK_TILE_CODE) ??
+          null;
+        if (!targetLayer) {
+          if (source === 'click') {
+            setError('Rotate/Mirror tools require clicking a cell with a tile.');
+          }
+          return current;
+        }
+
+        const row = targetLayer.tiles[y];
+        const existingCode = row?.[x] ?? BLANK_TILE_CODE;
+        if (!row || existingCode === BLANK_TILE_CODE) {
+          if (source === 'click') {
+            setError('Rotate/Mirror tools require clicking a cell with a tile.');
+          }
+          return current;
+        }
+        const rotationRow = targetLayer.rotations[y] ?? '0'.repeat(row.length);
+        const currentTransformValue = Number.parseInt(rotationRow[x] ?? '0', 10);
+        const currentTransform = Number.isFinite(currentTransformValue) ? Math.floor(Math.abs(currentTransformValue)) % 8 : 0;
+        let nextTransform = currentTransform;
+        if (tool === 'rotate-left') {
+          nextTransform = rotateTileTransformValue(currentTransform, -1);
+        } else if (tool === 'rotate-right') {
+          nextTransform = rotateTileTransformValue(currentTransform, 1);
+        } else if (tool === 'mirror-horizontal') {
+          nextTransform = mirrorTileTransformHorizontally(currentTransform);
+        } else if (tool === 'mirror-vertical') {
+          nextTransform = mirrorTileTransformVertically(currentTransform);
+        }
+        if (nextTransform === currentTransform) {
+          return current;
+        }
+        targetLayer.rotations[y] = `${rotationRow.slice(0, x)}${nextTransform}${rotationRow.slice(x + 1)}`;
+        return next;
+      });
       return;
     }
 
@@ -1322,6 +2114,10 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       }
       if (!selectedNpcCharacter) {
         setError('Select an NPC character before painting NPCs.');
+        return;
+      }
+      if (isNpcsSection) {
+        appendCharacterPlacementInstance(x, y);
         return;
       }
       const resolvedSprite =
@@ -1341,6 +2137,18 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     if (tool === 'npc-erase') {
       if (source === 'drag') {
         return;
+      }
+      if (isNpcsSection) {
+        const marker = npcMarkerByCell.get(`${x},${y}`);
+        if (marker?.source === 'character') {
+          const [characterId, placementIndexText] = marker.marker.key.split(':');
+          const placementIndex = Number.parseInt(placementIndexText, 10);
+          if (characterId && Number.isFinite(placementIndex)) {
+            removeCharacterPlacementInstance(characterId, placementIndex);
+            setStatus(`Removed ${marker.marker.name} instance #${placementIndex + 1}.`);
+            return;
+          }
+        }
       }
       setEditableMap((current) => removeNpcAtPosition(current, x, y));
       return;
@@ -1376,7 +2184,9 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
             fillWithRotatedPattern(current, activeLayer.id, x, y, selectedTileCode, brushRotationQuarter),
           );
         } else {
-          setEditableMap((current) => floodFill(current, activeLayer.id, x, y, selectedTileCode, brushRotationQuarter));
+          setEditableMap((current) =>
+            floodFill(current, activeLayer.id, x, y, selectedTileCode, brushRotationQuarter, brushMirrorHorizontal),
+          );
         }
       }
       return;
@@ -1484,25 +2294,32 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
 
     setSelectedPaintTileId(tileId);
     setSelectedTileCode(entry.primaryCode);
-    setTool('paint');
   };
 
   const loadSelectedSourceMap = () => {
     if (!selectedSourceMapId) {
-      setError('Select a map id to load.');
+      setError('Select a map to load.');
       return;
     }
 
-    const source = sourceMaps.find((map) => map.id === selectedSourceMapId);
-    if (!source) {
-      setError(`Map ${selectedSourceMapId} not found in current registry.`);
+    const row = sourceMapRows.find((r) => r.mapId === selectedSourceMapId);
+    if (!row) {
+      setError(`Map ${selectedSourceMapId} not found in database.`);
       return;
     }
 
-    setEditableMap(cloneEditableMap(source));
-    setActiveLayerId(source.layers[0]?.id ?? '');
-    setLoadedSourceMapIdForSave(source.id);
-    setStatus(`Loaded map ${source.id}`);
+    try {
+      const source = parseEditableMapJson(JSON.stringify(row.mapData));
+      const mapWithId = { ...source, id: row.mapId } as EditableMap;
+      setEditableMap(cloneEditableMap(mapWithId));
+      setActiveLayerId(sortEditableLayersById(mapWithId.layers)[0]?.id ?? '');
+      setLoadedSourceMapIdForSave(row.mapId);
+      setSelectedCellKeys([]);
+      setSelectedEncounterGroupId(mapWithId.encounterGroups[0]?.id ?? '');
+      setStatus(`Loaded map ${row.mapId}`);
+    } catch {
+      setError(`Map ${selectedSourceMapId} could not be parsed.`);
+    }
   };
 
   const createNewMap = () => {
@@ -1526,8 +2343,10 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     );
 
     setEditableMap(next);
-    setActiveLayerId(next.layers[0]?.id ?? '');
+    setActiveLayerId(sortEditableLayersById(next.layers)[0]?.id ?? '');
     setSelectedWarpId('');
+    setSelectedCellKeys([]);
+    setSelectedEncounterGroupId('');
     setLoadedSourceMapIdForSave(null);
     setResizeFill(newMapFill);
     setStatus(`Created blank map ${next.id}`);
@@ -1564,16 +2383,8 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       return;
     }
 
-    const existingIds = new Set(editableMap.layers.map((layer) => layer.id));
-    const baseName = sanitizeIdentifier(newLayerName, 'layer');
-    let suffix = 1;
-    let nextId = baseName;
-    while (existingIds.has(nextId)) {
-      suffix += 1;
-      nextId = `${baseName}-${suffix}`;
-    }
-
-    const layerName = newLayerName.trim() || `Layer ${editableMap.layers.length + 1}`;
+    const nextId = nextLayerId(editableMap.layers);
+    const layerName = newLayerName.trim() || `Layer ${nextId}`;
     const nextLayer = createBlankLayer(mapSize.width, mapSize.height, {
       id: nextId,
       name: layerName,
@@ -1584,7 +2395,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
 
     setEditableMap((current) => {
       const next = cloneEditableMap(current);
-      next.layers = [...next.layers, nextLayer];
+      next.layers = sortEditableLayersById([...next.layers, nextLayer]);
       return next;
     });
     setActiveLayerId(nextId);
@@ -1605,7 +2416,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     const targetLayerId = activeLayer.id;
     setEditableMap((current) => {
       const next = cloneEditableMap(current);
-      next.layers = next.layers.filter((layer) => layer.id !== targetLayerId);
+      next.layers = sortEditableLayersById(next.layers.filter((layer) => layer.id !== targetLayerId));
       return next;
     });
     setStatus(`Removed layer ${targetLayerId}.`);
@@ -1625,6 +2436,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       }
 
       next.layers[index] = updater(next.layers[index]);
+      next.layers = sortEditableLayersById(next.layers);
       return next;
     });
   };
@@ -1655,7 +2467,6 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     });
 
     setSelectedWarpId(createdWarpId);
-    setTool('warp-from');
     setStatus(`Added warp ${createdWarpId}`);
   };
 
@@ -1687,6 +2498,242 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       next.warps[index] = updater(next.warps[index]);
       return next;
     });
+  };
+
+  const addEncounterSelectionCell = (x: number, y: number, append: boolean) => {
+    if (!hasMapLoaded) {
+      return;
+    }
+    const code = getTileCodeAt(editableMap, x, y);
+    if (!code || code === BLANK_TILE_CODE) {
+      setError('Encounter tiles must reference non-empty map cells.');
+      return;
+    }
+    const key = `${x},${y}`;
+    setSelectedCellKeys((current) => {
+      if (append) {
+        if (current.includes(key)) {
+          return current;
+        }
+        return [...current, key];
+      }
+      return [key];
+    });
+  };
+
+  const removeEncounterSelectionCell = (x: number, y: number) => {
+    const key = `${x},${y}`;
+    setSelectedCellKeys((current) => current.filter((entry) => entry !== key));
+  };
+
+  const addManualEncounterTileIndex = () => {
+    const x = parseInteger(encounterManualTileXInput);
+    const y = parseInteger(encounterManualTileYInput);
+    if (x === null || y === null) {
+      setError('Enter valid numeric X/Y tile indexes to add.');
+      return;
+    }
+    addEncounterSelectionCell(x, y, true);
+    setEncounterManualTileXInput('');
+    setEncounterManualTileYInput('');
+  };
+
+  const clearEncounterSelection = () => {
+    setSelectedCellKeys([]);
+  };
+
+  const getSelectedNonEmptyMapCells = (): Vector2[] => {
+    const selected: Vector2[] = [];
+    const seen = new Set<string>();
+    for (const key of selectedCellKeys) {
+      const parsed = parseCellKey(key);
+      if (!parsed) {
+        continue;
+      }
+      const dedupeKey = `${parsed.x},${parsed.y}`;
+      if (seen.has(dedupeKey)) {
+        continue;
+      }
+      const code = getTileCodeAt(editableMap, parsed.x, parsed.y);
+      if (!code || code === BLANK_TILE_CODE) {
+        continue;
+      }
+      seen.add(dedupeKey);
+      selected.push(parsed);
+    }
+    return selected;
+  };
+
+  const startEncounterGroupDraft = () => {
+    setSelectedEncounterGroupId('');
+    setEncounterGroupIdInput(suggestEncounterGroupId(editableMap.encounterGroups));
+    setEncounterWalkTableIdInput('');
+    setEncounterFishTableIdInput('');
+    setEncounterWalkFrequencyPercent(0);
+    setEncounterFishFrequencyPercent(0);
+    setSelectedCellKeys([]);
+    setTool('encounter-select');
+  };
+
+  const removeSelectedEncounterGroup = () => {
+    if (!selectedEncounterGroup) {
+      setError('Select an encounter group to remove.');
+      return;
+    }
+    const removedId = selectedEncounterGroup.id;
+    setEditableMap((current) => {
+      const next = cloneEditableMap(current);
+      next.encounterGroups = next.encounterGroups.filter((group) => group.id !== removedId);
+      return next;
+    });
+    setSelectedEncounterGroupId('');
+    setSelectedCellKeys([]);
+    setStatus(`Removed encounter group "${removedId}".`);
+  };
+
+  const applyEncounterGroupToMap = () => {
+    const groupId = sanitizeIdentifier(encounterGroupIdInput, '');
+    if (!groupId) {
+      setError('Encounter group ID is required.');
+      return;
+    }
+
+    const walkEncounterTableId = encounterWalkTableIdInput.trim() ? sanitizeIdentifier(encounterWalkTableIdInput, '') : '';
+    const fishEncounterTableId = encounterFishTableIdInput.trim() ? sanitizeIdentifier(encounterFishTableIdInput, '') : '';
+    if (walkEncounterTableId && !encounterTablesById.has(walkEncounterTableId)) {
+      setError(`Walk encounter table "${walkEncounterTableId}" does not exist.`);
+      return;
+    }
+    if (fishEncounterTableId && !encounterTablesById.has(fishEncounterTableId)) {
+      setError(`Fish encounter table "${fishEncounterTableId}" does not exist.`);
+      return;
+    }
+
+    const tilePositions = getSelectedNonEmptyMapCells();
+    if (tilePositions.length === 0) {
+      setError('Select one or more non-empty map cells before setting encounter group.');
+      return;
+    }
+
+    const nextGroup: MapEncounterGroupDefinition = {
+      id: groupId,
+      tilePositions,
+      walkEncounterTableId: walkEncounterTableId || null,
+      fishEncounterTableId: fishEncounterTableId || null,
+      walkFrequency: clampEncounterFrequency(encounterWalkFrequencyPercent / 100),
+      fishFrequency: clampEncounterFrequency(encounterFishFrequencyPercent / 100),
+    };
+
+    setEditableMap((current) => {
+      const next = cloneEditableMap(current);
+      const existingIndex = next.encounterGroups.findIndex((group) => group.id === groupId);
+      if (existingIndex >= 0) {
+        next.encounterGroups[existingIndex] = nextGroup;
+      } else {
+        next.encounterGroups.push(nextGroup);
+      }
+      next.encounterGroups.sort((left, right) => left.id.localeCompare(right.id));
+      return next;
+    });
+    setSelectedEncounterGroupId(groupId);
+    setStatus(`Set encounter group "${groupId}" on ${tilePositions.length} tile(s).`);
+  };
+
+  const applyHealTilesToSelection = () => {
+    if (!hasMapLoaded) {
+      setError('Load or create a map before setting heal tiles.');
+      return;
+    }
+
+    const targetTiles = getSelectedNonEmptyMapCells();
+    if (targetTiles.length === 0) {
+      setError('Select one or more non-empty map cells before setting heal tiles.');
+      return;
+    }
+
+    const conflictingInteraction = targetTiles
+      .map((position) =>
+        editableMap.interactions.find(
+          (interaction) => interaction.position.x === position.x && interaction.position.y === position.y,
+        ),
+      )
+      .find((interaction) => interaction && !isHealTileInteractionKind(interaction.kind));
+    if (conflictingInteraction) {
+      setError(
+        `Tile (${conflictingInteraction.position.x}, ${conflictingInteraction.position.y}) already has non-heal interaction "${conflictingInteraction.id}".`,
+      );
+      return;
+    }
+
+    const idPrefix = sanitizeIdentifier(healTileInteractionIdPrefixInput, 'heal-tile');
+    setEditableMap((current) => {
+      const next = cloneEditableMap(current);
+      for (const position of targetTiles) {
+        const existingIndex = next.interactions.findIndex(
+          (interaction) => interaction.position.x === position.x && interaction.position.y === position.y,
+        );
+        const existing = existingIndex >= 0 ? next.interactions[existingIndex] : null;
+        const nextInteraction: InteractionDefinition = {
+          id:
+            existing?.id ??
+            makeUniqueInteractionId(next.interactions, `${idPrefix}-${position.x}-${position.y}`),
+          position: { ...position },
+          speaker: existing?.speaker ?? 'Healer',
+          lines: [
+            existing?.lines.find((entry) => typeof entry === 'string' && entry.trim().length > 0)?.trim() ??
+              'Would you like to heal your Critters?',
+          ],
+          kind: 'heal_tile',
+          requiresFlag: existing?.requiresFlag,
+          hideIfFlag: existing?.hideIfFlag,
+          setFlag: existing?.setFlag,
+        };
+        if (existingIndex >= 0) {
+          next.interactions[existingIndex] = nextInteraction;
+        } else {
+          next.interactions.push(nextInteraction);
+        }
+      }
+      return next;
+    });
+    setStatus(`Set heal tile interaction on ${targetTiles.length} tile(s).`);
+  };
+
+  const removeHealTilesFromSelection = () => {
+    if (!hasMapLoaded) {
+      setError('Load or create a map before removing heal tiles.');
+      return;
+    }
+
+    const selectedTiles = getSelectedNonEmptyMapCells();
+    if (selectedTiles.length === 0) {
+      setError('Select one or more non-empty map cells before removing heal tiles.');
+      return;
+    }
+    const selectedKeys = new Set(selectedTiles.map((position) => `${position.x},${position.y}`));
+
+    const existingCount = editableMap.interactions.filter(
+      (interaction) =>
+        isHealTileInteractionKind(interaction.kind) &&
+        selectedKeys.has(`${interaction.position.x},${interaction.position.y}`),
+    ).length;
+    if (existingCount === 0) {
+      setError('No heal tile interactions were found on the selected cells.');
+      return;
+    }
+
+    setEditableMap((current) => {
+      const next = cloneEditableMap(current);
+      next.interactions = next.interactions.filter(
+        (interaction) =>
+          !(
+            isHealTileInteractionKind(interaction.kind) &&
+            selectedKeys.has(`${interaction.position.x},${interaction.position.y}`)
+          ),
+      );
+      return next;
+    });
+    setStatus(`Removed ${existingCount} heal tile interaction(s).`);
   };
 
   const applyNpcJson = () => {
@@ -1739,8 +2786,10 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     try {
       const parsed = parseEditableMapJson(importJsonDraft);
       setEditableMap(parsed);
-      setActiveLayerId(parsed.layers[0]?.id ?? '');
+      setActiveLayerId(sortEditableLayersById(parsed.layers)[0]?.id ?? '');
       setSelectedSourceMapId(parsed.id);
+      setSelectedCellKeys([]);
+      setSelectedEncounterGroupId(parsed.encounterGroups[0]?.id ?? '');
       setLoadedSourceMapIdForSave(null);
       setStatus(`Imported map ${parsed.id}`);
     } catch (error) {
@@ -1773,6 +2822,14 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     try {
       const tilePixelWidth = parseInteger(tilePixelWidthInput);
       const tilePixelHeight = parseInteger(tilePixelHeightInput);
+      const tilesetPayload =
+        tilesetUrl && tilePixelWidth && tilePixelHeight
+          ? {
+              url: tilesetUrl,
+              tilePixelWidth,
+              tilePixelHeight,
+            }
+          : undefined;
 
       const result = await apiFetchJson<SaveMapResponse>('/api/admin/maps/save', {
         method: 'POST',
@@ -1783,14 +2840,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           existingMapId: loadedSourceMapIdForSave,
           map: editableMap,
           savedPaintTiles,
-          tileset:
-            tilesetUrl && tilePixelWidth && tilePixelHeight
-              ? {
-                  url: tilesetUrl,
-                  tilePixelWidth,
-                  tilePixelHeight,
-                }
-              : null,
+          ...(tilesetPayload ? { tileset: tilesetPayload } : {}),
         }),
       });
 
@@ -1844,8 +2894,13 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   };
 
   const applyTilesetUrl = () => {
-    if (!tilesetUrlInput.trim()) {
+    const url = tilesetUrlInput.trim();
+    if (!url) {
       setError('Tileset URL cannot be empty.');
+      return;
+    }
+    if (url.startsWith('blob:') || url.startsWith('http://localhost')) {
+      setError('Use a persistent URL (e.g. Supabase bucket). Select an image from Supabase Tilesets below.');
       return;
     }
     if (!parseInteger(tilePixelWidthInput) || !parseInteger(tilePixelHeightInput)) {
@@ -1853,33 +2908,12 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       return;
     }
 
-    setTilesetUrl(tilesetUrlInput.trim());
+    setTilesetUrl(url);
     setStatus('Tileset URL applied.');
   };
 
   const loadExampleTileset = () => {
-    setError('No bundled example tileset is available. Upload a tileset file instead.');
-  };
-
-  const onTilesetFileSelected = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) {
-      return;
-    }
-    void (async () => {
-      try {
-        const dataUrl = await fileToDataUrl(file);
-        if (uploadedObjectUrlRef.current) {
-          URL.revokeObjectURL(uploadedObjectUrlRef.current);
-          uploadedObjectUrlRef.current = null;
-        }
-        setTilesetUrlInput(dataUrl);
-        setTilesetUrl(dataUrl);
-        setStatus(`Loaded and applied tileset file ${file.name} (persisted URL).`);
-      } catch {
-        setError(`Unable to load tileset file ${file.name}.`);
-      }
-    })();
+    setError('Use Supabase Tilesets below to select a tileset image from your bucket.');
   };
 
   const autoGeneratePaintTiles = () => {
@@ -1889,14 +2923,19 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     }
 
     const maxIndex = Math.max(0, atlasCellCount - 1);
-    const generated = createAutoPaintTiles(maxIndex);
+    const base = createAutoPaintTiles(maxIndex);
+    const tilePxW = parseInteger(tilePixelWidthInput);
+    const tilePxH = parseInteger(tilePixelHeightInput);
+    const generated =
+      tilesetUrl && tilePxW && tilePxH
+        ? base.map((t) => ({ ...t, tilesetUrl, tilePixelWidth: tilePxW, tilePixelHeight: tilePxH }))
+        : base;
     setSavedPaintTiles(generated);
     void persistSavedPaintTiles(generated);
 
     const first = generated[0];
     setSelectedPaintTileId(first?.id ?? '');
     setSelectedTileCode(first?.primaryCode ?? '');
-    setTool('paint');
     setStatus('Auto-generated paint tile selections.');
   };
 
@@ -1954,13 +2993,17 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
 
     const safeName =
       manualPaintTileName.trim() || `Custom Tile ${selectedAtlasRect.width}x${selectedAtlasRect.height}`;
+    const tilePxW = parseInteger(tilePixelWidthInput);
+    const tilePxH = parseInteger(tilePixelHeightInput);
     const next: SavedPaintTile = {
       id: makeSavedPaintTileId(safeName, savedPaintTiles),
       name: safeName,
       primaryCode: cells[0].code,
       width: selectedAtlasRect.width,
       height: selectedAtlasRect.height,
+      ySortWithActors: inferTileYSortWithActors(safeName, selectedAtlasRect.width, selectedAtlasRect.height),
       cells,
+      ...(tilesetUrl && tilePxW && tilePxH && { tilesetUrl, tilePixelWidth: tilePxW, tilePixelHeight: tilePxH }),
     };
 
     const updatedSavedTiles = [...savedPaintTiles, next];
@@ -1968,7 +3011,6 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     void persistSavedPaintTiles(updatedSavedTiles);
     setSelectedPaintTileId(next.id);
     setSelectedTileCode(next.primaryCode);
-    setTool('paint');
     setStatus(
       `Saved paint tile "${next.name}" (${next.width}x${next.height}) using ${next.cells.length} generated code(s).`,
     );
@@ -2027,8 +3069,104 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     setNpcAnimationSetsInput(stringifyDirectionalAnimationSetsForEditor(safeSets));
   };
 
+  const validateNpcItemRewardsAgainstCatalog = (rewards: NpcItemRewardDefinition[]): string | null => {
+    if (rewards.length === 0) {
+      return null;
+    }
+    if (knownItemIds.length === 0) {
+      return null;
+    }
+    for (const reward of rewards) {
+      if (!knownItemIds.includes(reward.itemId)) {
+        return `Reward item "${reward.itemId}" does not exist in the item catalog.`;
+      }
+    }
+    return null;
+  };
+
+  const validateKnownFlagSelection = (
+    flagIdRaw: string | undefined,
+    label: string,
+    options?: { required?: boolean },
+  ): string | null => {
+    const flagId = typeof flagIdRaw === 'string' ? flagIdRaw.trim() : '';
+    if (!flagId) {
+      return options?.required ? `${label} is required.` : null;
+    }
+    if (knownFlagIds.length === 0) {
+      return `No flags exist yet. Create flags first, then set ${label}.`;
+    }
+    if (!knownFlagIdSet.has(flagId)) {
+      return `${label} must match an existing flag from the Flags page.`;
+    }
+    return null;
+  };
+
+  const validateNpcMovementGuardBattles = (
+    guards: NpcMovementGuardDefinition[],
+    fallbackBattleTeamIds: string[] | undefined,
+    fallbackBattleRewards: NpcItemRewardDefinition[],
+  ): string | null => {
+    for (let index = 0; index < guards.length; index += 1) {
+      const guard = guards[index];
+      const guardLabel = guard.id?.trim() || `guard-${index + 1}`;
+      const effectiveTeams =
+        guard.battleTeamIds && guard.battleTeamIds.length > 0 ? guard.battleTeamIds : fallbackBattleTeamIds;
+      if (!effectiveTeams || effectiveTeams.length === 0) {
+        continue;
+      }
+      const defeatedFlag = typeof guard.defeatedFlag === 'string' ? guard.defeatedFlag.trim() : '';
+      if (!defeatedFlag) {
+        return `Movement guard "${guardLabel}" enables battle but has no Defeat Flag.`;
+      }
+      const defeatedFlagError = validateKnownFlagSelection(defeatedFlag, `Movement guard "${guardLabel}" defeat flag`, {
+        required: true,
+      });
+      if (defeatedFlagError) {
+        return defeatedFlagError;
+      }
+      const effectiveRewards =
+        guard.battleRewards && guard.battleRewards.length > 0 ? guard.battleRewards : fallbackBattleRewards;
+      if (!effectiveRewards || effectiveRewards.length === 0) {
+        return `Movement guard "${guardLabel}" enables battle but has no battle rewards.`;
+      }
+      const rewardCatalogError = validateNpcItemRewardsAgainstCatalog(effectiveRewards);
+      if (rewardCatalogError) {
+        return rewardCatalogError;
+      }
+    }
+    return null;
+  };
+
+  const loadTilesetSupabaseAssets = async () => {
+    const bucket = tilesetBucketInput.trim() || DEFAULT_TILESET_SUPABASE_BUCKET;
+    const prefix = tilesetPrefixInput.trim();
+    const params = new URLSearchParams();
+    params.set('bucket', bucket);
+    if (prefix) {
+      params.set('prefix', prefix);
+    }
+    setIsLoadingTilesetSupabaseAssets(true);
+    try {
+      const result = await apiFetchJson<LoadSupabaseSpriteSheetsResponse>(
+        `/api/admin/spritesheets/list?${params.toString()}`,
+      );
+      if (!result.ok || !result.data?.ok) {
+        throw new Error(result.error ?? result.data?.error ?? 'Unable to load tilesets from Supabase.');
+      }
+      const loadedAssets = Array.isArray(result.data.spritesheets) ? result.data.spritesheets : [];
+      setTilesetSupabaseAssets(loadedAssets);
+      setStatus(`Loaded ${loadedAssets.length} tileset image(s) from bucket "${bucket}".`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to load tilesets from Supabase.';
+      setError(message);
+    } finally {
+      setIsLoadingTilesetSupabaseAssets(false);
+    }
+  };
+
   const loadNpcSupabaseSpriteSheets = async () => {
-    const bucket = npcSpriteBucketInput.trim() || DEFAULT_SUPABASE_BUCKET;
+    const bucket = npcSpriteBucketInput.trim() || DEFAULT_NPC_SUPABASE_BUCKET;
     const prefix = npcSpritePrefixInput.trim();
     const params = new URLSearchParams();
     params.set('bucket', bucket);
@@ -2055,8 +3193,9 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   };
 
   useEffect(() => {
+    void loadTilesetSupabaseAssets();
     void loadNpcSupabaseSpriteSheets();
-    // Run once on mount with the default bucket.
+    // Run once on mount with default buckets.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -2170,22 +3309,24 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     setStatus(`Deleted animation "${selectedNpcAnimationName}".`);
   };
 
-  const addSelectedNpcFrameToAnimation = () => {
-    if (!selectedNpcAtlasRect || npcSpriteMeta.columns <= 0) {
-      setError('Select a rectangle on the NPC sheet first.');
-      return;
-    }
+  const appendNpcFrameToSelectedAnimation = (
+    frameIndex: number,
+    frameCellsWide: number,
+    frameCellsTall: number,
+    options?: {
+      allowDuplicate?: boolean;
+    },
+  ) => {
     if (!selectedNpcAnimationName) {
       setError('Select an animation before adding frames.');
       return;
     }
 
-    const frameIndex = selectedNpcAtlasRect.minRow * npcSpriteMeta.columns + selectedNpcAtlasRect.minCol;
-    setNpcFrameCellsWideInput(String(selectedNpcAtlasRect.width));
-    setNpcFrameCellsTallInput(String(selectedNpcAtlasRect.height));
+    setNpcFrameCellsWideInput(String(Math.max(1, frameCellsWide)));
+    setNpcFrameCellsTallInput(String(Math.max(1, frameCellsTall)));
     const currentSet = parsedNpcAnimationSets[selectedNpcAnimationName] ?? {};
     const currentFrames = currentSet[npcAssignDirection] ? [...currentSet[npcAssignDirection]!] : [];
-    if (!currentFrames.includes(frameIndex)) {
+    if (options?.allowDuplicate || !currentFrames.includes(frameIndex)) {
       currentFrames.push(frameIndex);
     }
     setNpcAnimationSetsDraft({
@@ -2196,8 +3337,18 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       },
     });
     setStatus(
-      `Added frame ${frameIndex} to "${selectedNpcAnimationName}" ${npcAssignDirection} (${selectedNpcAtlasRect.width}x${selectedNpcAtlasRect.height} cells).`,
+      `Added frame ${frameIndex} to "${selectedNpcAnimationName}" ${npcAssignDirection} (${Math.max(1, frameCellsWide)}x${Math.max(1, frameCellsTall)} cells).`,
     );
+  };
+
+  const addSelectedNpcFrameToAnimation = () => {
+    if (!selectedNpcAtlasRect || npcSpriteMeta.columns <= 0) {
+      setError('Select a rectangle on the NPC sheet first.');
+      return;
+    }
+
+    const frameIndex = selectedNpcAtlasRect.minRow * npcSpriteMeta.columns + selectedNpcAtlasRect.minCol;
+    appendNpcFrameToSelectedAnimation(frameIndex, selectedNpcAtlasRect.width, selectedNpcAtlasRect.height);
   };
 
   const removeNpcFrameFromAnimation = (frameIndex: number) => {
@@ -2230,6 +3381,77 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       },
     });
     setStatus(`Cleared frames for "${selectedNpcAnimationName}" ${npcAssignDirection}.`);
+  };
+
+  const loadNpcSpriteIntoEditor = (
+    sprite: NpcSpriteLibraryEntry,
+    options?: {
+      statusMessage?: string;
+    },
+  ) => {
+    const atlasCellWidth = sprite.sprite.atlasCellWidth ?? sprite.sprite.frameWidth;
+    const atlasCellHeight = sprite.sprite.atlasCellHeight ?? sprite.sprite.frameHeight;
+    const frameCellsWide =
+      sprite.sprite.frameCellsWide ??
+      Math.max(1, Math.round(sprite.sprite.frameWidth / Math.max(1, atlasCellWidth)));
+    const frameCellsTall =
+      sprite.sprite.frameCellsTall ??
+      Math.max(1, Math.round(sprite.sprite.frameHeight / Math.max(1, atlasCellHeight)));
+    setNpcSpriteEditorMode('edit');
+    setEditingNpcSpriteId(sprite.id);
+    setNpcSpriteLabelInput(sprite.label);
+    setNpcSpriteUrl(sprite.sprite.url);
+    setNpcFrameWidthInput(String(atlasCellWidth));
+    setNpcFrameHeightInput(String(atlasCellHeight));
+    setNpcFrameCellsWideInput(String(frameCellsWide));
+    setNpcFrameCellsTallInput(String(frameCellsTall));
+    setNpcRenderWidthTilesInput(String(sprite.sprite.renderWidthTiles ?? 1));
+    setNpcRenderHeightTilesInput(String(sprite.sprite.renderHeightTiles ?? 2));
+    setNpcFacingFrames({ ...sprite.sprite.facingFrames });
+    setNpcWalkFrames({
+      up: [...(sprite.sprite.walkFrames?.up ?? [])],
+      down: [...(sprite.sprite.walkFrames?.down ?? [])],
+      left: [...(sprite.sprite.walkFrames?.left ?? [])],
+      right: [...(sprite.sprite.walkFrames?.right ?? [])],
+    });
+    const nextAnimationSets =
+      sprite.sprite.animationSets &&
+      Object.keys(sprite.sprite.animationSets).length > 0
+        ? sanitizeDirectionalAnimationSets(
+            sprite.sprite.animationSets as Partial<
+              Record<string, Partial<Record<Direction, number[]>>>
+            >,
+          )
+        : buildDirectionalAnimationSetsFromLegacyFrames(
+            sprite.sprite.facingFrames,
+            {
+              up: [...(sprite.sprite.walkFrames?.up ?? [])],
+              down: [...(sprite.sprite.walkFrames?.down ?? [])],
+              left: [...(sprite.sprite.walkFrames?.left ?? [])],
+              right: [...(sprite.sprite.walkFrames?.right ?? [])],
+            },
+          );
+    setNpcAnimationSetsInput(stringifyDirectionalAnimationSetsForEditor(nextAnimationSets));
+    const nextIdleAnimation = sprite.sprite.defaultIdleAnimation ?? 'idle';
+    const nextMoveAnimation = sprite.sprite.defaultMoveAnimation ?? 'walk';
+    const nextAnimationNames = Object.keys(nextAnimationSets);
+    const nextSelectedAnimation = nextAnimationNames.includes(nextMoveAnimation)
+      ? nextMoveAnimation
+      : nextAnimationNames.includes('walk')
+        ? 'walk'
+        : nextAnimationNames[0] ?? '';
+    setSelectedNpcAnimationName(nextSelectedAnimation);
+    setNpcDefaultIdleAnimationInput(nextIdleAnimation);
+    setNpcDefaultMoveAnimationInput(nextMoveAnimation);
+    if (options?.statusMessage) {
+      setStatus(options.statusMessage);
+    }
+  };
+
+  const startNewNpcSpriteDraft = () => {
+    setNpcSpriteEditorMode('create');
+    setEditingNpcSpriteId('');
+    setStatus('Sprite editor is now in create mode. Saving will create a new sprite entry.');
   };
 
   const saveNpcSprite = () => {
@@ -2277,15 +3499,19 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       defaultIdleAnimation,
       defaultMoveAnimation,
     );
+    const editingIndex = npcSpriteLibrary.findIndex((entry) => entry.id === editingNpcSpriteId);
+    const isEditingExisting = npcSpriteEditorMode === 'edit' && editingIndex >= 0;
+    if (npcSpriteEditorMode === 'edit' && editingNpcSpriteId && editingIndex < 0) {
+      setError('The selected sprite no longer exists. Switch to create mode and save a new sprite.');
+      return;
+    }
+    const resolvedSpriteId = isEditingExisting ? editingNpcSpriteId : makeNpcSpriteId(label, npcSpriteLibrary);
 
     const spriteEntry: NpcSpriteLibraryEntry = {
-      id:
-        selectedNpcSpriteId && npcSpriteLibrary.some((entry) => entry.id === selectedNpcSpriteId)
-          ? selectedNpcSpriteId
-          : makeNpcSpriteId(label, npcSpriteLibrary),
+      id: resolvedSpriteId,
       label,
       sprite: {
-        url: npcSpriteUrl.trim(),
+        url: withCacheBusterTag(npcSpriteUrl.trim()),
         frameWidth,
         frameHeight,
         atlasCellWidth,
@@ -2302,29 +3528,59 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       },
     };
 
-    const existingIndex = npcSpriteLibrary.findIndex((entry) => entry.id === spriteEntry.id);
     const next =
-      existingIndex >= 0
-        ? npcSpriteLibrary.map((entry, index) => (index === existingIndex ? spriteEntry : entry))
+      isEditingExisting
+        ? npcSpriteLibrary.map((entry, index) => (index === editingIndex ? spriteEntry : entry))
         : [...npcSpriteLibrary, spriteEntry];
     setNpcSpriteLibrary(next);
-    setSelectedNpcSpriteId(spriteEntry.id);
+    setNpcSpriteEditorMode('edit');
+    setEditingNpcSpriteId(spriteEntry.id);
     void persistNpcSpriteLibrary(next);
     setStatus(
-      existingIndex >= 0
+      isEditingExisting
         ? `Updated NPC sprite "${spriteEntry.label}" without reloading atlas.`
-        : `Saved NPC sprite "${spriteEntry.label}".`,
+        : `Created NPC sprite "${spriteEntry.label}".`,
     );
   };
 
   const removeNpcSprite = (spriteId: string) => {
     const next = npcSpriteLibrary.filter((sprite) => sprite.id !== spriteId);
     setNpcSpriteLibrary(next);
+    if (editingNpcSpriteId === spriteId) {
+      setEditingNpcSpriteId('');
+      setNpcSpriteEditorMode('create');
+    }
     if (selectedNpcSpriteId === spriteId) {
       setSelectedNpcSpriteId(next[0]?.id ?? '');
     }
     void persistNpcSpriteLibrary(next);
     setStatus('Removed NPC sprite.');
+  };
+
+  const buildNpcMovementFromEditorInputs = (): NpcMovementDefinition | null => {
+    const pattern = parseDirectionPattern(npcMovementPatternInput);
+    if ((npcMovementTypeInput === 'path' || npcMovementTypeInput === 'static-turning') && pattern.length === 0) {
+      setError('Path and static-turning movement require at least one direction in pattern.');
+      return null;
+    }
+
+    if (npcMovementTypeInput === 'static') {
+      return { type: 'static' };
+    }
+
+    return {
+      type: npcMovementTypeInput,
+      pattern: npcMovementTypeInput === 'path' || npcMovementTypeInput === 'static-turning' ? pattern : undefined,
+      stepIntervalMs: parseInteger(npcStepIntervalInput) ?? 850,
+      pathMode: npcMovementTypeInput === 'path' ? npcMovementPathModeInput : undefined,
+      leashRadius:
+        npcMovementTypeInput === 'wander'
+          ? (() => {
+              const parsed = parseInteger(npcWanderLeashRadiusInput);
+              return parsed && parsed > 0 ? clampInt(parsed, 1, 64) : undefined;
+            })()
+          : undefined,
+    };
   };
 
   const saveNpcTemplate = () => {
@@ -2348,22 +3604,45 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       .split('\n')
       .map((line) => line.trim())
       .filter((line) => line.length > 0);
-    const pattern = parseDirectionPattern(npcMovementPatternInput);
-    if (npcMovementTypeInput === 'loop' && pattern.length === 0) {
-      setError('Loop movement requires at least one direction in pattern.');
+    const movement = buildNpcMovementFromEditorInputs();
+    if (!movement) {
       return;
     }
-
-    const movement: NpcMovementDefinition =
-      npcMovementTypeInput === 'static'
-        ? {
-            type: 'static',
-          }
-        : {
-            type: npcMovementTypeInput,
-            pattern: npcMovementTypeInput === 'loop' ? pattern : undefined,
-            stepIntervalMs: clampInt(parseInteger(npcStepIntervalInput) ?? 850, 180, 4000),
-        };
+    const storyStatesResult = parseNpcStoryStatesInput(npcStoryStatesInput);
+    if (!storyStatesResult.ok) {
+      setError(storyStatesResult.error);
+      return;
+    }
+    const movementGuardsResult = parseNpcMovementGuardsInput(npcMovementGuardsInput);
+    if (!movementGuardsResult.ok) {
+      setError(movementGuardsResult.error);
+      return;
+    }
+    const interactionScriptResult = parseNpcInteractionScriptInput(npcInteractionScriptInput);
+    if (!interactionScriptResult.ok) {
+      setError(interactionScriptResult.error);
+      return;
+    }
+    const battleRewardsResult = parseNpcItemRewardsInput(npcBattleRewardsInput);
+    if (!battleRewardsResult.ok) {
+      setError(battleRewardsResult.error);
+      return;
+    }
+    const interactionRewardsResult = parseNpcItemRewardsInput(npcInteractionRewardsInput);
+    if (!interactionRewardsResult.ok) {
+      setError(interactionRewardsResult.error);
+      return;
+    }
+    const battleRewardCatalogError = validateNpcItemRewardsAgainstCatalog(battleRewardsResult.rewards);
+    if (battleRewardCatalogError) {
+      setError(battleRewardCatalogError);
+      return;
+    }
+    const interactionRewardCatalogError = validateNpcItemRewardsAgainstCatalog(interactionRewardsResult.rewards);
+    if (interactionRewardCatalogError) {
+      setError(interactionRewardCatalogError);
+      return;
+    }
 
     const idleAnimation = npcCharacterIdleAnimationInput.trim() || undefined;
     const moveAnimation = npcCharacterMoveAnimationInput.trim() || undefined;
@@ -2388,39 +3667,874 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       setError(`Move animation "${moveAnimation}" does not exist on the selected sprite.`);
       return;
     }
+    const interactBattleDefeatedFlag = npcInteractBattleDefeatedFlagInput.trim() || undefined;
+    const battleTeamIds = parseStringList(npcBattleTeamsInput);
+    const interactionRewardSetFlag = npcInteractionRewardSetFlagInput.trim() || undefined;
+    const interactionModeFlags = resolveNpcInteractionFlags(npcInteractionModeInput, npcShopIdInput);
+    const resolvedShopId = interactionModeFlags.shopId;
+    if (npcInteractionModeInput === 'shop') {
+      if (!resolvedShopId) {
+        setError('Shop interaction mode requires a shop selection.');
+        return;
+      }
+      if (knownShopIds.length > 0 && !knownShopIds.includes(resolvedShopId)) {
+        setError(`Shop "${resolvedShopId}" does not exist in the shop catalog.`);
+        return;
+      }
+    }
+    const interactBattleFlagError = validateKnownFlagSelection(
+      interactBattleDefeatedFlag,
+      'Interaction battle transition flag',
+      { required: interactionModeFlags.firstInteractBattle },
+    );
+    if (interactBattleFlagError) {
+      setError(interactBattleFlagError);
+      return;
+    }
+    if (interactionModeFlags.firstInteractBattle) {
+      if (!battleTeamIds || battleTeamIds.length === 0) {
+        setError('Battler NPCs require at least one Battle Team ID.');
+        return;
+      }
+      if (battleRewardsResult.rewards.length === 0) {
+        setError('Battler NPCs require at least one battle reward item.');
+        return;
+      }
+    }
+    for (const state of storyStatesResult.states) {
+      if (!state.firstInteractBattle) {
+        continue;
+      }
+      const effectiveTeams = state.battleTeamIds && state.battleTeamIds.length > 0 ? state.battleTeamIds : battleTeamIds;
+      const stateDefeatFlag = state.interactBattleDefeatedFlag?.trim() || interactBattleDefeatedFlag;
+      const stateRewards =
+        state.battleRewards && state.battleRewards.length > 0 ? state.battleRewards : battleRewardsResult.rewards;
+      if (!stateDefeatFlag) {
+        setError(`Story state "${state.id ?? '(unnamed)'}" enables battle but has no Defeat Flag.`);
+        return;
+      }
+      if (!effectiveTeams || effectiveTeams.length === 0) {
+        setError(`Story state "${state.id ?? '(unnamed)'}" enables battle but has no Battle Team IDs.`);
+        return;
+      }
+      if (!stateRewards || stateRewards.length === 0) {
+        setError(`Story state "${state.id ?? '(unnamed)'}" enables battle but has no battle rewards.`);
+        return;
+      }
+      const stateDefeatFlagError = validateKnownFlagSelection(
+        stateDefeatFlag,
+        `Story state "${state.id ?? '(unnamed)'}" interaction battle transition flag`,
+        { required: true },
+      );
+      if (stateDefeatFlagError) {
+        setError(stateDefeatFlagError);
+        return;
+      }
+      const stateRewardCatalogError = validateNpcItemRewardsAgainstCatalog(stateRewards);
+      if (stateRewardCatalogError) {
+        setError(stateRewardCatalogError);
+        return;
+      }
+      const stateGuardValidationError = validateNpcMovementGuardBattles(
+        state.movementGuards ?? [],
+        effectiveTeams,
+        stateRewards,
+      );
+      if (stateGuardValidationError) {
+        setError(`Story state "${state.id ?? '(unnamed)'}": ${stateGuardValidationError}`);
+        return;
+      }
+    }
+    const movementGuardBattleValidationError = validateNpcMovementGuardBattles(
+      movementGuardsResult.guards,
+      battleTeamIds,
+      battleRewardsResult.rewards,
+    );
+    if (movementGuardBattleValidationError) {
+      setError(movementGuardBattleValidationError);
+      return;
+    }
+
+    const isUpdatingExisting =
+      selectedNpcCharacterId && npcCharacterLibrary.some((entry) => entry.id === selectedNpcCharacterId);
+    const resolvedId = isUpdatingExisting ? selectedNpcCharacterId : makeNpcCharacterId(label, npcCharacterLibrary);
 
     const characterTemplate: NpcCharacterTemplateEntry = {
-      id: makeNpcCharacterId(label, npcCharacterLibrary),
+      id: resolvedId,
       label,
       npcName,
       color: npcCharacterColorInput || '#9b73b8',
+      facing: npcFacingInput,
       dialogueId: sanitizeIdentifier(npcDialogueIdInput, 'custom_npc_dialogue'),
       dialogueSpeaker: npcDialogueSpeakerInput.trim() || undefined,
       dialogueLines: dialogueLines.length > 0 ? dialogueLines : undefined,
       dialogueSetFlag: npcDialogueSetFlagInput.trim() || undefined,
-      battleTeamIds: parseStringList(npcBattleTeamsInput),
+      firstInteractionSetFlag: npcFirstInteractionSetFlagInput.trim() || undefined,
+      firstInteractBattle: interactionModeFlags.firstInteractBattle,
+      interactBattleRepeatable: npcInteractBattleRepeatableInput,
+      interactBattleDefeatedFlag,
+      battleRewards: battleRewardsResult.rewards.length > 0 ? battleRewardsResult.rewards : undefined,
+      healer: interactionModeFlags.healer,
+      shopId: resolvedShopId,
+      interactionRewards: interactionRewardsResult.rewards.length > 0 ? interactionRewardsResult.rewards : undefined,
+      interactionRewardSetFlag,
+      battleTeamIds,
+      storyStates:
+        storyStatesResult.states.length > 0 ? compactCharacterPlacementOrder(storyStatesResult.states) : undefined,
+      movementGuards:
+        movementGuardsResult.guards.length > 0 ? movementGuardsResult.guards : undefined,
+      interactionScript:
+        interactionScriptResult.actions.length > 0 ? interactionScriptResult.actions : undefined,
       movement,
       spriteId: selectedNpcSpriteId,
+      cacheVersion: Date.now(),
       idleAnimation,
       moveAnimation,
     };
 
-    const next = [...npcCharacterLibrary, characterTemplate];
+    const next = isUpdatingExisting
+      ? normalizeCoreStoryNpcCharacters(
+          npcCharacterLibrary.map((entry) => (entry.id === resolvedId ? characterTemplate : entry)),
+        )
+      : normalizeCoreStoryNpcCharacters([...npcCharacterLibrary, characterTemplate]);
     setNpcCharacterLibrary(next);
-    setSelectedNpcCharacterId(characterTemplate.id);
-    setTool('npc-paint');
+    setSelectedNpcCharacterId(resolvedId);
     void persistNpcCharacterLibrary(next);
     setStatus(`Saved NPC character "${characterTemplate.label}".`);
   };
 
+  const addNewBlankNpcCharacter = () => {
+    const blank: NpcCharacterTemplateEntry = {
+      id: makeNpcCharacterId('', npcCharacterLibrary),
+      label: '',
+      npcName: '',
+      color: '#9b73b8',
+      dialogueId: '',
+      storyStates: [
+        {
+          id: 'instance-1',
+          mapId: '',
+          position: { x: 0, y: 0 },
+        },
+      ],
+    };
+    const next = normalizeCoreStoryNpcCharacters([...npcCharacterLibrary, blank]);
+    setNpcCharacterLibrary(next);
+    setSelectedNpcCharacterId(blank.id);
+    setSelectedCharacterInstanceKey(`${blank.id}:0`);
+    loadNpcCharacterTemplateIntoEditor(blank, { keepSelectedInstance: true, statusMessage: 'Created new blank character.' });
+    void persistNpcCharacterLibrary(next);
+    setStatus('Created new blank character.');
+  };
+
   const removeNpcTemplate = (templateId: string) => {
-    const next = npcCharacterLibrary.filter((template) => template.id !== templateId);
+    const next = normalizeCoreStoryNpcCharacters(
+      npcCharacterLibrary.filter((template) => template.id !== templateId),
+    );
     setNpcCharacterLibrary(next);
     if (selectedNpcCharacterId === templateId) {
       setSelectedNpcCharacterId(next[0]?.id ?? '');
     }
+    if (selectedCharacterInstanceKey.startsWith(`${templateId}:`)) {
+      setSelectedCharacterInstanceKey('');
+    }
     void persistNpcCharacterLibrary(next);
     setStatus('Removed NPC character.');
+  };
+
+  const updateCharacterTemplateById = (
+    characterId: string,
+    updater: (template: NpcCharacterTemplateEntry) => NpcCharacterTemplateEntry,
+  ) => {
+    const next = normalizeCoreStoryNpcCharacters(
+      npcCharacterLibrary.map((template) => (template.id === characterId ? updater(template) : template)),
+    );
+    const updatedTemplate = next.find((template) => template.id === characterId);
+    setNpcCharacterLibrary(next);
+    if (updatedTemplate) {
+      setNpcStoryStatesInput(JSON.stringify(updatedTemplate.storyStates ?? [], null, 2));
+      setNpcMovementGuardsInput(JSON.stringify(updatedTemplate.movementGuards ?? [], null, 2));
+    }
+    void persistNpcCharacterLibrary(next);
+  };
+
+  const loadNpcCharacterTemplateIntoEditor = (
+    template: NpcCharacterTemplateEntry,
+    options?: {
+      keepSelectedInstance?: boolean;
+      statusMessage?: string;
+    },
+  ) => {
+    setSelectedNpcCharacterId(template.id);
+    setSelectedMapNpcId('');
+    if (!options?.keepSelectedInstance) {
+      setSelectedCharacterInstanceKey('');
+    }
+    setNpcCharacterLabelInput(template.label);
+    setNpcCharacterNameInput(template.npcName);
+    setNpcCharacterColorInput(template.color);
+    setNpcFacingInput(template.facing ?? 'down');
+    setNpcDialogueIdInput(template.dialogueId);
+    setNpcDialogueSpeakerInput(template.dialogueSpeaker ?? '');
+    setNpcDialogueLinesInput((template.dialogueLines ?? []).join('\n'));
+    setNpcDialogueSetFlagInput(template.dialogueSetFlag ?? '');
+    setNpcFirstInteractionSetFlagInput(template.firstInteractionSetFlag ?? '');
+    const interactionMode = resolveNpcInteractionMode(template);
+    setNpcInteractionModeInput(interactionMode);
+    setNpcFirstInteractBattleInput(Boolean(template.firstInteractBattle));
+    setNpcInteractBattleRepeatableInput(Boolean(template.interactBattleRepeatable));
+    setNpcInteractBattleDefeatedFlagInput(template.interactBattleDefeatedFlag ?? '');
+    setNpcBattleRewardsInput(formatNpcItemRewardsInput(template.battleRewards));
+    setNpcHealerInput(Boolean(template.healer));
+    setNpcShopIdInput(template.shopId ?? '');
+    setNpcInteractionRewardsInput(formatNpcItemRewardsInput(template.interactionRewards));
+    setNpcInteractionRewardSetFlagInput(template.interactionRewardSetFlag ?? '');
+    setNpcMovementTypeInput(toEditorNpcMovementType(template.movement?.type));
+    setNpcMovementPatternInput((template.movement?.pattern ?? []).join(', '));
+    setNpcStepIntervalInput(String(template.movement?.stepIntervalMs ?? 850));
+    setNpcMovementPathModeInput(template.movement?.pathMode === 'pingpong' ? 'pingpong' : 'loop');
+    setNpcWanderLeashRadiusInput(
+      Number.isFinite(template.movement?.leashRadius)
+        ? String(Math.max(1, Math.floor(template.movement?.leashRadius ?? 0)))
+        : '',
+    );
+    setNpcBattleTeamsInput((template.battleTeamIds ?? []).join(', '));
+    setNpcStoryStatesInput(JSON.stringify(template.storyStates ?? [], null, 2));
+    setNpcMovementGuardsInput(JSON.stringify(template.movementGuards ?? [], null, 2));
+    setNpcInteractionScriptInput(JSON.stringify(template.interactionScript ?? [], null, 2));
+    setNpcCharacterIdleAnimationInput(template.idleAnimation ?? '');
+    setNpcCharacterMoveAnimationInput(template.moveAnimation ?? '');
+    setSelectedNpcSpriteId(template.spriteId ?? '');
+    if (options?.statusMessage) {
+      setStatus(options.statusMessage);
+    }
+  };
+
+  const addCharacterPlacementInstance = (
+    characterId: string,
+    mapId: string,
+    position: Vector2,
+  ) => {
+    const character = npcCharacterLibrary.find((entry) => entry.id === characterId);
+    if (!character) {
+      setError('Select an NPC character before adding an instance.');
+      return;
+    }
+    if (!mapId.trim()) {
+      setError('Map ID is required for a character instance.');
+      return;
+    }
+    const existingCount = getCharacterPlacementInstances(character).length;
+    const nextInstanceIndex = existingCount + 1;
+    updateCharacterTemplateById(character.id, (template) => {
+      const placements = getCharacterPlacementInstances(template);
+      const nextPlacements = compactCharacterPlacementOrder([
+        ...placements,
+        {
+          id: `instance-${placements.length + 1}`,
+          mapId: mapId.trim(),
+          position: { x: Math.max(0, Math.floor(position.x)), y: Math.max(0, Math.floor(position.y)) },
+          facing: template.facing,
+          dialogueId: template.dialogueId,
+          dialogueSpeaker: template.dialogueSpeaker,
+          dialogueLines: template.dialogueLines ? [...template.dialogueLines] : undefined,
+          dialogueSetFlag: template.dialogueSetFlag,
+          firstInteractionSetFlag: template.firstInteractionSetFlag,
+          firstInteractBattle: template.firstInteractBattle,
+          interactBattleRepeatable: template.interactBattleRepeatable,
+          interactBattleDefeatedFlag: template.interactBattleDefeatedFlag,
+          battleRewards: template.battleRewards ? template.battleRewards.map((entry) => ({ ...entry })) : undefined,
+          healer: template.healer,
+          shopId: template.shopId,
+          interactionRewards: template.interactionRewards
+            ? template.interactionRewards.map((entry) => ({ ...entry }))
+            : undefined,
+          interactionRewardSetFlag: template.interactionRewardSetFlag,
+          battleTeamIds: template.battleTeamIds ? [...template.battleTeamIds] : undefined,
+          movement: template.movement
+            ? {
+                ...template.movement,
+                pattern: template.movement.pattern ? [...template.movement.pattern] : undefined,
+              }
+            : undefined,
+          movementGuards: template.movementGuards
+            ? template.movementGuards.map((guard) => ({
+                ...guard,
+                dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+                postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+                battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
+                battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
+              }))
+            : undefined,
+          idleAnimation: template.idleAnimation,
+          moveAnimation: template.moveAnimation,
+          interactionScript: template.interactionScript
+            ? template.interactionScript.map((entry) => ({
+                ...entry,
+                ...(entry.type === 'dialogue' && Array.isArray(entry.lines) ? { lines: [...entry.lines] } : {}),
+                ...(entry.type === 'move_path' && Array.isArray(entry.directions) ? { directions: [...entry.directions] } : {}),
+              }))
+            : undefined,
+        },
+      ]);
+      return {
+        ...template,
+        storyStates: nextPlacements,
+      };
+    });
+    setSelectedNpcCharacterId(character.id);
+    setSelectedCharacterInstanceKey(`${character.id}:${nextInstanceIndex - 1}`);
+    setStatus(`Added ${character.npcName} instance #${nextInstanceIndex}.`);
+  };
+
+  const appendCharacterPlacementInstance = (x: number, y: number) => {
+    if (!selectedNpcCharacter) {
+      setError('Select an NPC character before painting NPC placements.');
+      return;
+    }
+    if (!editableMap.id) {
+      setError('Load an existing map before painting NPC placements.');
+      return;
+    }
+    addCharacterPlacementInstance(selectedNpcCharacter.id, editableMap.id, { x, y });
+  };
+
+  const removeCharacterPlacementInstance = (characterId: string, placementIndex: number) => {
+    updateCharacterTemplateById(characterId, (template) => {
+      const placements = getCharacterPlacementInstances(template).filter((_, index) => index !== placementIndex);
+      return {
+        ...template,
+        storyStates: compactCharacterPlacementOrder(placements),
+      };
+    });
+    if (selectedCharacterInstanceKey.startsWith(`${characterId}:`)) {
+      const selectedIndex = Number.parseInt(selectedCharacterInstanceKey.split(':')[1] ?? '', 10);
+      if (Number.isFinite(selectedIndex)) {
+        if (selectedIndex === placementIndex) {
+          setSelectedCharacterInstanceKey('');
+        } else if (selectedIndex > placementIndex) {
+          setSelectedCharacterInstanceKey(`${characterId}:${selectedIndex - 1}`);
+        }
+      }
+    }
+  };
+
+  const moveCharacterPlacementInstance = (characterId: string, placementIndex: number, direction: 'up' | 'down') => {
+    updateCharacterTemplateById(characterId, (template) => {
+      const placements = [...getCharacterPlacementInstances(template)];
+      const nextIndex = direction === 'up' ? placementIndex - 1 : placementIndex + 1;
+      if (placementIndex < 0 || placementIndex >= placements.length || nextIndex < 0 || nextIndex >= placements.length) {
+        return template;
+      }
+      const current = placements[placementIndex];
+      placements[placementIndex] = placements[nextIndex];
+      placements[nextIndex] = current;
+      return {
+        ...template,
+        storyStates: compactCharacterPlacementOrder(placements),
+      };
+    });
+    const nextIndex = direction === 'up' ? placementIndex - 1 : placementIndex + 1;
+    setSelectedCharacterInstanceKey(`${characterId}:${Math.max(0, nextIndex)}`);
+  };
+
+  const loadCharacterPlacementIntoEditor = (characterId: string, placementIndex: number) => {
+    const character = npcCharacterLibrary.find((entry) => entry.id === characterId);
+    if (!character) {
+      return;
+    }
+    const placements = getCharacterPlacementInstances(character);
+    const placement = placements[placementIndex];
+    if (!placement) {
+      return;
+    }
+    loadNpcCharacterTemplateIntoEditor(character, { keepSelectedInstance: true });
+    setSelectedCharacterInstanceKey(`${character.id}:${placementIndex}`);
+    setNpcFacingInput(placement.facing ?? character.facing ?? 'down');
+    setNpcDialogueIdInput(placement.dialogueId ?? character.dialogueId ?? 'custom_npc_dialogue');
+    setNpcDialogueSpeakerInput(placement.dialogueSpeaker ?? character.dialogueSpeaker ?? '');
+    setNpcDialogueLinesInput((placement.dialogueLines ?? character.dialogueLines ?? []).join('\n'));
+    setNpcDialogueSetFlagInput(placement.dialogueSetFlag ?? character.dialogueSetFlag ?? '');
+    setNpcFirstInteractionSetFlagInput(
+      placement.firstInteractionSetFlag ?? character.firstInteractionSetFlag ?? '',
+    );
+    setNpcInteractionModeInput(
+      resolveNpcInteractionMode({
+        shopId: placement.shopId ?? character.shopId,
+        firstInteractBattle:
+          typeof placement.firstInteractBattle === 'boolean'
+            ? placement.firstInteractBattle
+            : character.firstInteractBattle,
+        healer: typeof placement.healer === 'boolean' ? placement.healer : character.healer,
+      }),
+    );
+    setNpcFirstInteractBattleInput(
+      typeof placement.firstInteractBattle === 'boolean'
+        ? placement.firstInteractBattle
+        : Boolean(character.firstInteractBattle),
+    );
+    setNpcInteractBattleRepeatableInput(
+      typeof placement.interactBattleRepeatable === 'boolean'
+        ? placement.interactBattleRepeatable
+        : Boolean(character.interactBattleRepeatable),
+    );
+    setNpcInteractBattleDefeatedFlagInput(
+      placement.interactBattleDefeatedFlag ??
+        character.interactBattleDefeatedFlag ??
+        '',
+    );
+    setNpcBattleRewardsInput(
+      formatNpcItemRewardsInput(placement.battleRewards ?? character.battleRewards),
+    );
+    setNpcHealerInput(
+      typeof placement.healer === 'boolean' ? placement.healer : Boolean(character.healer),
+    );
+    setNpcShopIdInput(placement.shopId ?? character.shopId ?? '');
+    setNpcInteractionRewardsInput(
+      formatNpcItemRewardsInput(placement.interactionRewards ?? character.interactionRewards),
+    );
+    setNpcInteractionRewardSetFlagInput(
+      placement.interactionRewardSetFlag ?? character.interactionRewardSetFlag ?? '',
+    );
+    setNpcBattleTeamsInput((placement.battleTeamIds ?? character.battleTeamIds ?? []).join(', '));
+    setNpcMovementTypeInput(toEditorNpcMovementType(placement.movement?.type ?? character.movement?.type));
+    setNpcMovementPatternInput((placement.movement?.pattern ?? character.movement?.pattern ?? []).join(', '));
+    setNpcStepIntervalInput(String(placement.movement?.stepIntervalMs ?? character.movement?.stepIntervalMs ?? 850));
+    setNpcMovementPathModeInput(
+      placement.movement?.pathMode === 'pingpong' || character.movement?.pathMode === 'pingpong' ? 'pingpong' : 'loop',
+    );
+    setNpcWanderLeashRadiusInput(
+      Number.isFinite(placement.movement?.leashRadius)
+        ? String(Math.max(1, Math.floor(placement.movement?.leashRadius ?? 0)))
+        : Number.isFinite(character.movement?.leashRadius)
+          ? String(Math.max(1, Math.floor(character.movement?.leashRadius ?? 0)))
+          : '',
+    );
+    setNpcInteractionScriptInput(
+      JSON.stringify(placement.interactionScript ?? character.interactionScript ?? [], null, 2),
+    );
+    setNpcMovementGuardsInput(
+      JSON.stringify(placement.movementGuards ?? character.movementGuards ?? [], null, 2),
+    );
+    setNpcStoryStatesInput(JSON.stringify(placements, null, 2));
+    setNpcCharacterIdleAnimationInput(placement.idleAnimation ?? character.idleAnimation ?? '');
+    setNpcCharacterMoveAnimationInput(placement.moveAnimation ?? character.moveAnimation ?? '');
+    setStatus(`Loaded ${character.npcName} instance #${placementIndex + 1} for editing.`);
+  };
+
+  const updateCharacterPlacementInstance = (
+    characterId: string,
+    placementIndex: number,
+    updater: (placement: NpcStoryStateDefinition) => NpcStoryStateDefinition,
+  ) => {
+    updateCharacterTemplateById(characterId, (template) => {
+      const placements = [...getCharacterPlacementInstances(template)];
+      if (placementIndex < 0 || placementIndex >= placements.length) {
+        return template;
+      }
+      placements[placementIndex] = updater(placements[placementIndex]);
+      return {
+        ...template,
+        storyStates: compactCharacterPlacementOrder(placements),
+      };
+    });
+  };
+
+  const buildPlacementMovement = (
+    currentMovement: NpcMovementDefinition | undefined,
+    movementType: EditorNpcMovementType,
+    overrides?: {
+      pattern?: Direction[];
+      stepIntervalMs?: number;
+      pathMode?: 'loop' | 'pingpong';
+      leashRadius?: number;
+    },
+  ): NpcMovementDefinition => {
+    if (movementType === 'static') {
+      return { type: 'static' };
+    }
+
+    const rawStepInterval =
+      typeof overrides?.stepIntervalMs === 'number'
+        ? overrides.stepIntervalMs
+        : typeof currentMovement?.stepIntervalMs === 'number'
+          ? currentMovement.stepIntervalMs
+          : 850;
+    const stepIntervalMs = Number.isFinite(rawStepInterval) ? Math.floor(rawStepInterval) : 850;
+    const nextPattern = overrides?.pattern ?? currentMovement?.pattern ?? [];
+    const nextPathMode = overrides?.pathMode ?? currentMovement?.pathMode;
+    const nextLeashRadius =
+      typeof overrides?.leashRadius === 'number'
+        ? overrides.leashRadius
+        : typeof currentMovement?.leashRadius === 'number'
+          ? currentMovement.leashRadius
+          : undefined;
+
+    return {
+      type: movementType,
+      pattern:
+        movementType === 'path' || movementType === 'static-turning'
+          ? (nextPattern.length > 0 ? [...nextPattern] : ['down'])
+          : undefined,
+      stepIntervalMs,
+      pathMode: movementType === 'path' ? (nextPathMode === 'pingpong' ? 'pingpong' : 'loop') : undefined,
+      leashRadius:
+        movementType === 'wander' && typeof nextLeashRadius === 'number'
+          ? clampInt(Math.max(1, Math.floor(nextLeashRadius)), 1, 64)
+          : undefined,
+    };
+  };
+
+  const editMapNpc = (npc: NpcDefinition) => {
+    setSelectedMapNpcId(npc.id);
+    setSelectedCharacterInstanceKey('');
+    setSelectedNpcCharacterId('');
+    setNpcCharacterLabelInput(npc.id);
+    setNpcCharacterNameInput(npc.name);
+    setNpcCharacterColorInput(npc.color || '#9b73b8');
+    setNpcFacingInput(npc.facing ?? 'down');
+    setNpcDialogueIdInput(npc.dialogueId || 'custom_npc_dialogue');
+    setNpcDialogueSpeakerInput(npc.dialogueSpeaker ?? '');
+    setNpcDialogueLinesInput((npc.dialogueLines ?? []).join('\n'));
+    setNpcDialogueSetFlagInput(npc.dialogueSetFlag ?? '');
+    setNpcFirstInteractionSetFlagInput(npc.firstInteractionSetFlag ?? '');
+    setNpcInteractionModeInput(resolveNpcInteractionMode(npc));
+    setNpcFirstInteractBattleInput(Boolean(npc.firstInteractBattle));
+    setNpcInteractBattleRepeatableInput(Boolean(npc.interactBattleRepeatable));
+    setNpcInteractBattleDefeatedFlagInput(npc.interactBattleDefeatedFlag ?? '');
+    setNpcBattleRewardsInput(formatNpcItemRewardsInput(npc.battleRewards));
+    setNpcHealerInput(Boolean(npc.healer));
+    setNpcShopIdInput(npc.shopId ?? '');
+    setNpcInteractionRewardsInput(formatNpcItemRewardsInput(npc.interactionRewards));
+    setNpcInteractionRewardSetFlagInput(npc.interactionRewardSetFlag ?? '');
+    setNpcBattleTeamsInput((npc.battleTeamIds ?? []).join(', '));
+    setNpcStoryStatesInput(JSON.stringify(npc.storyStates ?? [], null, 2));
+    setNpcMovementGuardsInput(JSON.stringify(npc.movementGuards ?? [], null, 2));
+    setNpcInteractionScriptInput(JSON.stringify(npc.interactionScript ?? [], null, 2));
+    setNpcMovementTypeInput(toEditorNpcMovementType(npc.movement?.type));
+    setNpcMovementPatternInput((npc.movement?.pattern ?? []).join(', '));
+    setNpcStepIntervalInput(String(npc.movement?.stepIntervalMs ?? 850));
+    setNpcMovementPathModeInput(npc.movement?.pathMode === 'pingpong' ? 'pingpong' : 'loop');
+    setNpcWanderLeashRadiusInput(
+      Number.isFinite(npc.movement?.leashRadius)
+        ? String(Math.max(1, Math.floor(npc.movement?.leashRadius ?? 0)))
+        : '',
+    );
+    setNpcCharacterIdleAnimationInput(npc.idleAnimation ?? '');
+    setNpcCharacterMoveAnimationInput(npc.moveAnimation ?? '');
+
+    const matchedSprite = npc.sprite
+      ? npcSpriteLibrary.find(
+          (entry) => normalizeAssetUrlForCompare(entry.sprite.url) === normalizeAssetUrlForCompare(npc.sprite?.url ?? ''),
+        ) ?? null
+      : null;
+    setSelectedNpcSpriteId(matchedSprite?.id ?? '');
+    setStatus(`Loaded map NPC "${npc.name}" for editing.`);
+  };
+
+  const removeMapNpcById = (npcId: string) => {
+    setEditableMap((current) => ({
+      ...cloneEditableMap(current),
+      npcs: current.npcs.filter((entry) => entry.id !== npcId),
+    }));
+    if (selectedMapNpcId === npcId) {
+      setSelectedMapNpcId('');
+    }
+    setStatus(`Removed NPC ${npcId} from map.`);
+  };
+
+  const applyNpcEditorToSelectedMapNpc = () => {
+    const npcName = npcCharacterNameInput.trim();
+    if (!npcName) {
+      setError('NPC name is required.');
+      return;
+    }
+    const movement = buildNpcMovementFromEditorInputs();
+    if (!movement) {
+      return;
+    }
+    const interactionScriptResult = parseNpcInteractionScriptInput(npcInteractionScriptInput);
+    if (!interactionScriptResult.ok) {
+      setError(interactionScriptResult.error);
+      return;
+    }
+    const movementGuardsResult = parseNpcMovementGuardsInput(npcMovementGuardsInput);
+    if (!movementGuardsResult.ok) {
+      setError(movementGuardsResult.error);
+      return;
+    }
+
+    const idleAnimation = npcCharacterIdleAnimationInput.trim() || undefined;
+    const moveAnimation = npcCharacterMoveAnimationInput.trim() || undefined;
+    const interactBattleDefeatedFlag = npcInteractBattleDefeatedFlagInput.trim() || undefined;
+    const battleRewardsResult = parseNpcItemRewardsInput(npcBattleRewardsInput);
+    if (!battleRewardsResult.ok) {
+      setError(battleRewardsResult.error);
+      return;
+    }
+    const interactionRewardsResult = parseNpcItemRewardsInput(npcInteractionRewardsInput);
+    if (!interactionRewardsResult.ok) {
+      setError(interactionRewardsResult.error);
+      return;
+    }
+    const battleRewardCatalogError = validateNpcItemRewardsAgainstCatalog(battleRewardsResult.rewards);
+    if (battleRewardCatalogError) {
+      setError(battleRewardCatalogError);
+      return;
+    }
+    const interactionRewardCatalogError = validateNpcItemRewardsAgainstCatalog(interactionRewardsResult.rewards);
+    if (interactionRewardCatalogError) {
+      setError(interactionRewardCatalogError);
+      return;
+    }
+    const battleTeamIds = parseStringList(npcBattleTeamsInput);
+    const interactionRewardSetFlag = npcInteractionRewardSetFlagInput.trim() || undefined;
+    const interactionModeFlags = resolveNpcInteractionFlags(npcInteractionModeInput, npcShopIdInput);
+    const resolvedShopId = interactionModeFlags.shopId;
+    if (npcInteractionModeInput === 'shop') {
+      if (!resolvedShopId) {
+        setError('Shop interaction mode requires a shop selection.');
+        return;
+      }
+      if (knownShopIds.length > 0 && !knownShopIds.includes(resolvedShopId)) {
+        setError(`Shop "${resolvedShopId}" does not exist in the shop catalog.`);
+        return;
+      }
+    }
+    const interactBattleFlagError = validateKnownFlagSelection(
+      interactBattleDefeatedFlag,
+      'Interaction battle transition flag',
+      { required: interactionModeFlags.firstInteractBattle },
+    );
+    if (interactBattleFlagError) {
+      setError(interactBattleFlagError);
+      return;
+    }
+    if (interactionModeFlags.firstInteractBattle) {
+      if (!battleTeamIds || battleTeamIds.length === 0) {
+        setError('Battler NPCs require at least one Battle Team ID.');
+        return;
+      }
+      if (battleRewardsResult.rewards.length === 0) {
+        setError('Battler NPCs require at least one battle reward item.');
+        return;
+      }
+    }
+    const movementGuardBattleValidationError = validateNpcMovementGuardBattles(
+      movementGuardsResult.guards,
+      battleTeamIds,
+      battleRewardsResult.rewards,
+    );
+    if (movementGuardBattleValidationError) {
+      setError(movementGuardBattleValidationError);
+      return;
+    }
+
+    const selectedSpriteEntry = selectedNpcSpriteId
+      ? npcSpriteLibrary.find((entry) => entry.id === selectedNpcSpriteId) ?? null
+      : null;
+    const nextSprite = selectedSpriteEntry
+      ? {
+          ...selectedSpriteEntry.sprite,
+          url: withCacheBusterTag(selectedSpriteEntry.sprite.url),
+          facingFrames: { ...selectedSpriteEntry.sprite.facingFrames },
+          walkFrames: selectedSpriteEntry.sprite.walkFrames
+            ? {
+                up: selectedSpriteEntry.sprite.walkFrames.up ? [...selectedSpriteEntry.sprite.walkFrames.up] : undefined,
+                down: selectedSpriteEntry.sprite.walkFrames.down ? [...selectedSpriteEntry.sprite.walkFrames.down] : undefined,
+                left: selectedSpriteEntry.sprite.walkFrames.left ? [...selectedSpriteEntry.sprite.walkFrames.left] : undefined,
+                right: selectedSpriteEntry.sprite.walkFrames.right ? [...selectedSpriteEntry.sprite.walkFrames.right] : undefined,
+              }
+            : undefined,
+          animationSets: selectedSpriteEntry.sprite.animationSets
+            ? Object.fromEntries(
+                Object.entries(selectedSpriteEntry.sprite.animationSets).map(([name, directions]) => [
+                  name,
+                  {
+                    up: directions?.up ? [...directions.up] : undefined,
+                    down: directions?.down ? [...directions.down] : undefined,
+                    left: directions?.left ? [...directions.left] : undefined,
+                    right: directions?.right ? [...directions.right] : undefined,
+                  },
+                ]),
+              )
+            : undefined,
+        }
+      : selectedMapNpc?.sprite;
+
+    if (selectedCharacterInstance) {
+      const { character, index } = selectedCharacterInstance;
+      updateCharacterTemplateById(character.id, (template) => {
+        const placements = [...getCharacterPlacementInstances(template)];
+        const currentPlacement = placements[index];
+        if (!currentPlacement) {
+          return template;
+        }
+        placements[index] = {
+          ...currentPlacement,
+          facing: npcFacingInput,
+          dialogueId: sanitizeIdentifier(npcDialogueIdInput, 'custom_npc_dialogue'),
+          dialogueSpeaker: npcDialogueSpeakerInput.trim() || undefined,
+          dialogueLines: npcDialogueLinesInput
+            .split('\n')
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0),
+          dialogueSetFlag: npcDialogueSetFlagInput.trim() || undefined,
+          firstInteractionSetFlag: npcFirstInteractionSetFlagInput.trim() || undefined,
+          firstInteractBattle: interactionModeFlags.firstInteractBattle,
+          interactBattleRepeatable: npcInteractBattleRepeatableInput,
+          interactBattleDefeatedFlag,
+          battleRewards: battleRewardsResult.rewards.length > 0 ? battleRewardsResult.rewards : undefined,
+          healer: interactionModeFlags.healer,
+          shopId: resolvedShopId,
+          interactionRewards: interactionRewardsResult.rewards.length > 0 ? interactionRewardsResult.rewards : undefined,
+          interactionRewardSetFlag,
+          battleTeamIds,
+          movement,
+          movementGuards:
+            movementGuardsResult.guards.length > 0 ? movementGuardsResult.guards : undefined,
+          interactionScript: interactionScriptResult.actions.length > 0 ? interactionScriptResult.actions : undefined,
+          idleAnimation,
+          moveAnimation,
+          // Keep map + position + requiresFlag from this timeline entry unless edited via instance controls.
+          mapId: currentPlacement.mapId,
+          position: currentPlacement.position ? { ...currentPlacement.position } : undefined,
+          requiresFlag: currentPlacement.requiresFlag,
+        };
+        return {
+          ...template,
+          label: npcCharacterLabelInput.trim() || template.label,
+          npcName,
+          color: npcCharacterColorInput || '#9b73b8',
+          facing: npcFacingInput,
+          dialogueId: sanitizeIdentifier(npcDialogueIdInput, 'custom_npc_dialogue'),
+          dialogueSpeaker: npcDialogueSpeakerInput.trim() || undefined,
+          dialogueLines: npcDialogueLinesInput
+            .split('\n')
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0),
+          dialogueSetFlag: npcDialogueSetFlagInput.trim() || undefined,
+          firstInteractionSetFlag: npcFirstInteractionSetFlagInput.trim() || undefined,
+          firstInteractBattle: interactionModeFlags.firstInteractBattle,
+          interactBattleRepeatable: npcInteractBattleRepeatableInput,
+          interactBattleDefeatedFlag,
+          battleRewards: battleRewardsResult.rewards.length > 0 ? battleRewardsResult.rewards : undefined,
+          healer: interactionModeFlags.healer,
+          shopId: resolvedShopId,
+          interactionRewards: interactionRewardsResult.rewards.length > 0 ? interactionRewardsResult.rewards : undefined,
+          interactionRewardSetFlag,
+          battleTeamIds,
+          movement,
+          movementGuards:
+            movementGuardsResult.guards.length > 0 ? movementGuardsResult.guards : undefined,
+          interactionScript: interactionScriptResult.actions.length > 0 ? interactionScriptResult.actions : undefined,
+          idleAnimation,
+          moveAnimation,
+          storyStates: compactCharacterPlacementOrder(placements),
+          spriteId: selectedNpcSpriteId || template.spriteId,
+          cacheVersion: Date.now(),
+        };
+      });
+      setStatus(`Updated ${character.npcName} instance #${index + 1}.`);
+      return;
+    }
+
+    if (!selectedMapNpc) {
+      setError('Select an NPC from the map list first.');
+      return;
+    }
+    const storyStatesResult = parseNpcStoryStatesInput(npcStoryStatesInput);
+    if (!storyStatesResult.ok) {
+      setError(storyStatesResult.error);
+      return;
+    }
+    for (const state of storyStatesResult.states) {
+      if (!state.firstInteractBattle) {
+        continue;
+      }
+      const effectiveTeams = state.battleTeamIds && state.battleTeamIds.length > 0 ? state.battleTeamIds : battleTeamIds;
+      const stateDefeatFlag = state.interactBattleDefeatedFlag?.trim() || interactBattleDefeatedFlag;
+      const stateRewards =
+        state.battleRewards && state.battleRewards.length > 0 ? state.battleRewards : battleRewardsResult.rewards;
+      if (!stateDefeatFlag) {
+        setError(`Story state "${state.id ?? '(unnamed)'}" enables battle but has no Defeat Flag.`);
+        return;
+      }
+      if (!effectiveTeams || effectiveTeams.length === 0) {
+        setError(`Story state "${state.id ?? '(unnamed)'}" enables battle but has no Battle Team IDs.`);
+        return;
+      }
+      if (!stateRewards || stateRewards.length === 0) {
+        setError(`Story state "${state.id ?? '(unnamed)'}" enables battle but has no battle rewards.`);
+        return;
+      }
+      const stateDefeatFlagError = validateKnownFlagSelection(
+        stateDefeatFlag,
+        `Story state "${state.id ?? '(unnamed)'}" interaction battle transition flag`,
+        { required: true },
+      );
+      if (stateDefeatFlagError) {
+        setError(stateDefeatFlagError);
+        return;
+      }
+      const stateRewardCatalogError = validateNpcItemRewardsAgainstCatalog(stateRewards);
+      if (stateRewardCatalogError) {
+        setError(stateRewardCatalogError);
+        return;
+      }
+      const stateGuardValidationError = validateNpcMovementGuardBattles(
+        state.movementGuards ?? [],
+        effectiveTeams,
+        stateRewards,
+      );
+      if (stateGuardValidationError) {
+        setError(`Story state "${state.id ?? '(unnamed)'}": ${stateGuardValidationError}`);
+        return;
+      }
+    }
+
+    setEditableMap((current) => {
+      const next = cloneEditableMap(current);
+      const index = next.npcs.findIndex((entry) => entry.id === selectedMapNpc.id);
+      if (index < 0) {
+        return current;
+      }
+      next.npcs[index] = {
+        ...next.npcs[index],
+        name: npcName,
+        color: npcCharacterColorInput || '#9b73b8',
+        facing: npcFacingInput,
+        dialogueId: sanitizeIdentifier(npcDialogueIdInput, 'custom_npc_dialogue'),
+        dialogueSpeaker: npcDialogueSpeakerInput.trim() || undefined,
+        dialogueLines: npcDialogueLinesInput
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0),
+        dialogueSetFlag: npcDialogueSetFlagInput.trim() || undefined,
+        firstInteractionSetFlag: npcFirstInteractionSetFlagInput.trim() || undefined,
+        firstInteractBattle: interactionModeFlags.firstInteractBattle,
+        interactBattleRepeatable: npcInteractBattleRepeatableInput,
+        interactBattleDefeatedFlag,
+        battleRewards: battleRewardsResult.rewards.length > 0 ? battleRewardsResult.rewards : undefined,
+        healer: interactionModeFlags.healer,
+        shopId: resolvedShopId,
+        interactionRewards: interactionRewardsResult.rewards.length > 0 ? interactionRewardsResult.rewards : undefined,
+        interactionRewardSetFlag,
+        battleTeamIds,
+        movement,
+        movementGuards:
+          movementGuardsResult.guards.length > 0 ? movementGuardsResult.guards : undefined,
+        storyStates:
+          storyStatesResult.states.length > 0 ? compactCharacterPlacementOrder(storyStatesResult.states) : undefined,
+        interactionScript: interactionScriptResult.actions.length > 0 ? interactionScriptResult.actions : undefined,
+        idleAnimation,
+        moveAnimation,
+        sprite: nextSprite,
+      };
+      return next;
+    });
+
+    setStatus(`Updated map NPC "${npcName}".`);
   };
 
   const onAtlasCellMouseDown = (atlasIndex: number) => {
@@ -2522,6 +4636,39 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     };
   };
 
+  /** Preview style for one cell of a saved tile. Always uses the tile's own tileset when present; never the editor's current atlas. */
+  const getTileCellPreviewStyle = (tile: SavedPaintTile, cell: SavedPaintTileCell, size: number): CSSProperties => {
+    const url = tile.tilesetUrl?.trim();
+    const tw = tile.tilePixelWidth ?? 0;
+    const th = tile.tilePixelHeight ?? 0;
+    if (url && tw > 0 && th > 0) {
+      const dims = tilesetPreviewCacheRef.current[url];
+      if (dims && dims.width > 0 && dims.height > 0) {
+        const columns = Math.floor(dims.width / tw);
+        const rows = Math.floor(dims.height / th);
+        if (columns > 0 && rows > 0) {
+          const safeIndex = clampInt(cell.atlasIndex, 0, columns * rows - 1);
+          const column = safeIndex % columns;
+          const row = Math.floor(safeIndex / columns);
+          return {
+            backgroundImage: `url(${url})`,
+            backgroundRepeat: 'no-repeat',
+            backgroundSize: `${columns * size}px ${rows * size}px`,
+            backgroundPosition: `-${column * size}px -${row * size}px`,
+            imageRendering: 'pixelated',
+          };
+        }
+      }
+      // Tile has its own tileset but cache not ready yet: show placeholder so we never use the wrong atlas
+      return {
+        backgroundColor: '#1d2731',
+        boxShadow: 'inset 0 0 0 1px rgba(255, 255, 255, 0.1)',
+      };
+    }
+    // Only use editor's current atlas when this tile has no saved tileset (e.g. legacy or new from current atlas)
+    return atlasCellStyle(cell.atlasIndex, size);
+  };
+
   const npcAtlasCellStyle = (atlasIndex: number, size: number): CSSProperties => {
     if (!npcSpriteUrl || !npcSpriteMeta.loaded || npcSpriteMeta.columns <= 0 || npcSpriteMeta.rows <= 0) {
       return {
@@ -2543,7 +4690,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     };
   };
 
-  const tileCellStyle = (code: EditorTileCode, size: number, rotationQuarter = 0): CSSProperties => {
+  const tileCellStyle = (code: EditorTileCode, size: number, tileTransform = 0): CSSProperties => {
     if (code === BLANK_TILE_CODE) {
       return {
         width: `${size}px`,
@@ -2565,39 +4712,95 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           imageRendering: 'pixelated',
         };
 
-    const withRotation = (base: CSSProperties): CSSProperties => {
+    const withRotationAndMirror = (base: CSSProperties): CSSProperties => {
       const style = { ...base };
-      if (rotationQuarter % 4 !== 0) {
-        style.transform = `rotate(${(rotationQuarter % 4) * 90}deg)`;
+      const decoded = decodeTileTransform(tileTransform);
+      const transforms: string[] = [];
+      if (decoded.rotationQuarter % 4 !== 0) {
+        transforms.push(`rotate(${(decoded.rotationQuarter % 4) * 90}deg)`);
+      }
+      if (decoded.mirrorHorizontal) {
+        transforms.push('scaleX(-1)');
+      }
+      if (transforms.length > 0) {
+        style.transform = transforms.join(' ');
         style.transformOrigin = 'center center';
       }
       return style;
     };
 
+    const tileRenderSource = tileRenderSourceByCode.get(code);
+    if (tileRenderSource?.hasOwnTileset) {
+      if (
+        tileRenderSource.tilesetUrl &&
+        tileRenderSource.columns > 0 &&
+        tileRenderSource.rows > 0
+      ) {
+        const safeIndex = clampInt(
+          tileRenderSource.atlasIndex,
+          0,
+          Math.max(0, tileRenderSource.columns * tileRenderSource.rows - 1),
+        );
+        const column = safeIndex % tileRenderSource.columns;
+        const row = Math.floor(safeIndex / tileRenderSource.columns);
+        return withRotationAndMirror({
+          ...fallback,
+          backgroundImage: `url(${tileRenderSource.tilesetUrl})`,
+          backgroundRepeat: 'no-repeat',
+          backgroundSize: `${tileRenderSource.columns * size}px ${tileRenderSource.rows * size}px`,
+          backgroundPosition: `-${column * size}px -${row * size}px`,
+          imageRendering: 'pixelated',
+        });
+      }
+      return withRotationAndMirror(fallback);
+    }
+
     if (!tilesetUrl || !atlasMeta.loaded || atlasMeta.columns <= 0 || atlasMeta.rows <= 0) {
-      return withRotation(fallback);
+      return withRotationAndMirror(fallback);
     }
 
-    const tileIndex = atlasIndexByCode.get(code);
+    const tileIndex = tileRenderSource?.atlasIndex;
     if (tileIndex === undefined || !Number.isFinite(tileIndex) || tileIndex < 0) {
-      return withRotation(fallback);
+      return withRotationAndMirror(fallback);
     }
 
-    return withRotation({
+    return withRotationAndMirror({
       ...fallback,
       ...atlasCellStyle(tileIndex, size),
     });
   };
 
-  const headerTitle = isTilesSection ? 'Tile Library' : isNpcsSection ? 'NPC Studio' : 'Map Editor';
+  const headerTitle = isTilesSection
+    ? 'Tile Library'
+    : isNpcSpritesSection
+      ? 'NPC Sprite Studio'
+    : isNpcCharactersSection
+        ? 'NPC Character Studio'
+        : isNpcsSection
+          ? 'NPC Studio'
+          : 'Map Editor';
   const headerDescription = isTilesSection
     ? 'Load tilesets, pick 1x1 or larger tile regions, and save reusable tile stamps.'
-    : isNpcsSection
-      ? 'Build reusable NPC sprite animations and character templates in a dedicated catalog.'
-      : 'Create new maps, edit existing ones, and configure warps between maps.';
+    : isNpcSpritesSection
+      ? 'Build reusable NPC sprite sheets, directional frames, and animation sets.'
+    : isNpcCharactersSection
+        ? 'Create NPC characters from saved sprites and configure behavior + story-state rules.'
+        : isNpcsSection
+          ? 'Load existing maps, place NPCs, and edit map-specific story behavior.'
+          : 'Create new maps, edit existing ones, and configure warps between maps.';
 
   return (
     <section className={`admin-tool ${embedded ? 'admin-tool--embedded' : ''}`}>
+      <datalist id="admin-flag-options">
+        {knownFlagIds.map((flagId) => (
+          <option key={`admin-flag-option-${flagId}`} value={flagId} />
+        ))}
+      </datalist>
+      <datalist id="admin-item-options">
+        {knownItemIds.map((itemId) => (
+          <option key={`admin-item-option-${itemId}`} value={itemId} />
+        ))}
+      </datalist>
       {!embedded && (
         <header className="admin-tool__header">
           <div>
@@ -2625,9 +4828,9 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
             <div className="admin-row">
               <select value={selectedSourceMapId} onChange={(event) => setSelectedSourceMapId(event.target.value)}>
                 <option value="">Select existing map</option>
-                {sourceMaps.map((map) => (
-                  <option key={map.id} value={map.id}>
-                    {map.id}
+                {sourceMapRows.map((row) => (
+                  <option key={row.mapId} value={row.mapId}>
+                    {row.mapId}
                   </option>
                 ))}
               </select>
@@ -2639,12 +4842,307 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
               </button>
             </div>
             <p className="admin-note">
-              Editor starts blank. Load a map, create one, or import JSON to begin.
+              {isNpcsSection
+                ? 'NPC Studio works on existing maps only. Load a map, then paint/edit/remove NPC characters.'
+                : 'Editor starts blank. Load a map, create one, or import JSON to begin.'}
             </p>
           </section>
           )}
 
-          {showMapEditing && (
+          {isNpcCharactersSection && selectedCharacterForInstanceList && (
+          <section className="admin-panel">
+            <h3>{selectedCharacterForInstanceList.npcName} Instances</h3>
+            <p className="admin-note">
+              Pick an instance to edit its full dialogue, team, and movement in the character form below.
+            </p>
+            <div className="admin-row">
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  const fallbackMapId =
+                    selectedCharacterInstances[selectedCharacterInstances.length - 1]?.mapId || sourceMapIds[0] || '';
+                  if (!fallbackMapId) {
+                    setError('Load maps before adding an NPC instance so a map target can be assigned.');
+                    return;
+                  }
+                  addCharacterPlacementInstance(selectedCharacterForInstanceList.id, fallbackMapId, { x: 0, y: 0 });
+                }}
+              >
+                Add Instance
+              </button>
+            </div>
+            <div className="npc-instance-list">
+              {selectedCharacterInstances.length === 0 && (
+                <p className="admin-note">No instances yet. Add one to place this character in the story timeline.</p>
+              )}
+              {selectedCharacterInstances.map((placement, index, list) => {
+                const movementType = toEditorNpcMovementType(placement.movement?.type);
+                const battleTeams = (placement.battleTeamIds ?? []).join(', ') || 'No battle team';
+                const interactionMode = resolveNpcInteractionMode(placement);
+                return (
+                  <article
+                    key={`character-instance-card-${selectedCharacterForInstanceList.id}-${index}`}
+                    className={`npc-instance-card ${
+                      selectedCharacterInstanceKey === `${selectedCharacterForInstanceList.id}:${index}` ? 'is-selected' : ''
+                    }`}
+                  >
+                    <div className="npc-instance-card__header">
+                      <h4>Instance #{index + 1}</h4>
+                      <p className="npc-instance-card__meta">
+                        {movementType} | {battleTeams}
+                      </p>
+                    </div>
+                    <div className="admin-grid-2 npc-instance-card__fields">
+                      <label>
+                        Map ID
+                        <select
+                          value={placement.mapId ?? ''}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              mapId: event.target.value,
+                            }))
+                          }
+                        >
+                          <option value="">(Select map)</option>
+                          {sourceMapIds.map((mapId) => (
+                            <option key={mapId} value={mapId}>
+                              {mapId}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Requires Flag
+                        <input
+                          list="admin-flag-options"
+                          value={placement.requiresFlag ?? ''}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              requiresFlag: event.target.value.trim() || undefined,
+                            }))
+                          }
+                          placeholder="(none)"
+                        />
+                      </label>
+                      <label>
+                        Position X
+                        <input
+                          type="number"
+                          value={String(placement.position?.x ?? 0)}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              position: {
+                                x: Number.parseInt(event.target.value, 10) || 0,
+                                y: entry.position?.y ?? 0,
+                              },
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        Position Y
+                        <input
+                          type="number"
+                          value={String(placement.position?.y ?? 0)}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              position: {
+                                x: entry.position?.x ?? 0,
+                                y: Number.parseInt(event.target.value, 10) || 0,
+                              },
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        Set Flag On First Interaction
+                        <input
+                          list="admin-flag-options"
+                          value={placement.firstInteractionSetFlag ?? ''}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              firstInteractionSetFlag: event.target.value.trim() || undefined,
+                            }))
+                          }
+                          placeholder="(none)"
+                        />
+                      </label>
+                      <label>
+                        Interaction Mode
+                        <select
+                          value={interactionMode}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => {
+                              const mode = event.target.value as NpcInteractionMode;
+                              const resolved = resolveNpcInteractionFlags(mode, entry.shopId ?? '');
+                              return {
+                                ...entry,
+                                firstInteractBattle: resolved.firstInteractBattle,
+                                healer: resolved.healer,
+                                shopId: resolved.shopId,
+                              };
+                            })
+                          }
+                        >
+                          <option value="dialogue">Dialogue</option>
+                          <option value="battle">Battle</option>
+                          <option value="healer">Healer</option>
+                          <option value="shop">Shop</option>
+                        </select>
+                      </label>
+                      {interactionMode === 'shop' && (
+                        <label>
+                          Shop
+                          <select
+                            value={placement.shopId ?? ''}
+                            onChange={(event) =>
+                              updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                                ...entry,
+                                shopId: event.target.value.trim() || undefined,
+                              }))
+                            }
+                          >
+                            <option value="">(Select shop)</option>
+                            {knownShopIds.map((shopId) => (
+                              <option key={`npc-character-instance-shop-${index}-${shopId}`} value={shopId}>
+                                {shopNameById.get(shopId) ?? shopId} ({shopId})
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      {interactionMode === 'battle' && (
+                        <>
+                          <label>
+                            Repeat Interaction Battle After Win?
+                            <input
+                              type="checkbox"
+                              checked={Boolean(placement.interactBattleRepeatable)}
+                              onChange={(event) =>
+                                updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                                  ...entry,
+                                  interactBattleRepeatable: event.target.checked,
+                                }))
+                              }
+                            />
+                          </label>
+                          <label>
+                            Battle Win Transition Flag
+                            <select
+                              value={placement.interactBattleDefeatedFlag ?? ''}
+                              onChange={(event) =>
+                                updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                                  ...entry,
+                                  interactBattleDefeatedFlag: event.target.value.trim() || undefined,
+                                }))
+                              }
+                            >
+                              <option value="">(Select existing flag)</option>
+                              {knownFlagIds.map((flagId) => (
+                                <option key={`npc-character-instance-battle-flag-${index}-${flagId}`} value={flagId}>
+                                  {flagId}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            Battle Rewards
+                            <input
+                              list="admin-item-options"
+                              value={formatNpcItemRewardsInput(placement.battleRewards)}
+                              onChange={(event) =>
+                                updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => {
+                                  const parsed = parseNpcItemRewardsInput(event.target.value);
+                                  return {
+                                    ...entry,
+                                    battleRewards: parsed.ok && parsed.rewards.length > 0 ? parsed.rewards : undefined,
+                                  };
+                                })
+                              }
+                              placeholder="lume:25, field-bandage:1"
+                            />
+                          </label>
+                        </>
+                      )}
+                      <label>
+                        Interaction Rewards
+                        <input
+                          list="admin-item-options"
+                          value={formatNpcItemRewardsInput(placement.interactionRewards)}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => {
+                              const parsed = parseNpcItemRewardsInput(event.target.value);
+                              return {
+                                ...entry,
+                                interactionRewards:
+                                  parsed.ok && parsed.rewards.length > 0 ? parsed.rewards : undefined,
+                              };
+                            })
+                          }
+                          placeholder="lume:5, field-bandage:1"
+                        />
+                      </label>
+                      <label>
+                        Interaction Reward Once Flag
+                        <input
+                          list="admin-flag-options"
+                          value={placement.interactionRewardSetFlag ?? ''}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              interactionRewardSetFlag: event.target.value.trim() || undefined,
+                            }))
+                          }
+                          placeholder="optional"
+                        />
+                      </label>
+                    </div>
+                    <div className="admin-row npc-instance-card__actions">
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => loadCharacterPlacementIntoEditor(selectedCharacterForInstanceList.id, index)}
+                      >
+                        Edit In Main Form
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => moveCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, 'up')}
+                        disabled={index <= 0}
+                      >
+                        Up
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => moveCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, 'down')}
+                        disabled={index >= list.length - 1}
+                      >
+                        Down
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => removeCharacterPlacementInstance(selectedCharacterForInstanceList.id, index)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+          )}
+
+          {showMapEditing && !isNpcsSection && (
           <section className="admin-panel">
             <h3>New Map</h3>
             <div className="admin-grid-2">
@@ -2694,7 +5192,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           </section>
           )}
 
-          {showMapEditing && (
+          {showMapEditing && !isNpcsSection && (
           <section className="admin-panel">
             <h3>Active Map</h3>
             <div className="admin-grid-2">
@@ -2725,13 +5223,98 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                 />
               </label>
               <label>
+                Camera Size (tiles)
+                <span className="admin-inline-inputs">
+                  <input
+                    type="number"
+                    min={1}
+                    max={64}
+                    value={editableMap.cameraSize?.widthTiles ?? 19}
+                    disabled={!hasMapLoaded}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10);
+                      if (!Number.isFinite(n) || n < 1) return;
+                      setEditableMap((c) => ({
+                        ...cloneEditableMap(c),
+                        cameraSize: { widthTiles: Math.min(64, n), heightTiles: c.cameraSize?.heightTiles ?? 15 },
+                      }));
+                    }}
+                    title="Viewport width in tiles"
+                  />
+                  <span>×</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={64}
+                    value={editableMap.cameraSize?.heightTiles ?? 15}
+                    disabled={!hasMapLoaded}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10);
+                      if (!Number.isFinite(n) || n < 1) return;
+                      setEditableMap((c) => ({
+                        ...cloneEditableMap(c),
+                        cameraSize: { widthTiles: c.cameraSize?.widthTiles ?? 19, heightTiles: Math.min(64, n) },
+                      }));
+                    }}
+                    title="Viewport height in tiles"
+                  />
+                </span>
+              </label>
+              <label>
+                Camera Point
+                <span className="admin-inline-inputs">
+                  <input
+                    type="number"
+                    min={0}
+                    value={editableMap.cameraPoint != null ? editableMap.cameraPoint.x : ''}
+                    disabled={!hasMapLoaded}
+                    placeholder="x"
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10);
+                      setEditableMap((c) => ({
+                        ...cloneEditableMap(c),
+                        cameraPoint: c.cameraPoint
+                          ? { ...c.cameraPoint, x: Number.isFinite(n) ? Math.max(0, n) : 0 }
+                          : Number.isFinite(n) ? { x: Math.max(0, n), y: 0 } : null,
+                      }));
+                    }}
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    value={editableMap.cameraPoint != null ? editableMap.cameraPoint.y : ''}
+                    disabled={!hasMapLoaded}
+                    placeholder="y"
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10);
+                      setEditableMap((c) => ({
+                        ...cloneEditableMap(c),
+                        cameraPoint: c.cameraPoint
+                          ? { ...c.cameraPoint, y: Number.isFinite(n) ? Math.max(0, n) : 0 }
+                          : Number.isFinite(n) ? { x: 0, y: Math.max(0, n) } : null,
+                      }));
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={!hasMapLoaded || editableMap.cameraPoint == null}
+                    onClick={() =>
+                      setEditableMap((c) => ({ ...cloneEditableMap(c), cameraPoint: null }))
+                    }
+                  >
+                    Clear
+                  </button>
+                </span>
+              </label>
+              <label>
                 Active Layer
                 <select
                   value={activeLayer?.id ?? ''}
                   disabled={!hasMapLoaded}
                   onChange={(event) => setActiveLayerId(event.target.value)}
                 >
-                  {editableMap.layers.map((layer) => (
+                  {orderedLayers.map((layer) => (
                     <option key={layer.id} value={layer.id}>
                       {layer.id} - {layer.name}
                     </option>
@@ -2741,16 +5324,22 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
               <label>
                 Layer ID
                 <input
-                  value={activeLayer?.id ?? ''}
+                  type="number"
+                  min={1}
+                  value={activeLayer ? String(parseLayerOrderId(activeLayer.id) ?? '') : ''}
                   disabled={!activeLayer}
                   onChange={(event) => {
                     if (!activeLayer) {
                       return;
                     }
+                    const nextValue = parseInteger(event.target.value);
+                    if (!nextValue || nextValue < 1) {
+                      return;
+                    }
                     const nextId = makeUniqueLayerId(
                       editableMap.layers,
                       activeLayer.id,
-                      sanitizeIdentifier(event.target.value, activeLayer.id),
+                      nextValue,
                     );
                     updateActiveLayer((layer) => ({
                       ...layer,
@@ -2862,6 +5451,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                 ? `Current size: ${mapSize.width}x${mapSize.height} | Layers: ${editableMap.layers.length}`
                 : 'No active map loaded.'}
             </p>
+            <p className="admin-note">Layer render order uses numeric IDs: higher IDs draw above lower IDs.</p>
           </section>
           )}
 
@@ -2893,10 +5483,68 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                   onChange={(event) => setTilePixelHeightInput(event.target.value)}
                 />
               </label>
+              <p className="admin-note">Use Supabase Tilesets below to select a tileset image (no local file or blob URLs).</p>
+            </div>
+            <h4>Supabase Tilesets</h4>
+            <div className="admin-grid-2">
               <label>
-                Load from File
-                <input type="file" accept="image/*" onChange={onTilesetFileSelected} />
+                Bucket
+                <input value={tilesetBucketInput} onChange={(event) => setTilesetBucketInput(event.target.value)} />
               </label>
+              <label>
+                Prefix (Optional)
+                <input value={tilesetPrefixInput} onChange={(event) => setTilesetPrefixInput(event.target.value)} />
+              </label>
+            </div>
+            <div className="admin-row">
+              <label>
+                Search
+                <input
+                  value={tilesetSearchInput}
+                  onChange={(event) => setTilesetSearchInput(event.target.value)}
+                  placeholder="Search by file name or path"
+                />
+              </label>
+              <button
+                type="button"
+                className="secondary"
+                onClick={loadTilesetSupabaseAssets}
+                disabled={isLoadingTilesetSupabaseAssets}
+              >
+                {isLoadingTilesetSupabaseAssets ? 'Loading...' : 'Reload Bucket'}
+              </button>
+            </div>
+            <div className="spritesheet-browser">
+              {filteredTilesetSupabaseAssets.length === 0 && (
+                <p className="admin-note">
+                  {isLoadingTilesetSupabaseAssets ? 'Loading tilesets...' : 'No PNG tilesets found.'}
+                </p>
+              )}
+              {filteredTilesetSupabaseAssets.map((entry) => (
+                <div
+                  key={`tileset-supabase-asset-${entry.path}`}
+                  className={`spritesheet-browser__row ${selectedTilesetSupabasePath === entry.path ? 'is-selected' : ''}`}
+                >
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => {
+                      setTilesetUrlInput(entry.publicUrl);
+                      setTilesetUrl(entry.publicUrl);
+                      setSelectedTilesetSupabasePath(entry.path);
+                      setStatus(`Loaded tileset "${entry.path}" from Supabase.`);
+                    }}
+                  >
+                    Load
+                  </button>
+                  <span className="spritesheet-browser__meta" title={entry.path}>
+                    {entry.path}
+                  </span>
+                  <span className="spritesheet-browser__meta">
+                    {entry.updatedAt ? new Date(entry.updatedAt).toLocaleDateString() : '-'}
+                  </span>
+                </div>
+              ))}
             </div>
             <div className="admin-row">
               <button type="button" className="secondary" onClick={applyTilesetUrl}>
@@ -2911,8 +5559,23 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
               <button type="button" className="secondary" onClick={loadSavedPaintTilesFromDatabase}>
                 Load Saved Tiles
               </button>
+              <button
+                type="button"
+                className="primary"
+                onClick={() => persistSavedPaintTiles(savedPaintTiles)}
+                disabled={savedPaintTiles.length === 0}
+              >
+                Save Tile Library
+              </button>
               <button type="button" className="secondary" onClick={clearSavedPaintTiles} disabled={savedPaintTiles.length === 0}>
                 Clear Saved Tiles
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setShowClearTilesConfirm(true)}
+              >
+                Clear Database Tiles
               </button>
             </div>
             <p className="admin-note">
@@ -2992,46 +5655,185 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
             <h4>Saved Paint Tiles</h4>
             <p className="admin-note">Rename, select, or remove saved tiles. New tiles persist to IndexedDB.</p>
             <div className="saved-paint-list">
-              {savedPaintTiles.length === 0 && <p className="admin-note">No saved paint tiles yet.</p>}
-              {savedPaintTiles.map((tile) => (
-                <div key={tile.id} className={`saved-paint-row ${selectedPaintTileId === tile.id ? 'is-selected' : ''}`}>
-                  <button type="button" className="secondary" onClick={() => selectPaintTile(tile.id)}>
-                    Use
-                  </button>
-                  <div
-                    className="saved-paint-row__preview-grid"
-                    style={{ gridTemplateColumns: `repeat(${tile.width}, 18px)` }}
-                  >
-                    {tile.cells.map((cell) => (
-                      <span
-                        key={`${tile.id}-${cell.dx}-${cell.dy}`}
-                        className="saved-paint-row__preview"
-                        style={atlasCellStyle(cell.atlasIndex, 18)}
-                      />
-                    ))}
-                  </div>
-                  <input
-                    value={tile.name}
-                    onChange={(event) =>
-                      updateSavedPaintTile(tile.id, (current) => ({
-                        ...current,
-                        name: event.target.value,
+              {sortedSavedPaintTiles.length === 0 && <p className="admin-note">No saved paint tiles yet.</p>}
+              {sortedSavedPaintTiles.map((tile) => {
+                const currentTilesetUrl = tile.tilesetUrl?.trim() || '';
+                const availableTilesets = [
+                  ...(tilesetSupabaseAssets.length > 0
+                    ? tilesetSupabaseAssets.map((asset) => ({
+                        url: asset.publicUrl,
+                        label: asset.path,
+                        isCurrent: asset.publicUrl === currentTilesetUrl,
                       }))
-                    }
-                  />
-                  <span className="saved-paint-row__meta">
-                    {tile.width}x{tile.height} | {tile.cells.length} codes
-                  </span>
-                  <button type="button" className="secondary" onClick={() => removePaintTile(tile.id)}>
-                    Remove
-                  </button>
-                </div>
-              ))}
+                    : currentTilesetUrl
+                      ? [{ url: currentTilesetUrl, label: currentTilesetUrl, isCurrent: true }]
+                      : []),
+                  ...(tilesetUrl && tilesetUrl.trim() && !tilesetUrl.startsWith('blob:') && tilesetUrl !== currentTilesetUrl
+                    ? [{ url: tilesetUrl, label: 'Current Editor Tileset', isCurrent: false }]
+                    : []),
+                ];
+                const uniqueTilesets = Array.from(
+                  new Map(availableTilesets.map((t) => [t.url, t])).values(),
+                );
+                return (
+                  <div key={tile.id} className={`saved-paint-row ${selectedPaintTileId === tile.id ? 'is-selected' : ''}`}>
+                    <button type="button" className="secondary" onClick={() => selectPaintTile(tile.id)}>
+                      Use
+                    </button>
+                    <div
+                      className="saved-paint-row__preview-grid"
+                      style={{ gridTemplateColumns: `repeat(${tile.width}, 18px)` }}
+                    >
+                      {tile.cells.map((cell) => (
+                        <span
+                          key={`${tile.id}-${cell.dx}-${cell.dy}`}
+                          className="saved-paint-row__preview"
+                          style={getTileCellPreviewStyle(tile, cell, 18)}
+                        />
+                      ))}
+                    </div>
+                    <input
+                      value={tile.name}
+                      onChange={(event) =>
+                        updateSavedPaintTile(tile.id, (current) => ({
+                          ...current,
+                          name: event.target.value,
+                        }))
+                      }
+                    />
+                    <label>
+                      Tileset
+                      <select
+                        value={currentTilesetUrl}
+                        onChange={(event) => {
+                          const newUrl = event.target.value.trim();
+                          const tilePxW = parseInteger(tilePixelWidthInput) || tile.tilePixelWidth || 16;
+                          const tilePxH = parseInteger(tilePixelHeightInput) || tile.tilePixelHeight || 16;
+                          updateSavedPaintTile(tile.id, (current) => ({
+                            ...current,
+                            tilesetUrl: newUrl || undefined,
+                            tilePixelWidth: newUrl ? tilePxW : undefined,
+                            tilePixelHeight: newUrl ? tilePxH : undefined,
+                          }));
+                        }}
+                      >
+                        <option value="">Use Editor Tileset</option>
+                        {uniqueTilesets.map((ts) => (
+                          <option key={ts.url} value={ts.url}>
+                            {ts.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Y-Sort With Actors
+                      <input
+                        type="checkbox"
+                        checked={tile.ySortWithActors}
+                        onChange={(event) =>
+                          updateSavedPaintTile(tile.id, (current) => ({
+                            ...current,
+                            ySortWithActors: event.target.checked,
+                          }))
+                        }
+                      />
+                    </label>
+                    <details className="saved-paint-row__cells-editor">
+                      <summary>Edit Cell Coordinates ({tile.cells.length} cells)</summary>
+                      <div className="saved-paint-row__cells-list">
+                        {tile.cells.map((cell, cellIdx) => (
+                          <div key={`${tile.id}-cell-${cellIdx}`} className="saved-paint-row__cell-editor">
+                            <span className="saved-paint-row__cell-preview" style={getTileCellPreviewStyle(tile, cell, 24)} />
+                            <label>
+                              Code: {cell.code}
+                              <input
+                                type="number"
+                                min={0}
+                                value={cell.atlasIndex}
+                                onChange={(event) => {
+                                  const newIndex = Math.max(0, Math.floor(Number(event.target.value) || 0));
+                                  updateSavedPaintTile(tile.id, (current) => ({
+                                    ...current,
+                                    cells: current.cells.map((c, idx) =>
+                                      idx === cellIdx ? { ...c, atlasIndex: newIndex } : c,
+                                    ),
+                                  }));
+                                }}
+                              />
+                            </label>
+                            <span className="saved-paint-row__cell-meta">
+                              dx: {cell.dx}, dy: {cell.dy}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                    <span className="saved-paint-row__meta">
+                      {tile.width}x{tile.height} | {tile.cells.length} codes | {tile.ySortWithActors ? 'Y-sort' : 'Flat'}
+                      {currentTilesetUrl && (
+                        <>
+                          {' | '}
+                          <span title={currentTilesetUrl}>Custom Tileset</span>
+                        </>
+                      )}
+                    </span>
+                    <button type="button" className="secondary" onClick={() => removePaintTile(tile.id)}>
+                      Remove
+                    </button>
+                  </div>
+                );
+              })}
             </div>
+
+            {showClearTilesConfirm && (
+              <div className="controls-modal__backdrop" onClick={() => setShowClearTilesConfirm(false)}>
+                <div className="controls-modal" onClick={(event) => event.stopPropagation()}>
+                  <h2>Clear All Database Tiles</h2>
+                  <p style={{ color: '#ffb3b3', fontWeight: 600 }}>
+                    ⚠️ Warning: This will DELETE ALL tiles from the database.
+                  </p>
+                  <p>This action cannot be undone. All saved tiles will be permanently removed.</p>
+                  <div className="admin-row" style={{ marginTop: '1rem', gap: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={async () => {
+                        try {
+                          const result = await apiFetchJson<{ ok: boolean; deletedCount?: number }>('/api/admin/tiles/clear', {
+                            method: 'POST',
+                          });
+                          if (!result.ok) {
+                            throw new Error(result.error ?? 'Failed to clear tiles from database.');
+                          }
+                          setSavedPaintTiles([]);
+                          setSelectedPaintTileId('');
+                          setSelectedTileCode('');
+                          setShowClearTilesConfirm(false);
+                          setStatus(`Cleared ${result.data?.deletedCount ?? 0} tile(s) from database.`);
+                        } catch (error) {
+                          const message = error instanceof Error ? error.message : 'Unable to clear tiles from database.';
+                          setError(message);
+                          setShowClearTilesConfirm(false);
+                        }
+                      }}
+                    >
+                      Confirm Delete
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => setShowClearTilesConfirm(false)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
           )}
 
-          {showMapEditing && (
+          {showMapEditing && !isNpcsSection && (
           <section className="admin-panel">
             <h3>Warp Editor</h3>
             <div className="admin-row">
@@ -3182,10 +5984,18 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                   Apply Coordinate Lists
                 </button>
                 <div className="admin-row">
-                  <button type="button" className="secondary" onClick={() => setTool('warp-from')}>
+                  <button
+                    type="button"
+                    className={`secondary ${tool === 'warp-from' ? 'is-selected' : ''}`}
+                    onClick={() => toggleTool('warp-from')}
+                  >
                     Paint Warp From
                   </button>
-                  <button type="button" className="secondary" onClick={() => setTool('warp-to')}>
+                  <button
+                    type="button"
+                    className={`secondary ${tool === 'warp-to' ? 'is-selected' : ''}`}
+                    onClick={() => toggleTool('warp-to')}
+                  >
                     Paint Warp To
                   </button>
                 </div>
@@ -3213,23 +6023,225 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           </section>
           )}
 
+          {showMapEditing && !isNpcsSection && (
+          <section className="admin-panel">
+            <h3>Encounter Tools</h3>
+            <div className="admin-row">
+              <button
+                type="button"
+                className="secondary"
+                onClick={loadEncounterDataFromDatabase}
+                disabled={isLoadingEncounterTables}
+              >
+                {isLoadingEncounterTables ? 'Loading...' : 'Reload Encounter Pools'}
+              </button>
+              <button type="button" className="secondary" onClick={startEncounterGroupDraft}>
+                New Encounter Group
+              </button>
+              <button type="button" className="primary" onClick={applyEncounterGroupToMap}>
+                Set Encounter
+              </button>
+              <button type="button" className="secondary" onClick={removeSelectedEncounterGroup} disabled={!selectedEncounterGroup}>
+                Remove Group
+              </button>
+              <button type="button" className="secondary" onClick={clearEncounterSelection}>
+                Clear Selection
+              </button>
+              <button
+                type="button"
+                className={`secondary ${tool === 'encounter-select' ? 'is-selected' : ''}`}
+                onClick={() => toggleTool('encounter-select')}
+              >
+                Select Cells
+              </button>
+            </div>
+
+            <div className="admin-grid-2">
+              <label>
+                Current Encounter Group
+                <select
+                  value={selectedEncounterGroupId}
+                  onChange={(event) => {
+                    const nextId = event.target.value;
+                    if (!nextId) {
+                      startEncounterGroupDraft();
+                      return;
+                    }
+                    setSelectedEncounterGroupId(nextId);
+                  }}
+                >
+                  <option value="">Draft New Group</option>
+                  {editableMap.encounterGroups.map((group) => (
+                    <option key={group.id} value={group.id}>
+                      {group.id} ({group.tilePositions.length} tiles)
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Encounter Group ID
+                <input
+                  value={encounterGroupIdInput}
+                  onChange={(event) => setEncounterGroupIdInput(event.target.value)}
+                  placeholder="tall-grass-route-1"
+                />
+              </label>
+              <label>
+                Walk Encounter Pool
+                <select value={encounterWalkTableIdInput} onChange={(event) => setEncounterWalkTableIdInput(event.target.value)}>
+                  <option value="">None</option>
+                  {encounterTables.map((table) => (
+                    <option key={`walk-encounter-${table.id}`} value={table.id}>
+                      {table.id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Fish Encounter Pool
+                <select value={encounterFishTableIdInput} onChange={(event) => setEncounterFishTableIdInput(event.target.value)}>
+                  <option value="">None</option>
+                  {encounterTables.map((table) => (
+                    <option key={`fish-encounter-${table.id}`} value={table.id}>
+                      {table.id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Walk Frequency ({encounterWalkFrequencyPercent}%)
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={encounterWalkFrequencyPercent}
+                  onChange={(event) => setEncounterWalkFrequencyPercent(clampInt(Number(event.target.value), 0, 100))}
+                />
+              </label>
+              <label>
+                Fish Frequency ({encounterFishFrequencyPercent}%)
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={encounterFishFrequencyPercent}
+                  onChange={(event) => setEncounterFishFrequencyPercent(clampInt(Number(event.target.value), 0, 100))}
+                />
+              </label>
+            </div>
+
+            <div className="admin-row">
+              <label>
+                Add Tile Index X
+                <input
+                  value={encounterManualTileXInput}
+                  onChange={(event) => setEncounterManualTileXInput(event.target.value)}
+                  placeholder="12"
+                />
+              </label>
+              <label>
+                Add Tile Index Y
+                <input
+                  value={encounterManualTileYInput}
+                  onChange={(event) => setEncounterManualTileYInput(event.target.value)}
+                  placeholder="8"
+                />
+              </label>
+              <button type="button" className="secondary" onClick={addManualEncounterTileIndex}>
+                Add Tile Index
+              </button>
+            </div>
+
+            <p className="admin-note">
+              Select non-empty map cells with Encounter Tools {'>'} Select Cells (left click sets, shift+click adds, right click removes).
+              Walk/Fish pool defaults are None. Pools loaded: {encounterTables.length}. Critters loaded: {encounterCritters.length}.
+            </p>
+            <div className="encounter-selection-list">
+              {selectedCellKeys.map((key) => (
+                <button
+                  key={`encounter-selected-cell-${key}`}
+                  type="button"
+                  className="secondary"
+                  onClick={() => {
+                    const parsed = parseCellKey(key);
+                    if (!parsed) {
+                      return;
+                    }
+                    removeEncounterSelectionCell(parsed.x, parsed.y);
+                  }}
+                >
+                  {key}
+                </button>
+              ))}
+              {selectedCellKeys.length === 0 && <p className="admin-note">No encounter cells selected.</p>}
+            </div>
+          </section>
+          )}
+
+          {showMapEditing && !isNpcsSection && (
+          <section className="admin-panel">
+            <h3>Heal Tile Tools</h3>
+            <div className="admin-grid-2">
+              <label>
+                Heal Interaction ID Prefix
+                <input
+                  value={healTileInteractionIdPrefixInput}
+                  onChange={(event) => setHealTileInteractionIdPrefixInput(event.target.value)}
+                  placeholder="heal-tile"
+                />
+              </label>
+              <label>
+                Selected Cells
+                <input value={selectedCellKeys.join(', ')} readOnly placeholder="Use Select Cells tool" />
+              </label>
+            </div>
+            <div className="admin-row">
+              <button type="button" className="primary" onClick={applyHealTilesToSelection}>
+                Set Heal Tile(s)
+              </button>
+              <button type="button" className="secondary" onClick={removeHealTilesFromSelection}>
+                Remove Heal Tile(s)
+              </button>
+              <button
+                type="button"
+                className={`secondary ${tool === 'encounter-select' ? 'is-selected' : ''}`}
+                onClick={() => toggleTool('encounter-select')}
+              >
+                Select Cells
+              </button>
+            </div>
+            <p className="admin-note">
+              Heal tiles are saved as interactions with <code>kind: "heal_tile"</code>. At runtime they prompt the player, heal the
+              squad on Yes, and update blackout respawn to the current map position.
+            </p>
+          </section>
+          )}
+
           {showNpcStudio && (
           <section className="admin-panel">
-            <h3>{isNpcsSection ? 'NPC Studio' : 'NPC Painter'}</h3>
+            <h3>
+              {isNpcSpritesSection
+                ? 'NPC Sprite Studio'
+                : isNpcCharactersSection
+                  ? 'NPC Character Studio'
+                  : isNpcsSection
+                    ? 'NPC Map Placement'
+                    : 'NPC Studio'}
+            </h3>
             <div className="admin-row">
               {showMapEditing && (
                 <>
                   <button
                     type="button"
                     className={`secondary ${tool === 'npc-paint' ? 'is-selected' : ''}`}
-                    onClick={() => setTool('npc-paint')}
+                    onClick={() => toggleTool('npc-paint')}
                   >
                     NPC Paint
                   </button>
                   <button
                     type="button"
                     className={`secondary ${tool === 'npc-erase' ? 'is-selected' : ''}`}
-                    onClick={() => setTool('npc-erase')}
+                    onClick={() => toggleTool('npc-erase')}
                   >
                     NPC Erase
                   </button>
@@ -3240,6 +6252,8 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
               </button>
             </div>
 
+            {showNpcSpriteStudio && (
+            <>
             <h4>Sprite Library</h4>
             <div className="admin-grid-2">
               <label>
@@ -3429,12 +6443,13 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                 </select>
               </label>
               <button type="button" className="secondary" onClick={addSelectedNpcFrameToAnimation}>
-                Add Selected Frame
+                Add Selected Rectangle
               </button>
               <button type="button" className="secondary" onClick={clearNpcDirectionFrames}>
                 Clear Direction Frames
               </button>
             </div>
+            <p className="admin-note">Tip: Hold Shift and click sheet cells to append frames in click order.</p>
             <div className="tileset-grid-wrap npc-sheet-grid-wrap">
               {npcSpriteMeta.loaded ? (
                 <div
@@ -3465,6 +6480,31 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                             return;
                           }
                           event.preventDefault();
+                          if (event.shiftKey || event.metaKey || event.ctrlKey) {
+                            if (npcSpriteMeta.columns <= 0) {
+                              setError('NPC sheet is not ready yet.');
+                              return;
+                            }
+                            const currentFrameCellsWide = Math.max(1, parseInteger(npcFrameCellsWideInput) ?? 1);
+                            const currentFrameCellsTall = Math.max(1, parseInteger(npcFrameCellsTallInput) ?? 1);
+                            const startCol = frameIndex % npcSpriteMeta.columns;
+                            const startRow = Math.floor(frameIndex / npcSpriteMeta.columns);
+                            const endCol = Math.min(
+                              npcSpriteMeta.columns - 1,
+                              startCol + Math.max(0, currentFrameCellsWide - 1),
+                            );
+                            const endRow = Math.min(
+                              npcSpriteMeta.rows - 1,
+                              startRow + Math.max(0, currentFrameCellsTall - 1),
+                            );
+                            const endIndex = endRow * npcSpriteMeta.columns + endCol;
+                            setSelectedNpcAtlasStartIndex(frameIndex);
+                            setSelectedNpcAtlasEndIndex(endIndex);
+                            appendNpcFrameToSelectedAnimation(frameIndex, currentFrameCellsWide, currentFrameCellsTall, {
+                              allowDuplicate: true,
+                            });
+                            return;
+                          }
                           setIsSelectingNpcAtlas(true);
                           setSelectedNpcAtlasStartIndex(frameIndex);
                           setSelectedNpcAtlasEndIndex(frameIndex);
@@ -3524,76 +6564,36 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
               Selected Rectangle: {selectedNpcAtlasRect ? `${selectedNpcAtlasRect.width}x${selectedNpcAtlasRect.height}` : 'none'}
             </p>
 
+            <div className="admin-row">
+              <button type="button" className="secondary" onClick={startNewNpcSpriteDraft}>
+                Create New Sprite
+              </button>
+              <span className="admin-note">
+                {npcSpriteEditorMode === 'edit' && selectedNpcSpriteForEditor
+                  ? `Edit mode: ${selectedNpcSpriteForEditor.label} (${selectedNpcSpriteForEditor.id})`
+                  : 'Create mode: save will create a new sprite entry.'}
+              </span>
+            </div>
             <button type="button" className="secondary" onClick={saveNpcSprite}>
-              Save Sprite
+              {npcSpriteEditorMode === 'edit' ? 'Update Selected Sprite' : 'Save New Sprite'}
             </button>
             <div className="saved-paint-list">
               {npcSpriteLibrary.length === 0 && <p className="admin-note">No NPC sprites saved yet.</p>}
               {npcSpriteLibrary.map((sprite) => (
                 <div
                   key={sprite.id}
-                  className={`saved-paint-row ${selectedNpcSpriteId === sprite.id ? 'is-selected' : ''}`}
+                  className={`saved-paint-row ${editingNpcSpriteId === sprite.id ? 'is-selected' : ''}`}
                 >
                   <button
                     type="button"
                     className="secondary"
-                    onClick={() => {
-                      const atlasCellWidth = sprite.sprite.atlasCellWidth ?? sprite.sprite.frameWidth;
-                      const atlasCellHeight = sprite.sprite.atlasCellHeight ?? sprite.sprite.frameHeight;
-                      const frameCellsWide =
-                        sprite.sprite.frameCellsWide ??
-                        Math.max(1, Math.round(sprite.sprite.frameWidth / Math.max(1, atlasCellWidth)));
-                      const frameCellsTall =
-                        sprite.sprite.frameCellsTall ??
-                        Math.max(1, Math.round(sprite.sprite.frameHeight / Math.max(1, atlasCellHeight)));
-                      setSelectedNpcSpriteId(sprite.id);
-                      setNpcSpriteLabelInput(sprite.label);
-                      setNpcSpriteUrl(sprite.sprite.url);
-                      setNpcFrameWidthInput(String(atlasCellWidth));
-                      setNpcFrameHeightInput(String(atlasCellHeight));
-                      setNpcFrameCellsWideInput(String(frameCellsWide));
-                      setNpcFrameCellsTallInput(String(frameCellsTall));
-                      setNpcRenderWidthTilesInput(String(sprite.sprite.renderWidthTiles ?? 1));
-                      setNpcRenderHeightTilesInput(String(sprite.sprite.renderHeightTiles ?? 2));
-                      setNpcFacingFrames({ ...sprite.sprite.facingFrames });
-                      setNpcWalkFrames({
-                        up: [...(sprite.sprite.walkFrames?.up ?? [])],
-                        down: [...(sprite.sprite.walkFrames?.down ?? [])],
-                        left: [...(sprite.sprite.walkFrames?.left ?? [])],
-                        right: [...(sprite.sprite.walkFrames?.right ?? [])],
-                      });
-                      const nextAnimationSets =
-                        sprite.sprite.animationSets &&
-                        Object.keys(sprite.sprite.animationSets).length > 0
-                          ? sanitizeDirectionalAnimationSets(
-                              sprite.sprite.animationSets as Partial<
-                                Record<string, Partial<Record<Direction, number[]>>>
-                              >,
-                            )
-                          : buildDirectionalAnimationSetsFromLegacyFrames(
-                              sprite.sprite.facingFrames,
-                              {
-                                up: [...(sprite.sprite.walkFrames?.up ?? [])],
-                                down: [...(sprite.sprite.walkFrames?.down ?? [])],
-                                left: [...(sprite.sprite.walkFrames?.left ?? [])],
-                                right: [...(sprite.sprite.walkFrames?.right ?? [])],
-                              },
-                            );
-                      setNpcAnimationSetsInput(stringifyDirectionalAnimationSetsForEditor(nextAnimationSets));
-                      const nextIdleAnimation = sprite.sprite.defaultIdleAnimation ?? 'idle';
-                      const nextMoveAnimation = sprite.sprite.defaultMoveAnimation ?? 'walk';
-                      const nextAnimationNames = Object.keys(nextAnimationSets);
-                      const nextSelectedAnimation = nextAnimationNames.includes(nextMoveAnimation)
-                        ? nextMoveAnimation
-                        : nextAnimationNames.includes('walk')
-                          ? 'walk'
-                          : nextAnimationNames[0] ?? '';
-                      setSelectedNpcAnimationName(nextSelectedAnimation);
-                      setNpcDefaultIdleAnimationInput(nextIdleAnimation);
-                      setNpcDefaultMoveAnimationInput(nextMoveAnimation);
-                    }}
+                    onClick={() =>
+                      loadNpcSpriteIntoEditor(sprite, {
+                        statusMessage: `Loaded NPC sprite "${sprite.label}" into edit mode.`,
+                      })
+                    }
                   >
-                    Use
+                    Edit
                   </button>
                   <span className="saved-paint-row__meta">{sprite.label}</span>
                   <span className="saved-paint-row__meta">{sprite.id}</span>
@@ -3603,9 +6603,77 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                 </div>
               ))}
             </div>
+            <h4>Sprite Usage</h4>
+            {selectedNpcSpriteForEditor ? (
+              <>
+                <p className="admin-note">
+                  {charactersUsingSelectedNpcSpriteForEditor.length > 0
+                    ? `"${selectedNpcSpriteForEditor.label}" is currently used by ${charactersUsingSelectedNpcSpriteForEditor.length} character(s).`
+                    : `"${selectedNpcSpriteForEditor.label}" is not linked to any NPC character yet.`}
+                </p>
+                <div className="saved-paint-list">
+                  {charactersUsingSelectedNpcSpriteForEditor.map((template) => (
+                    <div key={`npc-sprite-usage-${template.id}`} className="saved-paint-row">
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() =>
+                          loadNpcCharacterTemplateIntoEditor(template, {
+                            statusMessage: `Loaded NPC character "${template.label}" from sprite usage.`,
+                          })
+                        }
+                      >
+                        Open
+                      </button>
+                      <span className="saved-paint-row__meta">{template.label}</span>
+                      <span className="saved-paint-row__meta">{template.npcName}</span>
+                      <span className="saved-paint-row__meta">
+                        {getCharacterPlacementInstances(template).length} instance(s)
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="admin-note">Select a sprite to see linked characters.</p>
+            )}
+            </>
+            )}
 
+            {showNpcCharacterStudio && (
+            <>
             <h4>Character Library</h4>
+            {isNpcCharactersSection && (
+              <div className="admin-row" style={{ marginBottom: '0.5rem' }}>
+                <button type="button" className="primary" onClick={addNewBlankNpcCharacter}>
+                  New Character
+                </button>
+              </div>
+            )}
             <div className="admin-grid-2">
+              <label>
+                Selected Character
+                <select
+                  value={selectedNpcCharacterId}
+                  onChange={(event) => {
+                    const template = npcCharacterLibrary.find((entry) => entry.id === event.target.value);
+                    if (!template) {
+                      setSelectedNpcCharacterId(event.target.value);
+                      return;
+                    }
+                    loadNpcCharacterTemplateIntoEditor(template, {
+                      statusMessage: `Loaded NPC character "${template.label}".`,
+                    });
+                  }}
+                >
+                  <option value="">Select character</option>
+                  {npcCharacterLibrary.map((template) => (
+                    <option key={template.id} value={template.id}>
+                      {template.label || template.npcName || '(no name)'} ({template.npcName || template.label || template.id || '—'})
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label>
                 Character Label
                 <input
@@ -3621,7 +6689,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                 />
               </label>
               <label>
-                Sprite
+                Character Sprite
                 <select
                   value={selectedNpcSpriteId}
                   onChange={(event) => setSelectedNpcSpriteId(event.target.value)}
@@ -3643,6 +6711,18 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                 />
               </label>
               <label>
+                Facing
+                <select
+                  value={npcFacingInput}
+                  onChange={(event) => setNpcFacingInput(event.target.value as Direction)}
+                >
+                  <option value="down">Down</option>
+                  <option value="left">Left</option>
+                  <option value="right">Right</option>
+                  <option value="up">Up</option>
+                </select>
+              </label>
+              <label>
                 Dialogue ID (fallback)
                 <input value={npcDialogueIdInput} onChange={(event) => setNpcDialogueIdInput(event.target.value)} />
               </label>
@@ -3652,23 +6732,115 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
               </label>
               <label>
                 Set Flag On Complete
-                <input value={npcDialogueSetFlagInput} onChange={(event) => setNpcDialogueSetFlagInput(event.target.value)} />
+                <input
+                  list="admin-flag-options"
+                  value={npcDialogueSetFlagInput}
+                  onChange={(event) => setNpcDialogueSetFlagInput(event.target.value)}
+                />
               </label>
+              <label>
+                Set Flag On First Interaction
+                <input
+                  list="admin-flag-options"
+                  value={npcFirstInteractionSetFlagInput}
+                  onChange={(event) => setNpcFirstInteractionSetFlagInput(event.target.value)}
+                  placeholder="optional"
+                />
+              </label>
+              <label>
+                Interaction Mode
+                <select
+                  value={npcInteractionModeInput}
+                  onChange={(event) => setNpcInteractionModeInput(event.target.value as NpcInteractionMode)}
+                >
+                  <option value="dialogue">Dialogue</option>
+                  <option value="battle">Battle</option>
+                  <option value="healer">Healer</option>
+                  <option value="shop">Shop</option>
+                </select>
+              </label>
+              {npcInteractionModeInput === 'shop' && (
+                <label>
+                  Shop
+                  <select
+                    value={npcShopIdInput}
+                    onChange={(event) => setNpcShopIdInput(event.target.value)}
+                  >
+                    <option value="">Select shop</option>
+                    {knownShopIds.map((shopId) => (
+                      <option key={`npc-shop-option-${shopId}`} value={shopId}>
+                        {shopNameById.get(shopId) ?? shopId} ({shopId})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {npcInteractionModeInput === 'battle' && (
+                <>
+                  <label>
+                    Repeat Interaction Battle After Win?
+                    <input
+                      type="checkbox"
+                      checked={npcInteractBattleRepeatableInput}
+                      onChange={(event) => setNpcInteractBattleRepeatableInput(event.target.checked)}
+                    />
+                  </label>
+                  <label>
+                    Battle Win Transition Flag
+                    <select
+                      value={npcInteractBattleDefeatedFlagInput}
+                      onChange={(event) => setNpcInteractBattleDefeatedFlagInput(event.target.value)}
+                    >
+                      <option value="">(Select existing flag)</option>
+                      {knownFlagIds.map((flagId) => (
+                        <option key={`npc-battle-flag-${flagId}`} value={flagId}>
+                          {flagId}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </>
+              )}
               <label>
                 Movement Type
                 <select
                   value={npcMovementTypeInput}
-                  onChange={(event) => setNpcMovementTypeInput(event.target.value as 'static' | 'loop' | 'random')}
+                  onChange={(event) =>
+                    setNpcMovementTypeInput(event.target.value as 'static' | 'static-turning' | 'wander' | 'path')
+                  }
                 >
                   <option value="static">Static</option>
-                  <option value="loop">Loop Pattern</option>
-                  <option value="random">Random Wander</option>
+                  <option value="static-turning">Static Turning</option>
+                  <option value="wander">Wander</option>
+                  <option value="path">Path</option>
                 </select>
               </label>
               <label>
-                Step Interval (ms)
+                Turn/Step Interval (ms)
                 <input value={npcStepIntervalInput} onChange={(event) => setNpcStepIntervalInput(event.target.value)} />
               </label>
+              {npcMovementTypeInput === 'wander' && (
+                <label>
+                  Wander Leash Radius (tiles, optional)
+                  <input
+                    value={npcWanderLeashRadiusInput}
+                    onChange={(event) => setNpcWanderLeashRadiusInput(event.target.value)}
+                    placeholder="e.g. 4"
+                  />
+                </label>
+              )}
+              {npcMovementTypeInput === 'path' && (
+                <label>
+                  Path Mode
+                  <select
+                    value={npcMovementPathModeInput}
+                    onChange={(event) => setNpcMovementPathModeInput(event.target.value as 'loop' | 'pingpong')}
+                  >
+                    <option value="loop">Loop</option>
+                    <option value="pingpong">Back and Forth</option>
+                  </select>
+                </label>
+              )}
               <label>
                 Character Idle Animation
                 <input
@@ -3695,23 +6867,108 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                 onChange={(event) => setNpcDialogueLinesInput(event.target.value)}
               />
             </label>
+            {(npcMovementTypeInput === 'path' || npcMovementTypeInput === 'static-turning') && (
+              <label>
+                {npcMovementTypeInput === 'path'
+                  ? 'Path Pattern (comma-separated: up, right, down, left)'
+                  : 'Turn Pattern (comma-separated: up, right, down, left)'}
+                <input
+                  value={npcMovementPatternInput}
+                  onChange={(event) => setNpcMovementPatternInput(event.target.value)}
+                />
+              </label>
+            )}
+            {npcInteractionModeInput === 'battle' && (
+              <>
+                <label>
+                  Battle Team IDs (comma-separated)
+                  <input
+                    value={npcBattleTeamsInput}
+                    onChange={(event) => setNpcBattleTeamsInput(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Battle Rewards (itemId:qty, comma-separated)
+                  <input
+                    list="admin-item-options"
+                    value={npcBattleRewardsInput}
+                    onChange={(event) => setNpcBattleRewardsInput(event.target.value)}
+                    placeholder="lume:25, field-bandage:1"
+                  />
+                </label>
+              </>
+            )}
             <label>
-              Loop Pattern (comma-separated: up, right, down, left)
+              Interaction Rewards (itemId:qty, comma-separated)
               <input
-                value={npcMovementPatternInput}
-                onChange={(event) => setNpcMovementPatternInput(event.target.value)}
+                list="admin-item-options"
+                value={npcInteractionRewardsInput}
+                onChange={(event) => setNpcInteractionRewardsInput(event.target.value)}
+                placeholder="lume:5, field-bandage:1"
               />
             </label>
             <label>
-              Battle Team IDs (comma-separated, future use)
+              Interaction Reward Once Flag
               <input
-                value={npcBattleTeamsInput}
-                onChange={(event) => setNpcBattleTeamsInput(event.target.value)}
+                list="admin-flag-options"
+                value={npcInteractionRewardSetFlagInput}
+                onChange={(event) => setNpcInteractionRewardSetFlagInput(event.target.value)}
+                placeholder="optional one-time gate flag"
               />
             </label>
-            <button type="button" className="secondary" onClick={saveNpcTemplate}>
-              Save Character
-            </button>
+            <p className="admin-note">
+              Battle flow uses one transition flag: when an interaction or guard battle is won, that defeat flag is set.
+              Use that same flag in the next instance&apos;s <code>requiresFlag</code> to transition dialogue/state.
+            </p>
+            <label>
+              Story States JSON (ordered by timeline)
+              <textarea
+                rows={7}
+                className="admin-json"
+                value={npcStoryStatesInput}
+                onChange={(event) => setNpcStoryStatesInput(event.target.value)}
+                placeholder='[{"id":"after-demo","requiresFlag":"demo-done","mapId":"portlock","position":{"x":8,"y":6},"movement":{"type":"wander","stepIntervalMs":2000,"leashRadius":3},"dialogueLines":["..."]}]'
+              />
+            </label>
+            <label>
+              Movement Guards JSON (guard battles must use defeatedFlag as transition flag)
+              <textarea
+                rows={5}
+                className="admin-json"
+                value={npcMovementGuardsInput}
+                onChange={(event) => setNpcMovementGuardsInput(event.target.value)}
+                placeholder='[{"id":"guard-north","hideIfFlag":"demo-done","maxY":0,"dialogueSpeaker":"Ben","dialogueLines":["..."]},{"id":"battle-guard","maxY":0,"defeatedFlag":"ben-defeated","battleTeamIds":["buddo@1"],"battleRewards":[{"itemId":"lume","quantity":30}],"postDuelDialogueSpeaker":"Ben","postDuelDialogueLines":["I lost..."]}]'
+              />
+            </label>
+            <label>
+              Interaction Cutscene JSON
+              <textarea
+                rows={7}
+                className="admin-json"
+                value={npcInteractionScriptInput}
+                onChange={(event) => setNpcInteractionScriptInput(event.target.value)}
+                placeholder='[{"type":"face_player"},{"type":"dialogue","speaker":"Jacob","lines":["Hey there!"]},{"type":"give_item","itemId":"lume","quantity":25,"message":"You received Lume!"},{"type":"set_flag","flag":"met-jacob"}]'
+              />
+            </label>
+            <div className="admin-row">
+              <button type="button" className="secondary" onClick={saveNpcTemplate}>
+                Save Character
+              </button>
+              {(isNpcsSection || isNpcCharactersSection) && (
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={applyNpcEditorToSelectedMapNpc}
+                  disabled={isNpcsSection ? !selectedMapNpc && !selectedCharacterInstance : !selectedCharacterInstance}
+                >
+                  {selectedCharacterInstance
+                    ? 'Apply To Selected Character Instance'
+                    : isNpcCharactersSection
+                      ? 'Select An Instance To Apply'
+                      : 'Apply To Selected Map NPC'}
+                </button>
+              )}
+            </div>
             <div className="saved-paint-list">
               {npcCharacterLibrary.length === 0 && <p className="admin-note">No NPC characters saved yet.</p>}
               {npcCharacterLibrary.map((template) => (
@@ -3722,23 +6979,11 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                   <button
                     type="button"
                     className="secondary"
-                    onClick={() => {
-                      setSelectedNpcCharacterId(template.id);
-                      setNpcCharacterLabelInput(template.label);
-                      setNpcCharacterNameInput(template.npcName);
-                      setNpcCharacterColorInput(template.color);
-                      setNpcDialogueIdInput(template.dialogueId);
-                      setNpcDialogueSpeakerInput(template.dialogueSpeaker ?? '');
-                      setNpcDialogueLinesInput((template.dialogueLines ?? []).join('\n'));
-                      setNpcDialogueSetFlagInput(template.dialogueSetFlag ?? '');
-                      setNpcMovementTypeInput(template.movement?.type ?? 'static');
-                      setNpcMovementPatternInput((template.movement?.pattern ?? []).join(', '));
-                      setNpcStepIntervalInput(String(template.movement?.stepIntervalMs ?? 850));
-                      setNpcBattleTeamsInput((template.battleTeamIds ?? []).join(', '));
-                      setNpcCharacterIdleAnimationInput(template.idleAnimation ?? '');
-                      setNpcCharacterMoveAnimationInput(template.moveAnimation ?? '');
-                      setSelectedNpcSpriteId(template.spriteId ?? '');
-                    }}
+                    onClick={() =>
+                      loadNpcCharacterTemplateIntoEditor(template, {
+                        statusMessage: `Loaded NPC character "${template.label}".`,
+                      })
+                    }
                   >
                     Use
                   </button>
@@ -3747,6 +6992,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                   <span className="saved-paint-row__meta">
                     {template.spriteId ?? 'No Sprite'}
                   </span>
+                  <span className="saved-paint-row__meta">{template.facing ?? 'down'}</span>
                   <span className="saved-paint-row__meta">{template.movement?.type ?? 'static'}</span>
                   <span className="saved-paint-row__meta">
                     {template.idleAnimation ?? '-'} / {template.moveAnimation ?? '-'}
@@ -3757,10 +7003,12 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                 </div>
               ))}
             </div>
+            </>
+            )}
           </section>
           )}
 
-          {showMapEditing && (
+          {showMapEditing && !isNpcsSection && (
           <section className="admin-panel">
             <h3>NPCs JSON</h3>
             <textarea
@@ -3776,9 +7024,12 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           </section>
           )}
 
-          {showMapEditing && (
+          {showMapEditing && !isNpcsSection && (
           <section className="admin-panel">
             <h3>Interactions JSON</h3>
+            <p className="admin-note">
+              Use <code>kind: "heal_tile"</code> for heal prompts, or omit <code>kind</code> / use <code>"dialogue"</code> for normal notes.
+            </p>
             <textarea
               rows={8}
               value={interactionJsonDraft}
@@ -3792,7 +7043,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           </section>
           )}
 
-          {showMapEditing && (
+          {showMapEditing && !isNpcsSection && (
           <section className="admin-panel">
             <h3>Import / Export</h3>
             <div className="admin-row">
@@ -3855,119 +7106,40 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
 
         {showMapEditing && (
         <main className="admin-layout__center">
+          {isNpcsSection && (
           <section className="admin-panel">
-            <h3>Paint Tools</h3>
+            <h3>NPC Paint Tools</h3>
             <div className="admin-row">
               <button
                 type="button"
-                className={`secondary ${tool === 'paint' ? 'is-selected' : ''}`}
-                onClick={() => setTool('paint')}
-              >
-                Paint
-              </button>
-              <button
-                type="button"
-                className={`secondary ${tool === 'paint-rotated' ? 'is-selected' : ''}`}
-                onClick={() => setTool('paint-rotated')}
-              >
-                Paint Rotated
-              </button>
-              <button
-                type="button"
-                className={`secondary ${tool === 'erase' ? 'is-selected' : ''}`}
-                onClick={() => setTool('erase')}
-              >
-                Erase (Blank)
-              </button>
-              <button
-                type="button"
-                className={`secondary ${tool === 'fill' ? 'is-selected' : ''}`}
-                onClick={() => setTool('fill')}
-              >
-                Fill
-              </button>
-              <button
-                type="button"
-                className={`secondary ${tool === 'fill-rotated' ? 'is-selected' : ''}`}
-                onClick={() => setTool('fill-rotated')}
-              >
-                Fill Rotated
-              </button>
-              <button
-                type="button"
-                className={`secondary ${tool === 'pick' ? 'is-selected' : ''}`}
-                onClick={() => setTool('pick')}
-              >
-                Eyedropper
-              </button>
-              <button
-                type="button"
                 className={`secondary ${tool === 'npc-paint' ? 'is-selected' : ''}`}
-                onClick={() => setTool('npc-paint')}
+                onClick={() => toggleTool('npc-paint')}
               >
                 NPC Paint
               </button>
               <button
                 type="button"
                 className={`secondary ${tool === 'npc-erase' ? 'is-selected' : ''}`}
-                onClick={() => setTool('npc-erase')}
+                onClick={() => toggleTool('npc-erase')}
               >
                 NPC Erase
               </button>
-              <button
-                type="button"
-                className={`secondary ${tool === 'collision-edge' ? 'is-selected' : ''}`}
-                onClick={() => setTool('collision-edge')}
-              >
-                Collision Edges
+              <button type="button" className="secondary" onClick={loadNpcTemplatesFromDatabase}>
+                Reload NPC Catalog
               </button>
-              <button type="button" className="secondary" onClick={removeSelectedPaintTile} disabled={!selectedPaintTile}>
-                Remove Selected Paint Tile
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                disabled={!selectedPaintTile}
-                onClick={() => {
-                  setBrushRotationQuarter((current) => normalizeQuarter(current - 1));
-                  setStatus('Brush rotated left.');
-                }}
-              >
-                Rotate Left
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                disabled={!selectedPaintTile}
-                onClick={() => {
-                  setBrushRotationQuarter((current) => normalizeQuarter(current + 1));
-                  setStatus('Brush rotated right.');
-                }}
-              >
-                Rotate Right
-              </button>
-              <button
-                type="button"
-                className={`secondary ${brushMirrorHorizontal ? 'is-selected' : ''}`}
-                disabled={!selectedPaintTile}
-                onClick={() => {
-                  setBrushMirrorHorizontal((current) => !current);
-                  setStatus(brushMirrorHorizontal ? 'Horizontal mirror off.' : 'Horizontal mirror on.');
-                }}
-              >
-                Mirror Horizontal
-              </button>
-              <button
-                type="button"
-                className={`secondary ${brushMirrorVertical ? 'is-selected' : ''}`}
-                disabled={!selectedPaintTile}
-                onClick={() => {
-                  setBrushMirrorVertical((current) => !current);
-                  setStatus(brushMirrorVertical ? 'Vertical mirror off.' : 'Vertical mirror on.');
-                }}
-              >
-                Mirror Vertical
-              </button>
+            </div>
+            <div className="admin-row">
+              <label>
+                NPC Character
+                <select value={selectedNpcCharacterId} onChange={(event) => setSelectedNpcCharacterId(event.target.value)}>
+                  <option value="">Select character</option>
+                  {npcCharacterLibrary.map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.label} ({entry.npcName})
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label className="admin-inline-label">
                 Zoom
                 <input
@@ -3978,16 +7150,228 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                   onChange={(event) => setCellSize(clampInt(Number(event.target.value), MIN_CELL_SIZE, MAX_CELL_SIZE))}
                 />
               </label>
-              {isMapSection && (
-                <>
-                  <button type="button" className="secondary" onClick={loadSavedPaintTilesFromDatabase}>
-                    Reload Saved Tiles
-                  </button>
-                  <button type="button" className="secondary" onClick={loadNpcTemplatesFromDatabase}>
-                    Reload NPC Catalog
-                  </button>
-                </>
-              )}
+            </div>
+            <p className="admin-note">
+              Left click paints selected NPC character. Right click removes NPCs from map.
+            </p>
+          </section>
+          )}
+
+          {!isNpcsSection && (
+          <section className="admin-panel">
+            <h3>Paint Tools</h3>
+            <div className="admin-tool-group">
+              <h4>Selection + Tile Paint</h4>
+              <div className="admin-row">
+                <button
+                  type="button"
+                  className={`secondary ${tool === 'select' ? 'is-selected' : ''}`}
+                  onClick={() => toggleTool('select')}
+                >
+                  Select
+                </button>
+                <button
+                  type="button"
+                  className={`secondary ${tool === 'paint' ? 'is-selected' : ''}`}
+                  onClick={() => toggleTool('paint')}
+                >
+                  Paint
+                </button>
+                <button
+                  type="button"
+                  className={`secondary ${tool === 'paint-rotated' ? 'is-selected' : ''}`}
+                  onClick={() => toggleTool('paint-rotated')}
+                >
+                  Paint Rotated
+                </button>
+                <button
+                  type="button"
+                  className={`secondary ${tool === 'erase' ? 'is-selected' : ''}`}
+                  onClick={() => toggleTool('erase')}
+                >
+                  Erase
+                </button>
+                <button
+                  type="button"
+                  className={`secondary ${tool === 'fill' ? 'is-selected' : ''}`}
+                  onClick={() => toggleTool('fill')}
+                >
+                  Fill
+                </button>
+                <button
+                  type="button"
+                  className={`secondary ${tool === 'fill-rotated' ? 'is-selected' : ''}`}
+                  onClick={() => toggleTool('fill-rotated')}
+                >
+                  Fill Rotated
+                </button>
+                <button
+                  type="button"
+                  className={`secondary ${tool === 'pick' ? 'is-selected' : ''}`}
+                  onClick={() => toggleTool('pick')}
+                >
+                  Eyedropper
+                </button>
+              </div>
+            </div>
+
+            <div className="admin-tool-group">
+              <h4>Tile Edits</h4>
+              <div className="admin-row">
+                <button
+                  type="button"
+                  className={`secondary ${tool === 'rotate-left' ? 'is-selected' : ''}`}
+                  onClick={() => toggleTool('rotate-left')}
+                >
+                  Rotate Left Tool
+                </button>
+                <button
+                  type="button"
+                  className={`secondary ${tool === 'rotate-right' ? 'is-selected' : ''}`}
+                  onClick={() => toggleTool('rotate-right')}
+                >
+                  Rotate Right Tool
+                </button>
+                <button
+                  type="button"
+                  className={`secondary ${tool === 'mirror-horizontal' ? 'is-selected' : ''}`}
+                  onClick={() => toggleTool('mirror-horizontal')}
+                >
+                  Mirror H Tool
+                </button>
+                <button
+                  type="button"
+                  className={`secondary ${tool === 'mirror-vertical' ? 'is-selected' : ''}`}
+                  onClick={() => toggleTool('mirror-vertical')}
+                >
+                  Mirror V Tool
+                </button>
+                <button
+                  type="button"
+                  className={`secondary ${tool === 'collision-edge' ? 'is-selected' : ''}`}
+                  onClick={() => toggleTool('collision-edge')}
+                >
+                  Collision Edges
+                </button>
+              </div>
+            </div>
+
+            <div className="admin-tool-group">
+              <h4>Camera</h4>
+              <div className="admin-row">
+                <button
+                  type="button"
+                  className={`secondary ${tool === 'camera-preview' ? 'is-selected' : ''}`}
+                  onClick={() => toggleTool('camera-preview')}
+                  title="Show red viewport rectangle"
+                >
+                  Show camera
+                </button>
+                <button
+                  type="button"
+                  className={`secondary ${tool === 'camera-point' ? 'is-selected' : ''}`}
+                  onClick={() => toggleTool('camera-point')}
+                  title="Click a cell to center the camera view there"
+                >
+                  Select Camera Point
+                </button>
+              </div>
+            </div>
+
+            <div className="admin-tool-group">
+              <h4>Stamp Orientation</h4>
+              <div className="admin-row">
+                <button type="button" className="secondary" onClick={removeSelectedPaintTile} disabled={!selectedPaintTile}>
+                  Remove Selected Paint Tile
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={!selectedPaintTile}
+                  onClick={() => {
+                    setBrushRotationQuarter((current) => normalizeQuarter(current - 1));
+                    setStatus('Stamp rotation adjusted left.');
+                  }}
+                >
+                  Stamp Rotate Left
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={!selectedPaintTile}
+                  onClick={() => {
+                    setBrushRotationQuarter((current) => normalizeQuarter(current + 1));
+                    setStatus('Stamp rotation adjusted right.');
+                  }}
+                >
+                  Stamp Rotate Right
+                </button>
+                <button
+                  type="button"
+                  className={`secondary ${brushMirrorHorizontal ? 'is-selected' : ''}`}
+                  disabled={!selectedPaintTile}
+                  onClick={() => {
+                    setBrushMirrorHorizontal((current) => !current);
+                    setStatus(brushMirrorHorizontal ? 'Stamp horizontal mirror off.' : 'Stamp horizontal mirror on.');
+                  }}
+                >
+                  Stamp Mirror H
+                </button>
+                <button
+                  type="button"
+                  className={`secondary ${brushMirrorVertical ? 'is-selected' : ''}`}
+                  disabled={!selectedPaintTile}
+                  onClick={() => {
+                    setBrushMirrorVertical((current) => !current);
+                    setStatus(brushMirrorVertical ? 'Stamp vertical mirror off.' : 'Stamp vertical mirror on.');
+                  }}
+                >
+                  Stamp Mirror V
+                </button>
+              </div>
+            </div>
+
+            <div className="admin-tool-group">
+              <h4>NPC Tools</h4>
+              <div className="admin-row">
+                <button
+                  type="button"
+                  className={`secondary ${tool === 'npc-paint' ? 'is-selected' : ''}`}
+                  onClick={() => toggleTool('npc-paint')}
+                >
+                  NPC Paint
+                </button>
+                <button
+                  type="button"
+                  className={`secondary ${tool === 'npc-erase' ? 'is-selected' : ''}`}
+                  onClick={() => toggleTool('npc-erase')}
+                >
+                  NPC Erase
+                </button>
+                {isMapSection && (
+                  <>
+                    <button type="button" className="secondary" onClick={loadSavedPaintTilesFromDatabase}>
+                      Reload Saved Tiles
+                    </button>
+                    <button type="button" className="secondary" onClick={loadNpcTemplatesFromDatabase}>
+                      Reload NPC Catalog
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="admin-row">
+              <label className="admin-inline-label">
+                Zoom
+                <input
+                  type="range"
+                  min={MIN_CELL_SIZE}
+                  max={MAX_CELL_SIZE}
+                  value={cellSize}
+                  onChange={(event) => setCellSize(clampInt(Number(event.target.value), MIN_CELL_SIZE, MAX_CELL_SIZE))}
+                />
+              </label>
             </div>
             {isMapSection && (
               <div className="admin-row">
@@ -4057,10 +7441,10 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
             )}
 
             <div className="paint-tile-grid">
-              {savedPaintTiles.length === 0 && (
+              {sortedSavedPaintTiles.length === 0 && (
                 <p className="admin-note">No saved paint tiles. Use auto mode or save from the tileset grid.</p>
               )}
-              {savedPaintTiles.map((tile) => {
+              {sortedSavedPaintTiles.map((tile) => {
                 return (
                   <button
                     key={tile.id}
@@ -4079,13 +7463,13 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                         <span
                           key={`${tile.id}-${cell.dx}-${cell.dy}`}
                           className="paint-tile__preview"
-                          style={atlasCellStyle(cell.atlasIndex, 12)}
+                          style={getTileCellPreviewStyle(tile, cell, 12)}
                         />
                       ))}
                     </span>
                     <span className="paint-tile__name">{tile.name}</span>
                     <span className="paint-tile__meta">
-                      {tile.width}x{tile.height} | {tile.cells.length} cells
+                      {tile.width}x{tile.height} | {tile.cells.length} cells | {tile.ySortWithActors ? 'Y-sort' : 'Flat'}
                     </span>
                   </button>
                 );
@@ -4098,9 +7482,11 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
               {selectedTileCode} | Active Layer: {activeLayer?.id ?? '-'} | Collision Mask: 0x
               {selectedCollisionEdgeMask.toString(16)} | Brush Rot: {brushRotationQuarter * 90}deg | Mirror H/V:{' '}
               {brushMirrorHorizontal ? 'Y' : 'N'}/{brushMirrorVertical ? 'Y' : 'N'} | NPC Character:{' '}
-              {selectedNpcCharacter?.label ?? '-'}
+              {selectedNpcCharacter?.label ?? '-'} | Selected Cells: {selectedCellKeys.length} | Encounter Group:{' '}
+              {selectedEncounterGroupId || '-'}
             </p>
           </section>
+          )}
 
           <section className="admin-panel admin-panel--grow admin-panel--map-canvas">
             <h3>Map Canvas</h3>
@@ -4135,6 +7521,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                         </span>
                       ))}
                     </div>
+                    <div className="map-grid-with-overlay" style={{ position: 'relative' }}>
                     <div
                       className="map-grid"
                       style={{
@@ -4155,7 +7542,10 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                                 : (activeLayerCollisionMask & ~hoverCollisionEdgeMask)
                               : activeLayerCollisionMask;
                           const warpMarker = warpMarkersByCell.get(`${x},${y}`) ?? [];
-                          const npcMarker = npcByCell.get(cellKey) ?? null;
+                          const encounterMarker = encounterGroupTileLookup.get(cellKey) ?? [];
+                          const npcMarker = isNpcsSection
+                            ? npcMarkerByCell.get(cellKey) ?? null
+                            : npcByCell.get(cellKey) ?? null;
                           const selectedWarpMarker = selectedWarp
                             ? getWarpFromPositions(selectedWarp).some(
                                 (position) => position.x === x && position.y === y,
@@ -4166,12 +7556,13 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                                 (position) => position.x === x && position.y === y,
                               )
                             : false;
+                          const isEncounterSelected = selectedCellSet.has(cellKey);
 
                           return (
                             <button
                               key={`${x}-${y}`}
                               type="button"
-                              className={`map-grid__cell ${selectedWarpMarker ? 'is-warp-from' : ''} ${selectedWarpTarget ? 'is-warp-to' : ''} ${hoverStampCells.has(cellKey) ? 'is-stamp-preview' : ''}`}
+                              className={`map-grid__cell ${selectedWarpMarker ? 'is-warp-from' : ''} ${selectedWarpTarget ? 'is-warp-to' : ''} ${hoverStampCells.has(cellKey) ? 'is-stamp-preview' : ''} ${isEncounterSelected ? 'is-selected-cell' : ''} ${encounterMarker.length > 0 ? 'is-encounter-assigned' : ''}`}
                               style={{
                                 width: `${cellSize}px`,
                                 height: `${cellSize}px`,
@@ -4179,6 +7570,25 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                               onMouseDown={(event: MouseEvent<HTMLButtonElement>) => {
                                 if (event.button === 2) {
                                   event.preventDefault();
+                                  if (isNpcsSection && npcMarker && 'source' in npcMarker && npcMarker.source === 'map') {
+                                    removeMapNpcById(npcMarker.npc.id);
+                                    return;
+                                  }
+                                  if (isNpcsSection && npcMarker && 'source' in npcMarker && npcMarker.source === 'character') {
+                                    const [characterId, placementIndexText] = npcMarker.marker.key.split(':');
+                                    const placementIndex = Number.parseInt(placementIndexText, 10);
+                                    if (characterId && Number.isFinite(placementIndex)) {
+                                      removeCharacterPlacementInstance(characterId, placementIndex);
+                                    }
+                                    return;
+                                  }
+                                  if (isNpcsSection) {
+                                    return;
+                                  }
+                                  if (tool === 'encounter-select') {
+                                    removeEncounterSelectionCell(x, y);
+                                    return;
+                                  }
                                   if (tool === 'npc-paint' || tool === 'npc-erase') {
                                     setEditableMap((current) => removeNpcAtPosition(current, x, y));
                                     return;
@@ -4201,13 +7611,15 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                                   return;
                                 }
                                 setIsDrawing(true);
-                                applyPaintTool(x, y, 'click');
+                                applyPaintTool(x, y, 'click', {
+                                  appendSelection: event.shiftKey || event.metaKey || event.ctrlKey,
+                                });
                               }}
                               onContextMenu={(event) => event.preventDefault()}
                               onMouseEnter={() => {
                                 setHoveredCell({ x, y });
                                 if (isDrawing) {
-                                  applyPaintTool(x, y, 'drag');
+                                  applyPaintTool(x, y, 'drag', { appendSelection: true });
                                 }
                               }}
                               onMouseLeave={() => setHoveredCell(null)}
@@ -4218,7 +7630,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                                     <span
                                       key={`${cellKey}-${entry.layerId}-${index}`}
                                       className={`map-grid__tile-layer ${activeLayer?.id === entry.layerId ? 'is-active-layer' : ''}`}
-                                      style={tileCellStyle(entry.code, cellSize, entry.rotation)}
+                                      style={tileCellStyle(entry.code, cellSize, entry.tileTransform)}
                                     />
                                   ))
                                 ) : (
@@ -4237,21 +7649,100 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                               {(displayedCollisionMask & COLLISION_EDGE_BIT.left) !== 0 && (
                                 <span className="map-grid__collision-edge is-left" />
                               )}
-                              {npcMarker && (
-                                <span className="map-grid__npc-badge" style={{ backgroundColor: npcMarker.color }}>
-                                  {npcMarker.name.slice(0, 1).toUpperCase() || 'N'}
-                                </span>
-                              )}
+                              {npcMarker &&
+                                (() => {
+                                  const isCharacterMarker =
+                                    isNpcsSection &&
+                                    typeof npcMarker === 'object' &&
+                                    npcMarker !== null &&
+                                    'source' in npcMarker &&
+                                    npcMarker.source === 'character';
+                                  const isMapMarker =
+                                    isNpcsSection &&
+                                    typeof npcMarker === 'object' &&
+                                    npcMarker !== null &&
+                                    'source' in npcMarker &&
+                                    npcMarker.source === 'map';
+                                  const markerName = isCharacterMarker
+                                    ? npcMarker.marker.name
+                                    : isMapMarker
+                                      ? npcMarker.npc.name
+                                      : (npcMarker as NpcDefinition).name;
+                                  const markerColor = isCharacterMarker
+                                    ? npcMarker.marker.color
+                                    : isMapMarker
+                                      ? npcMarker.npc.color
+                                      : (npcMarker as NpcDefinition).color;
+                                  const markerTitle = isCharacterMarker
+                                    ? `${npcMarker.marker.name} (instance #${npcMarker.marker.order})${
+                                        npcMarker.marker.requiresFlag
+                                          ? ` - hidden until "${npcMarker.marker.requiresFlag}" unlocks`
+                                          : ''
+                                      }`
+                                    : markerName;
+                                  const markerLocked = isCharacterMarker && Boolean(npcMarker.marker.requiresFlag);
+                                  return (
+                                    <span
+                                      className={`map-grid__npc-badge ${markerLocked ? 'is-flag-locked' : ''}`}
+                                      style={{ backgroundColor: markerColor || '#9b73b8' }}
+                                      title={markerTitle}
+                                    >
+                                      {formatNpcMarkerLabel(markerName)}
+                                    </span>
+                                  );
+                                })()}
                               {warpMarker.length > 0 && <span className="map-grid__warp-badge">W{warpMarker.length}</span>}
+                              {encounterMarker.length > 0 && (
+                                <span className="map-grid__encounter-badge">E{encounterMarker.length}</span>
+                              )}
                               {hoverStampCells.has(cellKey) && <span className="map-grid__stamp-shadow" />}
                             </button>
                           );
                         }),
                       )}
                     </div>
+                    {(tool === 'camera-preview' || tool === 'camera-point') && (() => {
+                      const cam = editableMap.cameraSize ?? { widthTiles: 19, heightTiles: 15 };
+                      const cx = editableMap.cameraPoint != null
+                        ? editableMap.cameraPoint.x + 0.5
+                        : mapSize.width / 2;
+                      const cy = editableMap.cameraPoint != null
+                        ? editableMap.cameraPoint.y + 0.5
+                        : mapSize.height / 2;
+                      // Clamp so the camera box stays within map bounds (same as in-game: pushes against edges).
+                      const boxLeftTiles = Math.max(
+                        0,
+                        Math.min(mapSize.width - cam.widthTiles, cx - cam.widthTiles / 2),
+                      );
+                      const boxTopTiles = Math.max(
+                        0,
+                        Math.min(mapSize.height - cam.heightTiles, cy - cam.heightTiles / 2),
+                      );
+                      const left = boxLeftTiles * cellSize;
+                      const top = boxTopTiles * cellSize;
+                      const w = cam.widthTiles * cellSize;
+                      const h = cam.heightTiles * cellSize;
+                      return (
+                        <div
+                          className="map-camera-overlay"
+                          style={{
+                            position: 'absolute',
+                            left,
+                            top,
+                            width: w,
+                            height: h,
+                            border: '4px solid #2563eb',
+                            boxSizing: 'border-box',
+                            pointerEvents: 'none',
+                          }}
+                          aria-hidden
+                        />
+                      );
+                    })()}
                   </div>
                 </div>
               </div>
+            </div>
             ) : (
               <div className="tileset-grid__empty">No map loaded yet. Create, load, or import a map first.</div>
             )}
@@ -4267,6 +7758,591 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
               </div>
             )}
           </section>
+
+          {isNpcsSection && (
+          <section className="admin-panel">
+            <h3>Map NPCs</h3>
+            <p className="admin-note">
+              Right-click an NPC on the map to remove it, or use these cards to edit/remove by instance.
+            </p>
+            <div className="saved-paint-list">
+              {mapNpcCards.length === 0 && <p className="admin-note">No NPCs placed on this map.</p>}
+              {mapNpcCards.map((npc) => (
+                <div
+                  key={`map-npc-card-${npc.id}`}
+                  className={`saved-paint-row ${
+                    (npc.type === 'map-npc' && selectedMapNpcId === npc.id) ||
+                    (npc.type === 'character-instance' && selectedCharacterInstanceKey === npc.id)
+                      ? 'is-selected'
+                      : ''
+                  }`}
+                >
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() =>
+                      npc.type === 'map-npc'
+                        ? (() => {
+                            const match = editableMap.npcs.find((entry) => entry.id === npc.id);
+                            if (match) {
+                              editMapNpc(match);
+                            }
+                          })()
+                        : loadCharacterPlacementIntoEditor(
+                            npc.characterId,
+                            Number.parseInt(npc.id.split(':')[1] ?? '0', 10),
+                          )
+                    }
+                  >
+                    Edit
+                  </button>
+                  <span className="saved-paint-row__meta">{npc.name}</span>
+                  <span className="saved-paint-row__meta">{npc.id}</span>
+                  <span className="saved-paint-row__meta">
+                    ({npc.position.x}, {npc.position.y})
+                  </span>
+                  <span className="saved-paint-row__meta">{npc.movementType ?? 'static'}</span>
+                  <span className="saved-paint-row__meta">{npc.facing ?? 'down'}</span>
+                  {npc.type === 'character-instance' && (
+                    <span className="saved-paint-row__meta">
+                      #{npc.order}{npc.requiresFlag ? ` requires "${npc.requiresFlag}"` : ' always'}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => {
+                      if (npc.type === 'map-npc') {
+                        removeMapNpcById(npc.id);
+                        return;
+                      }
+                      removeCharacterPlacementInstance(npc.characterId, Number.parseInt(npc.id.split(':')[1] ?? '0', 10));
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+          )}
+
+          {isNpcsSection && selectedCharacterForInstanceList && (
+          <section className="admin-panel">
+            <h3>{selectedCharacterForInstanceList.npcName} Instances</h3>
+            <p className="admin-note">
+              One character, ordered timeline. Highest order wins in gameplay when its flag requirement is met.
+            </p>
+            <div className="admin-row">
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  const fallbackMapId =
+                    editableMap.id ||
+                    selectedCharacterInstances[selectedCharacterInstances.length - 1]?.mapId ||
+                    sourceMapIds[0] ||
+                    '';
+                  if (!fallbackMapId) {
+                    setError('Load maps before adding an NPC instance so a map target can be assigned.');
+                    return;
+                  }
+                  addCharacterPlacementInstance(selectedCharacterForInstanceList.id, fallbackMapId, { x: 0, y: 0 });
+                }}
+              >
+                Add Instance
+              </button>
+              <span className="admin-note">
+                Every instance stores its own map, position, movement, dialogue, battle team, and flag requirement.
+              </span>
+            </div>
+            <div className="npc-instance-list">
+              {selectedCharacterInstances.length === 0 && (
+                <p className="admin-note">No instances yet. Add one to place this character in the story timeline.</p>
+              )}
+              {selectedCharacterInstances.map((placement, index, list) => {
+                const placementMovementType = toEditorNpcMovementType(placement.movement?.type);
+                const interactionMode = resolveNpcInteractionMode(placement);
+                const cardKey = `${selectedCharacterForInstanceList.id}:${index}`;
+                return (
+                  <article
+                    key={`character-instance-row-${selectedCharacterForInstanceList.id}-${index}`}
+                    className={`npc-instance-card ${selectedCharacterInstanceKey === cardKey ? 'is-selected' : ''}`}
+                  >
+                    <div className="npc-instance-card__header">
+                      <h4>Instance #{index + 1}</h4>
+                      <div className="admin-row">
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => loadCharacterPlacementIntoEditor(selectedCharacterForInstanceList.id, index)}
+                        >
+                          Edit In Main Form
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => moveCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, 'up')}
+                          disabled={index <= 0}
+                        >
+                          Up
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => moveCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, 'down')}
+                          disabled={index >= list.length - 1}
+                        >
+                          Down
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => removeCharacterPlacementInstance(selectedCharacterForInstanceList.id, index)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                    <div className="admin-grid-2">
+                      <label>
+                        Map ID
+                        <select
+                          value={placement.mapId ?? ''}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              mapId: event.target.value,
+                            }))
+                          }
+                        >
+                          <option value="">(Select map)</option>
+                          {sourceMapIds.map((mapId) => (
+                            <option key={mapId} value={mapId}>
+                              {mapId}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Requires Flag
+                        <input
+                          list="admin-flag-options"
+                          value={placement.requiresFlag ?? ''}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              requiresFlag: event.target.value.trim() || undefined,
+                            }))
+                          }
+                          placeholder="(none)"
+                        />
+                      </label>
+                      <label>
+                        Position X
+                        <input
+                          type="number"
+                          value={String(placement.position?.x ?? 0)}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              position: {
+                                x: Number.parseInt(event.target.value, 10) || 0,
+                                y: entry.position?.y ?? 0,
+                              },
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        Position Y
+                        <input
+                          type="number"
+                          value={String(placement.position?.y ?? 0)}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              position: {
+                                x: entry.position?.x ?? 0,
+                                y: Number.parseInt(event.target.value, 10) || 0,
+                              },
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        Facing
+                        <select
+                          value={placement.facing ?? selectedCharacterForInstanceList.facing ?? 'down'}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              facing: event.target.value as Direction,
+                            }))
+                          }
+                        >
+                          <option value="down">Down</option>
+                          <option value="left">Left</option>
+                          <option value="right">Right</option>
+                          <option value="up">Up</option>
+                        </select>
+                      </label>
+                      <label>
+                        Movement Type
+                        <select
+                          value={placementMovementType}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              movement: buildPlacementMovement(
+                                entry.movement,
+                                event.target.value as EditorNpcMovementType,
+                              ),
+                            }))
+                          }
+                        >
+                          <option value="static">Static</option>
+                          <option value="static-turning">Static Turning</option>
+                          <option value="wander">Wander</option>
+                          <option value="path">Path</option>
+                        </select>
+                      </label>
+                      {placementMovementType !== 'static' && (
+                        <label>
+                          Step Interval (ms)
+                          <input
+                            type="number"
+                            value={String(placement.movement?.stepIntervalMs ?? 850)}
+                            onChange={(event) =>
+                              updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => {
+                                const parsed = parseInteger(event.target.value);
+                                return {
+                                  ...entry,
+                                  movement: buildPlacementMovement(
+                                    entry.movement,
+                                    toEditorNpcMovementType(entry.movement?.type),
+                                    { stepIntervalMs: parsed ?? 850 },
+                                  ),
+                                };
+                              })
+                            }
+                          />
+                        </label>
+                      )}
+                      {(placementMovementType === 'path' || placementMovementType === 'static-turning') && (
+                        <label>
+                          {placementMovementType === 'path' ? 'Path Pattern' : 'Turn Pattern'}
+                          <input
+                            value={(placement.movement?.pattern ?? []).join(', ')}
+                            onChange={(event) =>
+                              updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                                ...entry,
+                                movement: buildPlacementMovement(
+                                  entry.movement,
+                                  toEditorNpcMovementType(entry.movement?.type),
+                                  {
+                                    pattern: parseDirectionPattern(event.target.value),
+                                  },
+                                ),
+                              }))
+                            }
+                            placeholder="up, right, down, left"
+                          />
+                        </label>
+                      )}
+                      {placementMovementType === 'path' && (
+                        <label>
+                          Path Mode
+                          <select
+                            value={placement.movement?.pathMode === 'pingpong' ? 'pingpong' : 'loop'}
+                            onChange={(event) =>
+                              updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                                ...entry,
+                                movement: buildPlacementMovement(
+                                  entry.movement,
+                                  toEditorNpcMovementType(entry.movement?.type),
+                                  { pathMode: event.target.value === 'pingpong' ? 'pingpong' : 'loop' },
+                                ),
+                              }))
+                            }
+                          >
+                            <option value="loop">Loop</option>
+                            <option value="pingpong">Back and Forth</option>
+                          </select>
+                        </label>
+                      )}
+                      {placementMovementType === 'wander' && (
+                        <label>
+                          Wander Leash Radius
+                          <input
+                            type="number"
+                            value={
+                              typeof placement.movement?.leashRadius === 'number'
+                                ? String(placement.movement.leashRadius)
+                                : ''
+                            }
+                            onChange={(event) =>
+                              updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => {
+                                const parsed = parseInteger(event.target.value);
+                                return {
+                                  ...entry,
+                                  movement: buildPlacementMovement(
+                                    entry.movement,
+                                    toEditorNpcMovementType(entry.movement?.type),
+                                    { leashRadius: parsed ?? undefined },
+                                  ),
+                                };
+                              })
+                            }
+                            placeholder="optional"
+                          />
+                        </label>
+                      )}
+                      {interactionMode === 'battle' && (
+                        <label>
+                          Battle Team IDs
+                          <input
+                            value={(placement.battleTeamIds ?? []).join(', ')}
+                            onChange={(event) =>
+                              updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                                ...entry,
+                                battleTeamIds: parseStringList(event.target.value),
+                              }))
+                            }
+                            placeholder="moolnir@1, buddo@3"
+                          />
+                        </label>
+                      )}
+                      <label>
+                        Dialogue ID
+                        <input
+                          value={placement.dialogueId ?? selectedCharacterForInstanceList.dialogueId ?? 'custom_npc_dialogue'}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              dialogueId: sanitizeIdentifier(event.target.value, 'custom_npc_dialogue'),
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        Dialogue Speaker
+                        <input
+                          value={placement.dialogueSpeaker ?? ''}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              dialogueSpeaker: event.target.value.trim() || undefined,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        Set Flag On Dialogue Complete
+                        <input
+                          list="admin-flag-options"
+                          value={placement.dialogueSetFlag ?? ''}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              dialogueSetFlag: event.target.value.trim() || undefined,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        Set Flag On First Interaction
+                        <input
+                          list="admin-flag-options"
+                          value={placement.firstInteractionSetFlag ?? ''}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              firstInteractionSetFlag: event.target.value.trim() || undefined,
+                            }))
+                          }
+                          placeholder="optional"
+                        />
+                      </label>
+                      <label>
+                        Interaction Mode
+                        <select
+                          value={interactionMode}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => {
+                              const mode = event.target.value as NpcInteractionMode;
+                              const resolved = resolveNpcInteractionFlags(mode, entry.shopId ?? '');
+                              return {
+                                ...entry,
+                                firstInteractBattle: resolved.firstInteractBattle,
+                                healer: resolved.healer,
+                                shopId: resolved.shopId,
+                              };
+                            })
+                          }
+                        >
+                          <option value="dialogue">Dialogue</option>
+                          <option value="battle">Battle</option>
+                          <option value="healer">Healer</option>
+                          <option value="shop">Shop</option>
+                        </select>
+                      </label>
+                      {interactionMode === 'shop' && (
+                        <label>
+                          Shop
+                          <select
+                            value={placement.shopId ?? ''}
+                            onChange={(event) =>
+                              updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                                ...entry,
+                                shopId: event.target.value.trim() || undefined,
+                              }))
+                            }
+                          >
+                            <option value="">(Select shop)</option>
+                            {knownShopIds.map((shopId) => (
+                              <option key={`npc-instance-shop-${index}-${shopId}`} value={shopId}>
+                                {shopNameById.get(shopId) ?? shopId} ({shopId})
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      {interactionMode === 'battle' && (
+                        <>
+                          <label>
+                            Repeat Interaction Battle After Win?
+                            <input
+                              type="checkbox"
+                              checked={Boolean(placement.interactBattleRepeatable)}
+                              onChange={(event) =>
+                                updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                                  ...entry,
+                                  interactBattleRepeatable: event.target.checked,
+                                }))
+                              }
+                            />
+                          </label>
+                          <label>
+                            Battle Win Transition Flag
+                            <select
+                              value={placement.interactBattleDefeatedFlag ?? ''}
+                              onChange={(event) =>
+                                updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                                  ...entry,
+                                  interactBattleDefeatedFlag: event.target.value.trim() || undefined,
+                                }))
+                              }
+                            >
+                              <option value="">(Select existing flag)</option>
+                              {knownFlagIds.map((flagId) => (
+                                <option key={`npc-instance-battle-flag-${index}-${flagId}`} value={flagId}>
+                                  {flagId}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            Battle Rewards
+                            <input
+                              list="admin-item-options"
+                              value={formatNpcItemRewardsInput(placement.battleRewards)}
+                              onChange={(event) =>
+                                updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => {
+                                  const parsed = parseNpcItemRewardsInput(event.target.value);
+                                  return {
+                                    ...entry,
+                                    battleRewards: parsed.ok && parsed.rewards.length > 0 ? parsed.rewards : undefined,
+                                  };
+                                })
+                              }
+                              placeholder="lume:25, field-bandage:1"
+                            />
+                          </label>
+                        </>
+                      )}
+                      <label>
+                        Interaction Rewards
+                        <input
+                          list="admin-item-options"
+                          value={formatNpcItemRewardsInput(placement.interactionRewards)}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => {
+                              const parsed = parseNpcItemRewardsInput(event.target.value);
+                              return {
+                                ...entry,
+                                interactionRewards:
+                                  parsed.ok && parsed.rewards.length > 0 ? parsed.rewards : undefined,
+                              };
+                            })
+                          }
+                          placeholder="lume:5, field-bandage:1"
+                        />
+                      </label>
+                      <label>
+                        Interaction Reward Once Flag
+                        <input
+                          list="admin-flag-options"
+                          value={placement.interactionRewardSetFlag ?? ''}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              interactionRewardSetFlag: event.target.value.trim() || undefined,
+                            }))
+                          }
+                          placeholder="optional"
+                        />
+                      </label>
+                      <label>
+                        Idle Animation
+                        <input
+                          value={placement.idleAnimation ?? ''}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              idleAnimation: event.target.value.trim() || undefined,
+                            }))
+                          }
+                          placeholder="idle"
+                        />
+                      </label>
+                      <label>
+                        Move Animation
+                        <input
+                          value={placement.moveAnimation ?? ''}
+                          onChange={(event) =>
+                            updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                              ...entry,
+                              moveAnimation: event.target.value.trim() || undefined,
+                            }))
+                          }
+                          placeholder="walk"
+                        />
+                      </label>
+                    </div>
+                    <label>
+                      Dialogue Lines (one line per row)
+                      <textarea
+                        rows={3}
+                        className="admin-json"
+                        value={(placement.dialogueLines ?? []).join('\n')}
+                        onChange={(event) =>
+                          updateCharacterPlacementInstance(selectedCharacterForInstanceList.id, index, (entry) => ({
+                            ...entry,
+                            dialogueLines: event.target.value
+                              .split('\n')
+                              .map((line) => line.trim())
+                              .filter((line) => line.length > 0),
+                          }))
+                        }
+                      />
+                    </label>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+          )}
 
           <section className="admin-panel">
             <h3>Save To Project</h3>
@@ -4308,11 +8384,21 @@ function placeNpcFromTemplate(
         : makeNpcInstanceId(template.label || template.npcName, next.npcs),
     name: template.npcName,
     position: { x, y },
+    facing: template.facing,
     color: template.color || '#9b73b8',
     dialogueId: template.dialogueId || 'custom_npc_dialogue',
     dialogueSpeaker: template.dialogueSpeaker,
     dialogueLines: template.dialogueLines ? [...template.dialogueLines] : undefined,
     dialogueSetFlag: template.dialogueSetFlag,
+    firstInteractionSetFlag: template.firstInteractionSetFlag,
+    firstInteractBattle: template.firstInteractBattle,
+    interactBattleRepeatable: template.interactBattleRepeatable,
+    interactBattleDefeatedFlag: template.interactBattleDefeatedFlag,
+    battleRewards: template.battleRewards ? template.battleRewards.map((entry) => ({ ...entry })) : undefined,
+    healer: template.healer,
+    shopId: template.shopId,
+    interactionRewards: template.interactionRewards ? template.interactionRewards.map((entry) => ({ ...entry })) : undefined,
+    interactionRewardSetFlag: template.interactionRewardSetFlag,
     battleTeamIds: template.battleTeamIds ? [...template.battleTeamIds] : undefined,
     movement: template.movement
       ? {
@@ -4320,11 +8406,68 @@ function placeNpcFromTemplate(
           pattern: template.movement.pattern ? [...template.movement.pattern] : undefined,
         }
       : undefined,
+    storyStates: template.storyStates
+      ? template.storyStates.map((state) => ({
+          ...state,
+          position: state.position ? { ...state.position } : undefined,
+          dialogueLines: state.dialogueLines ? [...state.dialogueLines] : undefined,
+          firstInteractBattle: state.firstInteractBattle,
+          interactBattleRepeatable: state.interactBattleRepeatable,
+          interactBattleDefeatedFlag: state.interactBattleDefeatedFlag,
+          battleRewards: state.battleRewards ? state.battleRewards.map((entry) => ({ ...entry })) : undefined,
+          shopId: state.shopId,
+          interactionRewards: state.interactionRewards ? state.interactionRewards.map((entry) => ({ ...entry })) : undefined,
+          interactionRewardSetFlag: state.interactionRewardSetFlag,
+          battleTeamIds: state.battleTeamIds ? [...state.battleTeamIds] : undefined,
+          movement: state.movement
+            ? {
+                ...state.movement,
+                pattern: state.movement.pattern ? [...state.movement.pattern] : undefined,
+              }
+            : undefined,
+          movementGuards: state.movementGuards
+            ? state.movementGuards.map((guard) => ({
+                ...guard,
+                dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+                postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+                battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
+                battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
+              }))
+            : undefined,
+          interactionScript: state.interactionScript
+            ? state.interactionScript.map((step) => ({
+                ...step,
+                ...(step.type === 'dialogue' && Array.isArray(step.lines) ? { lines: [...step.lines] } : {}),
+                ...(step.type === 'move_path' && Array.isArray(step.directions) ? { directions: [...step.directions] } : {}),
+              }))
+            : undefined,
+        }))
+      : undefined,
+    movementGuards: template.movementGuards
+      ? template.movementGuards.map((guard) => ({
+          ...guard,
+          dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+          postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+          battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
+          battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
+        }))
+      : undefined,
+    interactionScript: template.interactionScript
+      ? template.interactionScript.map((step) => ({
+          ...step,
+          ...(step.type === 'dialogue' && Array.isArray(step.lines) ? { lines: [...step.lines] } : {}),
+          ...(step.type === 'move_path' && Array.isArray(step.directions) ? { directions: [...step.directions] } : {}),
+        }))
+      : undefined,
     idleAnimation: template.idleAnimation,
     moveAnimation: template.moveAnimation,
     sprite: resolvedSprite
       ? {
           ...resolvedSprite,
+          url:
+            typeof template.cacheVersion === 'number' && Number.isFinite(template.cacheVersion)
+              ? withCacheBusterTagValue(resolvedSprite.url, template.cacheVersion)
+              : resolvedSprite.url,
           animationSets: resolvedSprite.animationSets
             ? Object.fromEntries(
                 Object.entries(resolvedSprite.animationSets).map(([name, directions]) => [
@@ -4380,6 +8523,7 @@ function createAutoPaintTiles(maxAtlasIndex: number): SavedPaintTile[] {
     primaryCode: code,
     width: 1,
     height: 1,
+    ySortWithActors: inferTileYSortWithActors(TILE_DEFINITIONS[code].label, 1, 1),
     cells: [
       {
         code,
@@ -4448,6 +8592,37 @@ function sanitizeIdentifier(value: string, fallback: string): string {
   return trimmed.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
 }
 
+function makeUniqueInteractionId(existing: InteractionDefinition[], baseId: string): string {
+  const normalizedBase = sanitizeIdentifier(baseId, 'interaction');
+  let suffix = 1;
+  while (suffix <= 10000) {
+    const candidate = suffix === 1 ? normalizedBase : `${normalizedBase}-${suffix}`;
+    if (!existing.some((interaction) => interaction.id === candidate)) {
+      return candidate;
+    }
+    suffix += 1;
+  }
+  return `${normalizedBase}-${Date.now()}`;
+}
+
+function normalizeInteractionKind(kind: InteractionDefinition['kind'] | undefined): 'dialogue' | 'heal_tile' | null {
+  if (typeof kind !== 'string' || !kind.trim()) {
+    return null;
+  }
+  const normalized = kind.trim().toLowerCase();
+  if (normalized === 'dialogue') {
+    return 'dialogue';
+  }
+  if (normalized === 'heal_tile' || normalized === 'heal') {
+    return 'heal_tile';
+  }
+  return null;
+}
+
+function isHealTileInteractionKind(kind: InteractionDefinition['kind'] | undefined): boolean {
+  return normalizeInteractionKind(kind) === 'heal_tile';
+}
+
 function makeUniqueWarpId(existing: WarpDefinition[], mapId: string): string {
   const safeMapId = mapId.replace(/[^a-z0-9]/gi, '_');
   let index = existing.length + 1;
@@ -4463,27 +8638,40 @@ function makeUniqueWarpId(existing: WarpDefinition[], mapId: string): string {
   return `${safeMapId}_warp_${Date.now()}`;
 }
 
-function makeUniqueLayerId(existing: EditableMapLayer[], currentId: string, nextId: string): string {
-  const safeId = sanitizeIdentifier(nextId, currentId);
-  if (safeId === currentId) {
-    return currentId;
+function makeUniqueLayerId(existing: EditableMapLayer[], currentId: string, nextOrderId: number): string {
+  const safeCurrent = parseLayerOrderId(currentId) ?? 1;
+  const safeOrder = Math.max(1, Math.floor(nextOrderId));
+  if (safeCurrent === safeOrder) {
+    return String(safeCurrent);
   }
 
-  const usedIds = new Set(existing.filter((layer) => layer.id !== currentId).map((layer) => layer.id));
-  if (!usedIds.has(safeId)) {
-    return safeId;
-  }
-
-  let suffix = 2;
-  while (suffix < 5000) {
-    const candidate = `${safeId}-${suffix}`;
-    if (!usedIds.has(candidate)) {
-      return candidate;
+  const usedIds = new Set<number>();
+  for (const layer of existing) {
+    if (layer.id === currentId) {
+      continue;
     }
-    suffix += 1;
+    const parsed = parseLayerOrderId(layer.id);
+    if (parsed) {
+      usedIds.add(parsed);
+    }
   }
 
-  return `${safeId}-${Date.now()}`;
+  let candidate = safeOrder;
+  while (usedIds.has(candidate)) {
+    candidate += 1;
+  }
+  return String(candidate);
+}
+
+function nextLayerId(existing: EditableMapLayer[]): string {
+  let maxId = 0;
+  for (const layer of existing) {
+    const parsed = parseLayerOrderId(layer.id);
+    if (parsed && parsed > maxId) {
+      maxId = parsed;
+    }
+  }
+  return String(maxId + 1);
 }
 
 function pseudoRandomQuarter(x: number, y: number): number {
@@ -4495,13 +8683,92 @@ function normalizeQuarter(value: number): number {
   return ((value % 4) + 4) % 4;
 }
 
+function rotateTileTransformValue(tileTransform: number, deltaQuarter: number): number {
+  const decoded = decodeTileTransform(tileTransform);
+  return encodeTileTransform(normalizeQuarter(decoded.rotationQuarter + deltaQuarter), decoded.mirrorHorizontal);
+}
+
+function mirrorTileTransformHorizontally(tileTransform: number): number {
+  const decoded = decodeTileTransform(tileTransform);
+  return encodeTileTransform(normalizeQuarter(-decoded.rotationQuarter), !decoded.mirrorHorizontal);
+}
+
+function mirrorTileTransformVertically(tileTransform: number): number {
+  const decoded = decodeTileTransform(tileTransform);
+  return encodeTileTransform(normalizeQuarter(2 - decoded.rotationQuarter), !decoded.mirrorHorizontal);
+}
+
+function inferTileYSortWithActors(name: string, width: number, height: number): boolean {
+  const normalizedName = name.trim().toLowerCase();
+  const flatKeywords = [
+    'grass',
+    'flower',
+    'path',
+    'sand',
+    'water',
+    'floor',
+    'ground',
+    'healer',
+    'hospital',
+    'counter',
+    'desk',
+    'table',
+    'bed',
+    'machine',
+    'terminal',
+  ];
+  if (!normalizedName) {
+    return !(width > 1 || height > 1);
+  }
+  if (flatKeywords.some((keyword) => normalizedName.includes(keyword))) {
+    return false;
+  }
+
+  if (width > 1 || height > 1) {
+    return true;
+  }
+
+  const overheadKeywords = [
+    'tree',
+    'bush',
+    'house',
+    'roof',
+    'wall',
+    'building',
+    'cliff',
+    'rock',
+    'fence',
+    'gate',
+    'pillar',
+    'tower',
+    'arch',
+    'sign',
+    'door',
+  ];
+  if (overheadKeywords.some((keyword) => normalizedName.includes(keyword))) {
+    return true;
+  }
+
+  return true;
+}
+
 function transformStampCells(
   tile: SavedPaintTile,
   rotationQuarter: number,
   mirrorHorizontal: boolean,
   mirrorVertical: boolean,
-): Array<{ code: EditorTileCode; dx: number; dy: number; rotationQuarter: number }> {
+): Array<{ code: EditorTileCode; dx: number; dy: number; rotationQuarter: number; mirrorHorizontal: boolean }> {
   const quarter = normalizeQuarter(rotationQuarter);
+  const transformedOrientation = (() => {
+    let nextTransform = encodeTileTransform(quarter, false);
+    if (mirrorHorizontal) {
+      nextTransform = mirrorTileTransformHorizontally(nextTransform);
+    }
+    if (mirrorVertical) {
+      nextTransform = mirrorTileTransformVertically(nextTransform);
+    }
+    return decodeTileTransform(nextTransform);
+  })();
 
   return tile.cells.map((cell) => {
     const mirroredX = mirrorHorizontal ? tile.width - 1 - cell.dx : cell.dx;
@@ -4513,28 +8780,32 @@ function transformStampCells(
           code: cell.code,
           dx: tile.height - 1 - mirroredY,
           dy: mirroredX,
-          rotationQuarter: 1,
+          rotationQuarter: transformedOrientation.rotationQuarter,
+          mirrorHorizontal: transformedOrientation.mirrorHorizontal,
         };
       case 2:
         return {
           code: cell.code,
           dx: tile.width - 1 - mirroredX,
           dy: tile.height - 1 - mirroredY,
-          rotationQuarter: 2,
+          rotationQuarter: transformedOrientation.rotationQuarter,
+          mirrorHorizontal: transformedOrientation.mirrorHorizontal,
         };
       case 3:
         return {
           code: cell.code,
           dx: mirroredY,
           dy: tile.width - 1 - mirroredX,
-          rotationQuarter: 3,
+          rotationQuarter: transformedOrientation.rotationQuarter,
+          mirrorHorizontal: transformedOrientation.mirrorHorizontal,
         };
       default:
         return {
           code: cell.code,
           dx: mirroredX,
           dy: mirroredY,
-          rotationQuarter: 0,
+          rotationQuarter: transformedOrientation.rotationQuarter,
+          mirrorHorizontal: transformedOrientation.mirrorHorizontal,
         };
     }
   });
@@ -4624,6 +8895,41 @@ function coordinateForEdge(side: EdgeSide, offset: number, width: number, height
   }
 }
 
+function parseCellKey(raw: string): Vector2 | null {
+  const [xRaw, yRaw] = raw.split(',');
+  if (xRaw === undefined || yRaw === undefined) {
+    return null;
+  }
+  const x = Number.parseInt(xRaw, 10);
+  const y = Number.parseInt(yRaw, 10);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return null;
+  }
+  return {
+    x: Math.floor(x),
+    y: Math.floor(y),
+  };
+}
+
+function suggestEncounterGroupId(groups: MapEncounterGroupDefinition[]): string {
+  const used = new Set(groups.map((group) => group.id));
+  let index = groups.length + 1;
+  let candidate = `encounter-group-${index}`;
+  while (used.has(candidate)) {
+    index += 1;
+    candidate = `encounter-group-${index}`;
+  }
+  return candidate;
+}
+
+function clampEncounterFrequency(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  const clamped = Math.max(0, Math.min(1, value));
+  return Math.round(clamped * 1000) / 1000;
+}
+
 function buildWarnings(map: EditableMap, savedCustomTileCodes: Set<string>, knownSourceMapIds: string[]): string[] {
   const warnings: string[] = [];
   const { width, height } = getMapSize(map);
@@ -4634,9 +8940,15 @@ function buildWarnings(map: EditableMap, savedCustomTileCodes: Set<string>, know
     return warnings;
   }
 
+  const usedLayerIds = new Set<number>();
   for (const layer of map.layers) {
-    if (!layer.id.trim()) {
-      warnings.push('Layer with empty id detected.');
+    const parsedLayerId = parseLayerOrderId(layer.id);
+    if (!parsedLayerId) {
+      warnings.push(`Layer "${layer.id}" has invalid numeric id. Use integers >= 1.`);
+    } else if (usedLayerIds.has(parsedLayerId)) {
+      warnings.push(`Duplicate layer id ${parsedLayerId} detected.`);
+    } else {
+      usedLayerIds.add(parsedLayerId);
     }
     if (layer.tiles.length !== height) {
       warnings.push(`Layer ${layer.id} height mismatch (${layer.tiles.length} vs ${height}).`);
@@ -4697,8 +9009,13 @@ function buildWarnings(map: EditableMap, savedCustomTileCodes: Set<string>, know
     if (!isInsideBounds(npc.position.x, npc.position.y, width, height)) {
       warnings.push(`NPC ${npc.id} is out of bounds at (${npc.position.x}, ${npc.position.y}).`);
     }
-    if (npc.movement?.type === 'loop' && (!npc.movement.pattern || npc.movement.pattern.length === 0)) {
-      warnings.push(`NPC ${npc.id} has loop movement but no pattern directions.`);
+    const movementType = npc.movement?.type;
+    const movementPattern = npc.movement?.pattern;
+    if (
+      (movementType === 'path' || movementType === 'loop' || movementType === 'static-turning') &&
+      (!movementPattern || movementPattern.length === 0)
+    ) {
+      warnings.push(`NPC ${npc.id} has ${movementType} movement but no pattern directions.`);
     }
     if (npc.sprite && (!npc.sprite.url || npc.sprite.frameWidth <= 0 || npc.sprite.frameHeight <= 0)) {
       warnings.push(`NPC ${npc.id} has incomplete sprite sheet settings.`);
@@ -4709,6 +9026,12 @@ function buildWarnings(map: EditableMap, savedCustomTileCodes: Set<string>, know
     if (!isInsideBounds(interaction.position.x, interaction.position.y, width, height)) {
       warnings.push(
         `Interaction ${interaction.id} is out of bounds at (${interaction.position.x}, ${interaction.position.y}).`,
+      );
+    }
+    const normalizedKind = normalizeInteractionKind(interaction.kind);
+    if (interaction.kind && !normalizedKind) {
+      warnings.push(
+        `Interaction ${interaction.id} has unknown kind "${interaction.kind}". Use "dialogue" or "heal_tile".`,
       );
     }
   }
@@ -4733,6 +9056,26 @@ function buildWarnings(map: EditableMap, savedCustomTileCodes: Set<string>, know
   for (const warp of map.warps) {
     if (!knownMapIds.has(warp.toMapId) && warp.toMapId !== map.id) {
       warnings.push(`Warp ${warp.id} targets unknown map id "${warp.toMapId}".`);
+    }
+  }
+
+  for (const encounterGroup of map.encounterGroups) {
+    if (!encounterGroup.id.trim()) {
+      warnings.push('Encounter group with empty id detected.');
+    }
+    if (encounterGroup.tilePositions.length === 0) {
+      warnings.push(`Encounter group ${encounterGroup.id} has no tile positions.`);
+    }
+    if (encounterGroup.walkFrequency < 0 || encounterGroup.walkFrequency > 1) {
+      warnings.push(`Encounter group ${encounterGroup.id} walkFrequency must be between 0 and 1.`);
+    }
+    if (encounterGroup.fishFrequency < 0 || encounterGroup.fishFrequency > 1) {
+      warnings.push(`Encounter group ${encounterGroup.id} fishFrequency must be between 0 and 1.`);
+    }
+    for (const position of encounterGroup.tilePositions) {
+      if (!isInsideBounds(position.x, position.y, width, height)) {
+        warnings.push(`Encounter group ${encounterGroup.id} tile is out of bounds at (${position.x}, ${position.y}).`);
+      }
     }
   }
 
@@ -4844,9 +9187,13 @@ function sanitizeSavedPaintTile(raw: unknown): SavedPaintTile | null {
     primaryCode?: unknown;
     width?: unknown;
     height?: unknown;
+    ySortWithActors?: unknown;
     cells?: unknown;
     code?: unknown;
     atlasIndex?: unknown;
+    tilesetUrl?: unknown;
+    tilePixelWidth?: unknown;
+    tilePixelHeight?: unknown;
   };
 
   const id = typeof record.id === 'string' && record.id.trim() ? record.id : `tile-${Date.now()}`;
@@ -4884,6 +9231,14 @@ function sanitizeSavedPaintTile(raw: unknown): SavedPaintTile | null {
     const height = typeof record.height === 'number' ? Math.max(1, Math.floor(record.height)) : 1;
     const primaryCode =
       typeof record.primaryCode === 'string' && record.primaryCode.trim() ? record.primaryCode.trim()[0] : cells[0].code;
+    const ySortWithActors =
+      typeof record.ySortWithActors === 'boolean'
+        ? record.ySortWithActors
+        : inferTileYSortWithActors(name, width, height);
+
+    const tilesetUrl = typeof record.tilesetUrl === 'string' && record.tilesetUrl.trim() ? record.tilesetUrl.trim() : undefined;
+    const tilePixelWidth = typeof record.tilePixelWidth === 'number' && Number.isFinite(record.tilePixelWidth) ? Math.max(1, Math.floor(record.tilePixelWidth)) : undefined;
+    const tilePixelHeight = typeof record.tilePixelHeight === 'number' && Number.isFinite(record.tilePixelHeight) ? Math.max(1, Math.floor(record.tilePixelHeight)) : undefined;
 
     return {
       id,
@@ -4891,7 +9246,11 @@ function sanitizeSavedPaintTile(raw: unknown): SavedPaintTile | null {
       primaryCode,
       width,
       height,
+      ySortWithActors,
       cells,
+      ...(tilesetUrl !== undefined && { tilesetUrl }),
+      ...(tilePixelWidth !== undefined && { tilePixelWidth }),
+      ...(tilePixelHeight !== undefined && { tilePixelHeight }),
     };
   }
 
@@ -4901,13 +9260,20 @@ function sanitizeSavedPaintTile(raw: unknown): SavedPaintTile | null {
       return null;
     }
     const atlasIndex = typeof record.atlasIndex === 'number' ? clampInt(record.atlasIndex, 0, Number.MAX_SAFE_INTEGER) : 0;
+    const tilesetUrl = typeof record.tilesetUrl === 'string' && record.tilesetUrl.trim() ? record.tilesetUrl.trim() : undefined;
+    const tilePixelWidth = typeof record.tilePixelWidth === 'number' && Number.isFinite(record.tilePixelWidth) ? Math.max(1, Math.floor(record.tilePixelWidth)) : undefined;
+    const tilePixelHeight = typeof record.tilePixelHeight === 'number' && Number.isFinite(record.tilePixelHeight) ? Math.max(1, Math.floor(record.tilePixelHeight)) : undefined;
     return {
       id,
       name,
       primaryCode: code,
       width: 1,
       height: 1,
+      ySortWithActors: inferTileYSortWithActors(name, 1, 1),
       cells: [{ code, atlasIndex, dx: 0, dy: 0 }],
+      ...(tilesetUrl !== undefined && { tilesetUrl }),
+      ...(tilePixelWidth !== undefined && { tilePixelWidth }),
+      ...(tilePixelHeight !== undefined && { tilePixelHeight }),
     };
   }
 
@@ -4930,6 +9296,65 @@ function parseDirectionPattern(value: string): Direction[] {
     }
   }
   return parsed;
+}
+
+function isDirectionValue(value: unknown): value is Direction {
+  return value === 'up' || value === 'down' || value === 'left' || value === 'right';
+}
+
+function withCacheBusterTag(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  try {
+    const parsed = new URL(trimmed, window.location.origin);
+    parsed.searchParams.set('v', String(Date.now()));
+    if (/^https?:\/\//i.test(trimmed)) {
+      return parsed.toString();
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    const separator = trimmed.includes('?') ? '&' : '?';
+    return `${trimmed}${separator}v=${Date.now()}`;
+  }
+}
+
+function normalizeAssetUrlForCompare(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  try {
+    const parsed = new URL(trimmed, window.location.origin);
+    parsed.search = '';
+    parsed.hash = '';
+    if (/^https?:\/\//i.test(trimmed)) {
+      return parsed.toString();
+    }
+    return parsed.pathname;
+  } catch {
+    return trimmed.split('?')[0].split('#')[0];
+  }
+}
+
+function withCacheBusterTagValue(url: string, version: number): string {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const normalizedVersion = Number.isFinite(version) ? Math.max(1, Math.floor(version)) : Date.now();
+  try {
+    const parsed = new URL(trimmed, window.location.origin);
+    parsed.searchParams.set('v', String(normalizedVersion));
+    if (/^https?:\/\//i.test(trimmed)) {
+      return parsed.toString();
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    const separator = trimmed.includes('?') ? '&' : '?';
+    return `${trimmed}${separator}v=${normalizedVersion}`;
+  }
 }
 
 function makeNpcSpriteId(baseName: string, existing: NpcSpriteLibraryEntry[]): string {
@@ -5019,13 +9444,28 @@ function sanitizeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateEntry[] 
       label?: unknown;
       npcName?: unknown;
       color?: unknown;
+      facing?: unknown;
       dialogueId?: unknown;
       dialogueSpeaker?: unknown;
       dialogueLines?: unknown;
       dialogueSetFlag?: unknown;
+      firstInteractionSetFlag?: unknown;
+      firstInteractBattle?: unknown;
+      interactBattleRepeatable?: unknown;
+      interactBattleDefeatedFlag?: unknown;
+      postDefeatSetFlag?: unknown;
+      battleRewards?: unknown;
+      healer?: unknown;
+      shopId?: unknown;
+      interactionRewards?: unknown;
+      interactionRewardSetFlag?: unknown;
       battleTeamIds?: unknown;
+      movementGuards?: unknown;
+      storyStates?: unknown;
+      interactionScript?: unknown;
       movement?: unknown;
       spriteId?: unknown;
+      cacheVersion?: unknown;
       idleAnimation?: unknown;
       moveAnimation?: unknown;
     };
@@ -5044,12 +9484,23 @@ function sanitizeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateEntry[] 
           .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
           .map((entry) => entry.trim())
       : undefined;
+    const facing =
+      record.facing === 'up' || record.facing === 'down' || record.facing === 'left' || record.facing === 'right'
+        ? record.facing
+        : undefined;
+    const interactBattleTransitionFlag =
+      typeof record.interactBattleDefeatedFlag === 'string' && record.interactBattleDefeatedFlag.trim()
+        ? record.interactBattleDefeatedFlag.trim()
+        : typeof record.postDefeatSetFlag === 'string' && record.postDefeatSetFlag.trim()
+          ? record.postDefeatSetFlag.trim()
+          : undefined;
 
     characters.push({
       id: typeof record.id === 'string' && record.id.trim() ? record.id : `npc-character-${Date.now()}`,
       label,
       npcName,
       color: typeof record.color === 'string' && record.color ? record.color : '#9b73b8',
+      facing,
       dialogueId:
         typeof record.dialogueId === 'string' && record.dialogueId.trim()
           ? record.dialogueId
@@ -5063,10 +9514,33 @@ function sanitizeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateEntry[] 
         typeof record.dialogueSetFlag === 'string' && record.dialogueSetFlag.trim()
           ? record.dialogueSetFlag
           : undefined,
+      firstInteractionSetFlag:
+        typeof record.firstInteractionSetFlag === 'string' && record.firstInteractionSetFlag.trim()
+          ? record.firstInteractionSetFlag.trim()
+          : undefined,
+      firstInteractBattle: typeof record.firstInteractBattle === 'boolean' ? record.firstInteractBattle : undefined,
+      interactBattleRepeatable:
+        typeof record.interactBattleRepeatable === 'boolean' ? record.interactBattleRepeatable : undefined,
+      interactBattleDefeatedFlag: interactBattleTransitionFlag,
+      battleRewards: sanitizeNpcItemRewards(record.battleRewards),
+      healer: typeof record.healer === 'boolean' ? record.healer : undefined,
+      shopId: typeof record.shopId === 'string' && record.shopId.trim() ? sanitizeIdentifier(record.shopId, '') : undefined,
+      interactionRewards: sanitizeNpcItemRewards(record.interactionRewards),
+      interactionRewardSetFlag:
+        typeof record.interactionRewardSetFlag === 'string' && record.interactionRewardSetFlag.trim()
+          ? record.interactionRewardSetFlag.trim()
+          : undefined,
       battleTeamIds: battleTeamIds && battleTeamIds.length > 0 ? battleTeamIds : undefined,
+      movementGuards: sanitizeNpcMovementGuards(record.movementGuards),
+      storyStates: compactCharacterPlacementOrder(sanitizeNpcStoryStates(record.storyStates) ?? []),
+      interactionScript: sanitizeNpcInteractionScript(record.interactionScript),
       movement: sanitizeNpcMovement(record.movement),
       spriteId:
         typeof record.spriteId === 'string' && record.spriteId.trim() ? record.spriteId.trim() : undefined,
+      cacheVersion:
+        typeof record.cacheVersion === 'number' && Number.isFinite(record.cacheVersion)
+          ? Math.max(1, Math.floor(record.cacheVersion))
+          : undefined,
       idleAnimation:
         typeof record.idleAnimation === 'string' && record.idleAnimation.trim()
           ? record.idleAnimation.trim()
@@ -5078,7 +9552,354 @@ function sanitizeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateEntry[] 
     });
   }
 
-  return characters;
+  return normalizeCoreStoryNpcCharacters(characters);
+}
+
+function sanitizeNpcStoryStates(raw: unknown): NpcStoryStateDefinition[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+
+  const states: NpcStoryStateDefinition[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const positionRaw =
+      record.position && typeof record.position === 'object' && !Array.isArray(record.position)
+        ? (record.position as Record<string, unknown>)
+        : null;
+    const position =
+      positionRaw &&
+      typeof positionRaw.x === 'number' &&
+      Number.isFinite(positionRaw.x) &&
+      typeof positionRaw.y === 'number' &&
+      Number.isFinite(positionRaw.y)
+        ? {
+            x: Math.floor(positionRaw.x),
+            y: Math.floor(positionRaw.y),
+          }
+        : undefined;
+    const facing =
+      record.facing === 'up' || record.facing === 'down' || record.facing === 'left' || record.facing === 'right'
+        ? record.facing
+        : undefined;
+    const dialogueLines = Array.isArray(record.dialogueLines)
+      ? record.dialogueLines
+          .filter((line): line is string => typeof line === 'string' && line.trim().length > 0)
+          .map((line) => line.trim())
+      : undefined;
+    const battleTeamIds = Array.isArray(record.battleTeamIds)
+      ? record.battleTeamIds
+          .filter((teamId): teamId is string => typeof teamId === 'string' && teamId.trim().length > 0)
+          .map((teamId) => teamId.trim())
+      : undefined;
+    const interactBattleTransitionFlag =
+      typeof record.interactBattleDefeatedFlag === 'string' && record.interactBattleDefeatedFlag.trim()
+        ? record.interactBattleDefeatedFlag.trim()
+        : typeof record.postDefeatSetFlag === 'string' && record.postDefeatSetFlag.trim()
+          ? record.postDefeatSetFlag.trim()
+          : undefined;
+
+    const state: NpcStoryStateDefinition = {
+      id: typeof record.id === 'string' && record.id.trim() ? record.id.trim() : undefined,
+      requiresFlag:
+        typeof record.requiresFlag === 'string' && record.requiresFlag.trim() ? record.requiresFlag.trim() : undefined,
+      mapId: typeof record.mapId === 'string' && record.mapId.trim() ? record.mapId.trim() : undefined,
+      position,
+      facing,
+      dialogueId:
+        typeof record.dialogueId === 'string' && record.dialogueId.trim() ? record.dialogueId.trim() : undefined,
+      dialogueLines: dialogueLines && dialogueLines.length > 0 ? dialogueLines : undefined,
+      dialogueSpeaker:
+        typeof record.dialogueSpeaker === 'string' && record.dialogueSpeaker.trim()
+          ? record.dialogueSpeaker.trim()
+          : undefined,
+      dialogueSetFlag:
+        typeof record.dialogueSetFlag === 'string' && record.dialogueSetFlag.trim()
+          ? record.dialogueSetFlag.trim()
+          : undefined,
+      firstInteractionSetFlag:
+        typeof record.firstInteractionSetFlag === 'string' && record.firstInteractionSetFlag.trim()
+          ? record.firstInteractionSetFlag.trim()
+          : undefined,
+      firstInteractBattle: typeof record.firstInteractBattle === 'boolean' ? record.firstInteractBattle : undefined,
+      interactBattleRepeatable:
+        typeof record.interactBattleRepeatable === 'boolean' ? record.interactBattleRepeatable : undefined,
+      interactBattleDefeatedFlag: interactBattleTransitionFlag,
+      battleRewards: sanitizeNpcItemRewards(record.battleRewards),
+      healer: typeof record.healer === 'boolean' ? record.healer : undefined,
+      shopId: typeof record.shopId === 'string' && record.shopId.trim() ? sanitizeIdentifier(record.shopId, '') : undefined,
+      interactionRewards: sanitizeNpcItemRewards(record.interactionRewards),
+      interactionRewardSetFlag:
+        typeof record.interactionRewardSetFlag === 'string' && record.interactionRewardSetFlag.trim()
+          ? record.interactionRewardSetFlag.trim()
+          : undefined,
+      battleTeamIds: battleTeamIds && battleTeamIds.length > 0 ? battleTeamIds : undefined,
+      movement: sanitizeNpcMovement(record.movement),
+      movementGuards: sanitizeNpcMovementGuards(record.movementGuards),
+      idleAnimation:
+        typeof record.idleAnimation === 'string' && record.idleAnimation.trim()
+          ? record.idleAnimation.trim()
+          : undefined,
+      moveAnimation:
+        typeof record.moveAnimation === 'string' && record.moveAnimation.trim()
+          ? record.moveAnimation.trim()
+          : undefined,
+      interactionScript: sanitizeNpcInteractionScript(record.interactionScript),
+    };
+
+    states.push(state);
+  }
+  return states.length > 0 ? states : undefined;
+}
+
+function parseNpcStoryStatesInput(
+  rawInput: string,
+): { ok: true; states: NpcStoryStateDefinition[] } | { ok: false; error: string } {
+  const trimmed = rawInput.trim();
+  if (!trimmed) {
+    return { ok: true, states: [] };
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    const states = sanitizeNpcStoryStates(parsed) ?? [];
+    return { ok: true, states };
+  } catch {
+    return {
+      ok: false,
+      error: 'Story States JSON is invalid. Provide a valid JSON array.',
+    };
+  }
+}
+
+function sanitizeNpcMovementGuards(raw: unknown): NpcMovementGuardDefinition[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const guards: NpcMovementGuardDefinition[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const hasTarget =
+      (typeof record.x === 'number' && Number.isFinite(record.x)) ||
+      (typeof record.y === 'number' && Number.isFinite(record.y)) ||
+      (typeof record.minX === 'number' && Number.isFinite(record.minX)) ||
+      (typeof record.maxX === 'number' && Number.isFinite(record.maxX)) ||
+      (typeof record.minY === 'number' && Number.isFinite(record.minY)) ||
+      (typeof record.maxY === 'number' && Number.isFinite(record.maxY));
+    if (!hasTarget) {
+      continue;
+    }
+    const guardDefeatTransitionFlag =
+      typeof record.defeatedFlag === 'string' && record.defeatedFlag.trim()
+        ? record.defeatedFlag.trim()
+        : typeof record.postDefeatSetFlag === 'string' && record.postDefeatSetFlag.trim()
+          ? record.postDefeatSetFlag.trim()
+          : undefined;
+    guards.push({
+      id: typeof record.id === 'string' && record.id.trim() ? record.id.trim() : undefined,
+      requiresFlag:
+        typeof record.requiresFlag === 'string' && record.requiresFlag.trim() ? record.requiresFlag.trim() : undefined,
+      hideIfFlag:
+        typeof record.hideIfFlag === 'string' && record.hideIfFlag.trim() ? record.hideIfFlag.trim() : undefined,
+      x: typeof record.x === 'number' && Number.isFinite(record.x) ? Math.floor(record.x) : undefined,
+      y: typeof record.y === 'number' && Number.isFinite(record.y) ? Math.floor(record.y) : undefined,
+      minX: typeof record.minX === 'number' && Number.isFinite(record.minX) ? Math.floor(record.minX) : undefined,
+      maxX: typeof record.maxX === 'number' && Number.isFinite(record.maxX) ? Math.floor(record.maxX) : undefined,
+      minY: typeof record.minY === 'number' && Number.isFinite(record.minY) ? Math.floor(record.minY) : undefined,
+      maxY: typeof record.maxY === 'number' && Number.isFinite(record.maxY) ? Math.floor(record.maxY) : undefined,
+      dialogueSpeaker:
+        typeof record.dialogueSpeaker === 'string' && record.dialogueSpeaker.trim()
+          ? record.dialogueSpeaker.trim()
+          : undefined,
+      dialogueLines: Array.isArray(record.dialogueLines)
+        ? record.dialogueLines
+            .filter((line): line is string => typeof line === 'string' && line.trim().length > 0)
+            .map((line) => line.trim())
+        : undefined,
+      setFlag: typeof record.setFlag === 'string' && record.setFlag.trim() ? record.setFlag.trim() : undefined,
+      defeatedFlag: guardDefeatTransitionFlag,
+      battleTeamIds: Array.isArray(record.battleTeamIds)
+        ? record.battleTeamIds
+            .filter((teamId): teamId is string => typeof teamId === 'string' && teamId.trim().length > 0)
+            .map((teamId) => teamId.trim())
+        : undefined,
+      battleRewards: sanitizeNpcItemRewards(record.battleRewards),
+      battleRepeatable: typeof record.battleRepeatable === 'boolean' ? record.battleRepeatable : undefined,
+      postDuelDialogueSpeaker:
+        typeof record.postDuelDialogueSpeaker === 'string' && record.postDuelDialogueSpeaker.trim()
+          ? record.postDuelDialogueSpeaker.trim()
+          : undefined,
+      postDuelDialogueLines: Array.isArray(record.postDuelDialogueLines)
+        ? record.postDuelDialogueLines
+            .filter((line): line is string => typeof line === 'string' && line.trim().length > 0)
+            .map((line) => line.trim())
+        : undefined,
+    });
+  }
+  return guards.length > 0 ? guards : undefined;
+}
+
+function parseNpcMovementGuardsInput(
+  rawInput: string,
+): { ok: true; guards: NpcMovementGuardDefinition[] } | { ok: false; error: string } {
+  const trimmed = rawInput.trim();
+  if (!trimmed) {
+    return { ok: true, guards: [] };
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    const guards = sanitizeNpcMovementGuards(parsed) ?? [];
+    return { ok: true, guards };
+  } catch {
+    return {
+      ok: false,
+      error: 'Movement Guards JSON is invalid. Provide a valid JSON array.',
+    };
+  }
+}
+
+function sanitizeNpcInteractionScript(raw: unknown): NpcInteractionActionDefinition[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const actions: NpcInteractionActionDefinition[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const type = typeof record.type === 'string' ? record.type.trim() : '';
+    if (type === 'dialogue') {
+      const lines = Array.isArray(record.lines)
+        ? record.lines
+            .filter((line): line is string => typeof line === 'string' && line.trim().length > 0)
+            .map((line) => line.trim())
+        : [];
+      if (lines.length === 0) {
+        continue;
+      }
+      actions.push({
+        type: 'dialogue',
+        speaker: typeof record.speaker === 'string' && record.speaker.trim() ? record.speaker.trim() : undefined,
+        lines,
+        setFlag: typeof record.setFlag === 'string' && record.setFlag.trim() ? record.setFlag.trim() : undefined,
+      });
+      continue;
+    }
+    if (type === 'set_flag') {
+      const flag = typeof record.flag === 'string' ? record.flag.trim() : '';
+      if (!flag) {
+        continue;
+      }
+      actions.push({
+        type: 'set_flag',
+        flag,
+      });
+      continue;
+    }
+    if (type === 'move_to_player') {
+      actions.push({ type: 'move_to_player' });
+      continue;
+    }
+    if (type === 'face_player') {
+      actions.push({ type: 'face_player' });
+      continue;
+    }
+    if (type === 'wait') {
+      const durationMsRaw = typeof record.durationMs === 'number' ? record.durationMs : 0;
+      actions.push({
+        type: 'wait',
+        durationMs: clampInt(Math.floor(durationMsRaw), 0, 60000),
+      });
+      continue;
+    }
+    if (type === 'move_path') {
+      const directions = Array.isArray(record.directions)
+        ? record.directions.filter((direction): direction is Direction => isDirectionValue(direction))
+        : [];
+      if (directions.length === 0) {
+        continue;
+      }
+      actions.push({
+        type: 'move_path',
+        directions,
+      });
+      continue;
+    }
+    if (type === 'give_item') {
+      const itemId = typeof record.itemId === 'string' ? record.itemId.trim() : '';
+      const quantity =
+        typeof record.quantity === 'number' && Number.isFinite(record.quantity)
+          ? Math.max(0, Math.floor(record.quantity))
+          : 0;
+      if (!itemId || quantity <= 0) {
+        continue;
+      }
+      actions.push({
+        type: 'give_item',
+        itemId,
+        quantity,
+        setFlag: typeof record.setFlag === 'string' && record.setFlag.trim() ? record.setFlag.trim() : undefined,
+        message: typeof record.message === 'string' && record.message.trim() ? record.message.trim() : undefined,
+      });
+      continue;
+    }
+  }
+  return actions.length > 0 ? actions : undefined;
+}
+
+function sanitizeNpcItemRewards(raw: unknown): NpcItemRewardDefinition[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const rewards: NpcItemRewardDefinition[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const itemId = typeof record.itemId === 'string' ? record.itemId.trim() : '';
+    const quantity =
+      typeof record.quantity === 'number' && Number.isFinite(record.quantity)
+        ? Math.max(0, Math.floor(record.quantity))
+        : 0;
+    if (!itemId || quantity <= 0) {
+      continue;
+    }
+    rewards.push({ itemId, quantity });
+  }
+  if (rewards.length === 0) {
+    return undefined;
+  }
+  const merged = new Map<string, number>();
+  for (const reward of rewards) {
+    merged.set(reward.itemId, (merged.get(reward.itemId) ?? 0) + reward.quantity);
+  }
+  return [...merged.entries()].map(([itemId, quantity]) => ({ itemId, quantity }));
+}
+
+function parseNpcInteractionScriptInput(
+  rawInput: string,
+): { ok: true; actions: NpcInteractionActionDefinition[] } | { ok: false; error: string } {
+  const trimmed = rawInput.trim();
+  if (!trimmed) {
+    return { ok: true, actions: [] };
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    const actions = sanitizeNpcInteractionScript(parsed) ?? [];
+    return { ok: true, actions };
+  } catch {
+    return {
+      ok: false,
+      error: 'Interaction Cutscene JSON is invalid. Provide a valid JSON array.',
+    };
+  }
 }
 
 function parseStringList(value: string): string[] | undefined {
@@ -5087,6 +9908,128 @@ function parseStringList(value: string): string[] | undefined {
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
   return entries.length > 0 ? entries : undefined;
+}
+
+function parseNpcItemRewardsInput(
+  value: string,
+): { ok: true; rewards: NpcItemRewardDefinition[] } | { ok: false; error: string } {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return { ok: true, rewards: [] };
+  }
+  const entries = trimmed
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  const merged = new Map<string, number>();
+  for (const entry of entries) {
+    const [itemIdRaw, quantityRaw] = entry.split(':');
+    const itemId = (itemIdRaw ?? '').trim();
+    const quantityText = (quantityRaw ?? '').trim();
+    const quantity = quantityText ? Number.parseInt(quantityText, 10) : 1;
+    if (!itemId) {
+      return { ok: false, error: `Invalid reward entry "${entry}". Use item-id:quantity format.` };
+    }
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      return { ok: false, error: `Invalid quantity for "${itemId}". Quantity must be a positive integer.` };
+    }
+    merged.set(itemId, (merged.get(itemId) ?? 0) + Math.floor(quantity));
+  }
+  return {
+    ok: true,
+    rewards: [...merged.entries()].map(([itemId, quantity]) => ({
+      itemId,
+      quantity,
+    })),
+  };
+}
+
+function formatNpcItemRewardsInput(rewards: NpcItemRewardDefinition[] | undefined): string {
+  if (!Array.isArray(rewards) || rewards.length === 0) {
+    return '';
+  }
+  return rewards
+    .map((entry) => {
+      const itemId = typeof entry.itemId === 'string' ? entry.itemId.trim() : '';
+      const quantity =
+        typeof entry.quantity === 'number' && Number.isFinite(entry.quantity)
+          ? Math.max(1, Math.floor(entry.quantity))
+          : 1;
+      return itemId ? `${itemId}:${quantity}` : '';
+    })
+    .filter((entry) => entry.length > 0)
+    .join(', ');
+}
+
+function toEditorNpcMovementType(movementType: NpcMovementDefinition['type'] | undefined): EditorNpcMovementType {
+  if (movementType === 'static-turning') {
+    return 'static-turning';
+  }
+  if (movementType === 'path' || movementType === 'loop') {
+    return 'path';
+  }
+  if (movementType === 'wander' || movementType === 'random') {
+    return 'wander';
+  }
+  return 'static';
+}
+
+function getCharacterPlacementInstances(template: NpcCharacterTemplateEntry): NpcStoryStateDefinition[] {
+  const states = Array.isArray(template.storyStates) ? template.storyStates : [];
+  return compactCharacterPlacementOrder(states);
+}
+
+function compactCharacterPlacementOrder(states: NpcStoryStateDefinition[]): NpcStoryStateDefinition[] {
+  return states.map((state, index) => ({
+    ...state,
+    id: `instance-${index + 1}`,
+    mapId: typeof state.mapId === 'string' ? state.mapId.trim() : '',
+    position: state.position ? { ...state.position } : undefined,
+    dialogueLines: state.dialogueLines ? [...state.dialogueLines] : undefined,
+    battleRewards: state.battleRewards ? state.battleRewards.map((entry) => ({ ...entry })) : undefined,
+    interactionRewards: state.interactionRewards ? state.interactionRewards.map((entry) => ({ ...entry })) : undefined,
+    battleTeamIds: state.battleTeamIds ? [...state.battleTeamIds] : undefined,
+    movement: state.movement
+      ? {
+          ...state.movement,
+          pattern: state.movement.pattern ? [...state.movement.pattern] : undefined,
+        }
+      : undefined,
+    movementGuards: state.movementGuards
+      ? state.movementGuards.map((guard) => ({
+          ...guard,
+          dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+          postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+          battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
+          battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
+        }))
+      : undefined,
+    interactionScript: state.interactionScript
+      ? state.interactionScript.map((entry) => ({
+          ...entry,
+          ...(entry.type === 'dialogue' && Array.isArray(entry.lines) ? { lines: [...entry.lines] } : {}),
+          ...(entry.type === 'move_path' && Array.isArray(entry.directions) ? { directions: [...entry.directions] } : {}),
+        }))
+      : undefined,
+  }));
+}
+
+function formatNpcMarkerLabel(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return 'NPC';
+  }
+  if (trimmed.length <= 12) {
+    return trimmed;
+  }
+  const parts = trimmed
+    .split(/\s+/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  if (parts.length >= 2) {
+    return `${parts[0][0] ?? ''}${parts[1][0] ?? ''}`.toUpperCase();
+  }
+  return trimmed.slice(0, 2).toUpperCase();
 }
 
 type DirectionalAnimationSets = Partial<Record<string, Partial<Record<Direction, number[]>>>>;
@@ -5263,21 +10206,45 @@ function sanitizeNpcMovement(raw: unknown): NpcMovementDefinition | undefined {
     type?: unknown;
     pattern?: unknown;
     stepIntervalMs?: unknown;
+    pathMode?: unknown;
+    leashRadius?: unknown;
   };
+  const parsedType = typeof record.type === 'string' ? record.type : 'static';
   const type =
-    record.type === 'loop' || record.type === 'random' || record.type === 'static'
-      ? record.type
+    parsedType === 'static-turning' ||
+    parsedType === 'wander' ||
+    parsedType === 'path' ||
+    parsedType === 'loop' ||
+    parsedType === 'random' ||
+    parsedType === 'static'
+      ? parsedType
       : 'static';
+  const normalizedType =
+    type === 'loop' ? 'path' : type === 'random' ? 'wander' : type;
   const pattern = Array.isArray(record.pattern)
     ? record.pattern.filter((entry): entry is Direction => entry === 'up' || entry === 'down' || entry === 'left' || entry === 'right')
     : undefined;
   const stepIntervalMs =
-    typeof record.stepIntervalMs === 'number' ? clampInt(record.stepIntervalMs, 180, 4000) : undefined;
+    typeof record.stepIntervalMs === 'number' && Number.isFinite(record.stepIntervalMs)
+      ? Math.floor(record.stepIntervalMs)
+      : undefined;
+  const pathMode = record.pathMode === 'pingpong' ? 'pingpong' : 'loop';
+  const leashRadius =
+    typeof record.leashRadius === 'number' && Number.isFinite(record.leashRadius)
+      ? clampInt(record.leashRadius, 1, 64)
+      : undefined;
 
   return {
-    type,
-    pattern: pattern && pattern.length > 0 ? pattern : undefined,
+    type: normalizedType,
+    pattern:
+      normalizedType === 'path' || normalizedType === 'static-turning'
+        ? pattern && pattern.length > 0
+          ? pattern
+          : undefined
+        : undefined,
     stepIntervalMs,
+    pathMode: normalizedType === 'path' ? pathMode : undefined,
+    leashRadius: normalizedType === 'wander' ? leashRadius : undefined,
   };
 }
 

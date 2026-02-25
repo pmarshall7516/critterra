@@ -1,4 +1,6 @@
 import { BLANK_TILE_CODE, FALLBACK_TILE_CODE, TILE_DEFINITIONS } from '@/game/world/tiles';
+import { sanitizeMapEncounterGroups } from '@/game/encounters/schema';
+import { NPC_LAYER_ORDER_ID } from '@/game/world/types';
 import type {
   TileCode,
   TileDefinition,
@@ -10,6 +12,11 @@ import type {
 
 interface CreateMapOptions {
   tileDefinitions?: Record<string, TileDefinition>;
+}
+
+interface LayerIdentity {
+  id: string;
+  orderId: number;
 }
 
 export function createMap(input: WorldMapInput, options?: CreateMapOptions): WorldMap {
@@ -25,10 +32,16 @@ export function createMap(input: WorldMapInput, options?: CreateMapOptions): Wor
   }
   const height = layerInputs[0].tiles.length;
 
-  const layers = layerInputs.map((layerInput, index) =>
-    parseLayer(input.id, layerInput, index, width, height, tileDefinitions),
-  );
+  const layerIdentities = resolveLayerIdentities(input.id, layerInputs);
+  const layers = layerInputs
+    .map((layerInput, index) =>
+      parseLayer(input.id, layerInput, layerIdentities[index], width, height, tileDefinitions),
+    )
+    .sort((left, right) => left.orderId - right.orderId);
   const compositeTiles = composeVisibleTiles(layers, width, height);
+
+  const cameraSize = sanitizeCameraSize(input.cameraSize);
+  const cameraPoint = sanitizeCameraPoint(input.cameraPoint, width, height);
 
   return {
     id: input.id,
@@ -40,7 +53,32 @@ export function createMap(input: WorldMapInput, options?: CreateMapOptions): Wor
     npcs: input.npcs ?? [],
     warps: input.warps ?? [],
     interactions: input.interactions ?? [],
+    encounterGroups: sanitizeMapEncounterGroups(input.encounterGroups, width, height),
+    cameraSize,
+    cameraPoint,
   };
+}
+
+function sanitizeCameraSize(raw: WorldMapInput['cameraSize']): { widthTiles: number; heightTiles: number } {
+  if (raw && typeof raw.widthTiles === 'number' && typeof raw.heightTiles === 'number') {
+    const w = Math.max(1, Math.min(64, Math.floor(raw.widthTiles)));
+    const h = Math.max(1, Math.min(64, Math.floor(raw.heightTiles)));
+    return { widthTiles: w, heightTiles: h };
+  }
+  return { widthTiles: 19, heightTiles: 15 };
+}
+
+function sanitizeCameraPoint(
+  raw: WorldMapInput['cameraPoint'],
+  mapWidth: number,
+  mapHeight: number,
+): { x: number; y: number } | null {
+  if (!raw || typeof raw !== 'object' || typeof raw.x !== 'number' || typeof raw.y !== 'number') {
+    return null;
+  }
+  const x = Math.max(0, Math.min(mapWidth - 1, Math.floor(raw.x)));
+  const y = Math.max(0, Math.min(mapHeight - 1, Math.floor(raw.y)));
+  return { x, y };
 }
 
 function normalizeLayerInputs(input: WorldMapInput): WorldMapLayerInput[] {
@@ -52,13 +90,23 @@ function normalizeLayerInputs(input: WorldMapInput): WorldMapLayerInput[] {
     return [];
   }
 
+  const width = input.tiles[0].length;
+  const height = input.tiles.length;
+  const blankRow = BLANK_TILE_CODE.repeat(width);
   return [
     {
-      id: 'base',
+      id: 1,
       name: 'Base',
       tiles: input.tiles,
       visible: true,
       collision: true,
+    },
+    {
+      id: NPC_LAYER_ORDER_ID,
+      name: 'NPC',
+      tiles: Array.from({ length: height }, () => blankRow),
+      visible: true,
+      collision: false,
     },
   ];
 }
@@ -66,31 +114,30 @@ function normalizeLayerInputs(input: WorldMapInput): WorldMapLayerInput[] {
 function parseLayer(
   mapId: string,
   layerInput: WorldMapLayerInput,
-  index: number,
+  layerIdentity: LayerIdentity,
   expectedWidth: number,
   expectedHeight: number,
   tileDefinitions: Record<string, TileDefinition>,
 ): WorldMapLayer {
-  if (!layerInput.id || typeof layerInput.id !== 'string') {
-    throw new Error(`Map ${mapId} layer ${index} is missing string id`);
-  }
+  const layerId = layerIdentity.id;
+
   if (!Array.isArray(layerInput.tiles) || layerInput.tiles.length === 0) {
-    throw new Error(`Map ${mapId} layer ${layerInput.id} has no tiles`);
+    throw new Error(`Map ${mapId} layer ${layerId} has no tiles`);
   }
   if (layerInput.tiles.length !== expectedHeight) {
     throw new Error(
-      `Map ${mapId} layer ${layerInput.id} has height ${layerInput.tiles.length}, expected ${expectedHeight}`,
+      `Map ${mapId} layer ${layerId} has height ${layerInput.tiles.length}, expected ${expectedHeight}`,
     );
   }
 
   const unknownTileCodes = new Set<string>();
   const parsedTiles = layerInput.tiles.map((row, rowIndex) => {
     if (typeof row !== 'string') {
-      throw new Error(`Map ${mapId} layer ${layerInput.id} row ${rowIndex} must be a string`);
+      throw new Error(`Map ${mapId} layer ${layerId} row ${rowIndex} must be a string`);
     }
     if (row.length !== expectedWidth) {
       throw new Error(
-        `Map ${mapId} layer ${layerInput.id} row ${rowIndex} has width ${row.length}, expected ${expectedWidth}`,
+        `Map ${mapId} layer ${layerId} row ${rowIndex} has width ${row.length}, expected ${expectedWidth}`,
       );
     }
 
@@ -107,16 +154,18 @@ function parseLayer(
   if (unknownTileCodes.size > 0) {
     const list = Array.from(unknownTileCodes).join(', ');
     console.warn(
-      `Map ${mapId} layer ${layerInput.id} uses unknown tile code(s): ${list}. Replaced with ${FALLBACK_TILE_CODE}.`,
+      `Map ${mapId} layer ${layerId} uses unknown tile code(s): ${list}. Replaced with ${FALLBACK_TILE_CODE}.`,
     );
   }
 
   const parsedRotations = parseRotations(mapId, layerInput, expectedWidth, expectedHeight);
   const parsedCollisionEdges = parseCollisionEdges(mapId, layerInput, expectedWidth, expectedHeight);
+  const fallbackName = layerIdentity.orderId === 1 ? 'Base' : `Layer ${layerIdentity.orderId}`;
 
   return {
-    id: layerInput.id,
-    name: layerInput.name?.trim() || layerInput.id,
+    id: layerId,
+    orderId: layerIdentity.orderId,
+    name: layerInput.name?.trim() || fallbackName,
     tiles: parsedTiles,
     rotations: parsedRotations,
     collisionEdges: parsedCollisionEdges,
@@ -155,9 +204,9 @@ function parseRotations(
 
     return row.split('').map((char, columnIndex) => {
       const value = Number.parseInt(char, 10);
-      if (!Number.isFinite(value) || value < 0 || value > 3) {
+      if (!Number.isFinite(value) || value < 0 || value > 7) {
         throw new Error(
-          `Map ${mapId} layer ${layerInput.id} rotation at (${columnIndex}, ${rowIndex}) must be 0-3`,
+          `Map ${mapId} layer ${layerInput.id} rotation at (${columnIndex}, ${rowIndex}) must be 0-7`,
         );
       }
       return value;
@@ -273,4 +322,72 @@ export function collisionEdgeMaskAt(map: WorldMap, x: number, y: number): number
   }
 
   return mask & 0b1111;
+}
+
+function resolveLayerIdentities(mapId: string, layerInputs: WorldMapLayerInput[]): LayerIdentity[] {
+  const usedOrderIds = new Set<number>();
+
+  return layerInputs.map((layerInput, index) => {
+    const parsedOrderId = parseLayerOrderId(layerInput.id);
+    const fallbackStart = Math.max(1, index + 1);
+    let orderId = parsedOrderId ?? nextAvailableLayerOrderId(fallbackStart, usedOrderIds);
+
+    if (usedOrderIds.has(orderId)) {
+      const nextAvailable = nextAvailableLayerOrderId(orderId, usedOrderIds);
+      console.warn(
+        `Map ${mapId} has duplicate layer id ${orderId}. Reassigned to ${nextAvailable} to keep ordering stable.`,
+      );
+      orderId = nextAvailable;
+    } else if (parsedOrderId === null && layerInput.id !== undefined && layerInput.id !== null) {
+      const rawId = String(layerInput.id).trim();
+      if (rawId && rawId.toLowerCase() !== 'base') {
+        console.warn(`Map ${mapId} layer "${rawId}" is not numeric. Normalized to layer id ${orderId}.`);
+      }
+    }
+
+    usedOrderIds.add(orderId);
+    return {
+      id: String(orderId),
+      orderId,
+    };
+  });
+}
+
+function parseLayerOrderId(value: string | number | null | undefined): number | null {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      return null;
+    }
+    const normalized = Math.floor(value);
+    return normalized >= 1 ? normalized : null;
+  }
+
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.toLowerCase() === 'base') {
+    return 1;
+  }
+  if (trimmed.toLowerCase() === 'npc') {
+    return NPC_LAYER_ORDER_ID;
+  }
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+
+  const normalized = Number.parseInt(trimmed, 10);
+  return Number.isFinite(normalized) && normalized >= 1 ? normalized : null;
+}
+
+function nextAvailableLayerOrderId(start: number, used: Set<number>): number {
+  let candidate = Math.max(1, Math.floor(start));
+  while (used.has(candidate)) {
+    candidate += 1;
+  }
+  return candidate;
 }

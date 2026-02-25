@@ -1,12 +1,25 @@
 import { STORAGE_KEY } from '@/shared/constants';
-import type { SaveProfile } from '@/game/saves/types';
+import type { SaveProfile, SaveProgressTracking } from '@/game/saves/types';
 import { apiFetchJson } from '@/shared/apiClient';
 import { getAuthToken } from '@/shared/authStorage';
+import { createDefaultPlayerCritterProgress } from '@/game/critters/schema';
+import { createDefaultPlayerItemInventory } from '@/game/items/schema';
+import type { Direction } from '@/shared/types';
+
+export const SAVE_VERSION = 8;
+const DEFAULT_RESPAWN_MAP_ID = 'user-house';
+const DEFAULT_RESPAWN_POSITION = { x: 5, y: 7 } as const;
+const DEFAULT_RESPAWN_FACING: Direction = 'down';
+
+type LegacySaveProfile = Partial<SaveProfile> & {
+  flags?: unknown;
+  progressTracking?: unknown;
+};
 
 export function createNewSave(playerName: string): SaveProfile {
   return {
     id: 'slot-1',
-    version: 2,
+    version: SAVE_VERSION,
     playerName: normalizePlayerName(playerName),
     currentMapId: 'spawn',
     player: {
@@ -15,7 +28,10 @@ export function createNewSave(playerName: string): SaveProfile {
       facing: 'up',
     },
     selectedStarterId: null,
-    flags: {},
+    respawnPoint: createDefaultRespawnPoint(),
+    playerCritterProgress: createDefaultPlayerCritterProgress(),
+    playerItemInventory: createDefaultPlayerItemInventory(),
+    progressTracking: createDefaultProgressTracking(),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -27,19 +43,32 @@ export function loadSave(): SaveProfile | null {
   }
 
   try {
-    const parsed = JSON.parse(raw) as Partial<SaveProfile>;
+    const parsed = JSON.parse(raw) as LegacySaveProfile;
     if (!parsed.version || !parsed.currentMapId || !parsed.player) {
       return null;
     }
 
+    const normalizedProgressTracking = normalizeProgressTracking(parsed.progressTracking, parsed.flags);
+    const normalizedRespawnPoint = normalizeRespawnPoint(parsed.respawnPoint);
+
     return {
       id: parsed.id ?? 'slot-1',
-      version: parsed.version,
+      version: typeof parsed.version === 'number' && Number.isFinite(parsed.version) ? Math.floor(parsed.version) : 2,
       playerName: normalizePlayerName(parsed.playerName ?? 'Player'),
       currentMapId: parsed.currentMapId,
       player: parsed.player,
       selectedStarterId: parsed.selectedStarterId ?? null,
-      flags: parsed.flags ?? {},
+      respawnPoint: normalizedRespawnPoint,
+      // Preserve raw critter progress here; runtime sanitizes against the hydrated critter database.
+      playerCritterProgress:
+        parsed.playerCritterProgress && typeof parsed.playerCritterProgress === 'object'
+          ? (parsed.playerCritterProgress as SaveProfile['playerCritterProgress'])
+          : createDefaultPlayerCritterProgress(),
+      playerItemInventory:
+        parsed.playerItemInventory && typeof parsed.playerItemInventory === 'object'
+          ? (parsed.playerItemInventory as SaveProfile['playerItemInventory'])
+          : createDefaultPlayerItemInventory(),
+      progressTracking: normalizedProgressTracking,
       updatedAt: parsed.updatedAt ?? new Date().toISOString(),
     };
   } catch {
@@ -140,4 +169,138 @@ export async function resetRemoteSaveWithPassword(password: string): Promise<voi
 function normalizePlayerName(value: string): string {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed.slice(0, 20) : 'Player';
+}
+
+function createDefaultProgressTracking(): SaveProgressTracking {
+  return {
+    mainStory: {
+      stageId: null,
+      flags: {},
+    },
+    sideStory: {
+      stageId: null,
+      flags: {},
+      missions: {},
+    },
+  };
+}
+
+function createDefaultRespawnPoint(): SaveProfile['respawnPoint'] {
+  return {
+    mapId: DEFAULT_RESPAWN_MAP_ID,
+    position: {
+      x: DEFAULT_RESPAWN_POSITION.x,
+      y: DEFAULT_RESPAWN_POSITION.y,
+    },
+    facing: DEFAULT_RESPAWN_FACING,
+  };
+}
+
+function normalizeRespawnPoint(raw: unknown): SaveProfile['respawnPoint'] {
+  const fallback = createDefaultRespawnPoint();
+  if (!isObjectRecord(raw)) {
+    return fallback;
+  }
+  const mapId = typeof raw.mapId === 'string' && raw.mapId.trim().length > 0 ? raw.mapId.trim() : fallback.mapId;
+  const positionRecord = isObjectRecord(raw.position) ? raw.position : null;
+  const x =
+    positionRecord && typeof positionRecord.x === 'number' && Number.isFinite(positionRecord.x)
+      ? Math.floor(positionRecord.x)
+      : fallback.position.x;
+  const y =
+    positionRecord && typeof positionRecord.y === 'number' && Number.isFinite(positionRecord.y)
+      ? Math.floor(positionRecord.y)
+      : fallback.position.y;
+  const facing =
+    raw.facing === 'up' || raw.facing === 'down' || raw.facing === 'left' || raw.facing === 'right'
+      ? raw.facing
+      : fallback.facing;
+  return {
+    mapId,
+    position: { x, y },
+    facing,
+  };
+}
+
+function normalizeProgressTracking(raw: unknown, legacyFlags: unknown): SaveProgressTracking {
+  const defaults = createDefaultProgressTracking();
+  const root = isObjectRecord(raw) ? raw : {};
+  const mainStory = isObjectRecord(root.mainStory) ? root.mainStory : {};
+  const sideStory = isObjectRecord(root.sideStory) ? root.sideStory : {};
+
+  return {
+    mainStory: {
+      stageId: asOptionalString(mainStory.stageId),
+      flags: normalizeFlagRecord(mainStory.flags ?? legacyFlags),
+    },
+    sideStory: {
+      stageId: asOptionalString(sideStory.stageId),
+      flags: normalizeFlagRecord(sideStory.flags),
+      missions: normalizeSideMissionTracking(sideStory.missions),
+    },
+  };
+}
+
+function normalizeFlagRecord(value: unknown): Record<string, boolean> {
+  if (!isObjectRecord(value)) {
+    return {};
+  }
+
+  const normalized: Record<string, boolean> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (typeof key !== 'string' || key.trim().length === 0) {
+      continue;
+    }
+    normalized[key] = Boolean(raw);
+  }
+  return normalized;
+}
+
+function normalizeSideMissionTracking(
+  value: unknown,
+): SaveProgressTracking['sideStory']['missions'] {
+  if (!isObjectRecord(value)) {
+    return {};
+  }
+
+  const normalized: SaveProgressTracking['sideStory']['missions'] = {};
+  for (const [missionId, rawEntry] of Object.entries(value)) {
+    if (!missionId.trim() || !isObjectRecord(rawEntry)) {
+      continue;
+    }
+
+    const progress =
+      typeof rawEntry.progress === 'number' && Number.isFinite(rawEntry.progress)
+        ? Math.max(0, Math.floor(rawEntry.progress))
+        : 0;
+    const target =
+      typeof rawEntry.target === 'number' && Number.isFinite(rawEntry.target)
+        ? Math.max(0, Math.floor(rawEntry.target))
+        : 0;
+    const completed = typeof rawEntry.completed === 'boolean' ? rawEntry.completed : target > 0 && progress >= target;
+    const updatedAt =
+      typeof rawEntry.updatedAt === 'string' && rawEntry.updatedAt.trim().length > 0
+        ? rawEntry.updatedAt
+        : new Date().toISOString();
+
+    normalized[missionId] = {
+      progress,
+      target,
+      completed,
+      updatedAt,
+    };
+  }
+  return normalized;
+}
+
+function asOptionalString(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

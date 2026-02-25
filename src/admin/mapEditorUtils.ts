@@ -1,4 +1,7 @@
 import { BLANK_TILE_CODE, TILE_DEFINITIONS } from '@/game/world/tiles';
+import { sanitizeMapEncounterGroups } from '@/game/encounters/schema';
+import type { MapEncounterGroupDefinition } from '@/game/encounters/types';
+import { NPC_LAYER_ORDER_ID } from '@/game/world/types';
 import type {
   InteractionDefinition,
   NpcDefinition,
@@ -19,6 +22,10 @@ export interface EditableMapLayer {
   collision: boolean;
 }
 
+/** Default camera size in tiles (matches game default viewport). */
+const DEFAULT_CAMERA_WIDTH_TILES = 19;
+const DEFAULT_CAMERA_HEIGHT_TILES = 15;
+
 export interface EditableMap {
   id: string;
   name: string;
@@ -26,6 +33,11 @@ export interface EditableMap {
   npcs: NpcDefinition[];
   warps: WarpDefinition[];
   interactions: InteractionDefinition[];
+  encounterGroups: MapEncounterGroupDefinition[];
+  /** Viewport size in tiles. */
+  cameraSize: { widthTiles: number; heightTiles: number };
+  /** Optional center point for camera (editor preview / initial view). */
+  cameraPoint: { x: number; y: number } | null;
 }
 
 const KNOWN_TILE_CODE_SET = new Set(Object.keys(TILE_DEFINITIONS));
@@ -34,22 +46,47 @@ export type EditorTileCode = string;
 export function worldMapToEditable(map: WorldMap): EditableMap {
   const layers = map.layers?.length
     ? map.layers.map(worldLayerToEditable)
-    : [
-        {
-          id: 'base',
-          name: 'Base',
-          tiles: map.tiles.map((row) => row.join('')),
-          rotations: map.tiles.map((row) => '0'.repeat(row.length)),
-          collisionEdges: map.tiles.map((row) => '0'.repeat(row.length)),
-          visible: true,
-          collision: true,
-        },
-      ];
+    : (() => {
+        const w = map.tiles[0]?.length ?? 0;
+        const h = map.tiles.length;
+        const blankRow = BLANK_TILE_CODE.repeat(w);
+        const blankRotationRow = '0'.repeat(w);
+        return [
+          {
+            id: '1',
+            name: 'Base',
+            tiles: map.tiles.map((row) => row.join('')),
+            rotations: map.tiles.map((row) => '0'.repeat(row.length)),
+            collisionEdges: map.tiles.map((row) => '0'.repeat(row.length)),
+            visible: true,
+            collision: true,
+          },
+          {
+            id: String(NPC_LAYER_ORDER_ID),
+            name: 'NPC',
+            tiles: Array.from({ length: h }, () => blankRow),
+            rotations: Array.from({ length: h }, () => blankRotationRow),
+            collisionEdges: Array.from({ length: h }, () => blankRotationRow),
+            visible: true,
+            collision: false,
+          },
+        ];
+      })();
+  const normalizedLayers = normalizeEditableLayerIds(layers);
+
+  const cameraSize =
+    map.cameraSize && typeof map.cameraSize.widthTiles === 'number' && typeof map.cameraSize.heightTiles === 'number'
+      ? { widthTiles: map.cameraSize.widthTiles, heightTiles: map.cameraSize.heightTiles }
+      : { widthTiles: DEFAULT_CAMERA_WIDTH_TILES, heightTiles: DEFAULT_CAMERA_HEIGHT_TILES };
+  const cameraPoint =
+    map.cameraPoint && typeof map.cameraPoint.x === 'number' && typeof map.cameraPoint.y === 'number'
+      ? { x: map.cameraPoint.x, y: map.cameraPoint.y }
+      : null;
 
   return {
     id: map.id,
     name: map.name,
-    layers,
+    layers: normalizedLayers,
     npcs: map.npcs.map(cloneNpc),
     warps: map.warps.map(cloneWarp),
     interactions: map.interactions.map((interaction) => ({
@@ -57,6 +94,9 @@ export function worldMapToEditable(map: WorldMap): EditableMap {
       position: { ...interaction.position },
       lines: [...interaction.lines],
     })),
+    encounterGroups: map.encounterGroups.map(cloneEncounterGroup),
+    cameraSize,
+    cameraPoint,
   };
 }
 
@@ -77,6 +117,9 @@ export function cloneEditableMap(map: EditableMap): EditableMap {
       position: { ...interaction.position },
       lines: [...interaction.lines],
     })),
+    encounterGroups: map.encounterGroups.map(cloneEncounterGroup),
+    cameraSize: map.cameraSize ? { ...map.cameraSize } : { widthTiles: DEFAULT_CAMERA_WIDTH_TILES, heightTiles: DEFAULT_CAMERA_HEIGHT_TILES },
+    cameraPoint: map.cameraPoint ? { ...map.cameraPoint } : null,
   };
 }
 
@@ -95,16 +138,26 @@ export function createBlankEditableMap(
     name,
     layers: [
       createBlankLayer(safeWidth, safeHeight, {
-        id: 'base',
+        id: '1',
         name: 'Base',
         fillCode,
         visible: true,
         collision: true,
       }),
+      createBlankLayer(safeWidth, safeHeight, {
+        id: String(NPC_LAYER_ORDER_ID),
+        name: 'NPC',
+        fillCode: BLANK_TILE_CODE,
+        visible: true,
+        collision: false,
+      }),
     ],
     npcs: [],
     warps: [],
     interactions: [],
+    encounterGroups: [],
+    cameraSize: { widthTiles: DEFAULT_CAMERA_WIDTH_TILES, heightTiles: DEFAULT_CAMERA_HEIGHT_TILES },
+    cameraPoint: null,
   };
 }
 
@@ -122,8 +175,9 @@ export function getLayerById(map: EditableMap, layerId: string): EditableMapLaye
 }
 
 export function getTopTileCodeAt(map: EditableMap, x: number, y: number): EditorTileCode | null {
-  for (let index = map.layers.length - 1; index >= 0; index -= 1) {
-    const layer = map.layers[index];
+  const sortedLayers = sortEditableLayersById(map.layers);
+  for (let index = sortedLayers.length - 1; index >= 0; index -= 1) {
+    const layer = sortedLayers[index];
     if (!layer.visible) {
       continue;
     }
@@ -151,7 +205,7 @@ export function composeEditableTiles(map: EditableMap): string[] {
   }
 
   const rows = Array.from({ length: height }, () => Array.from({ length: width }, () => BLANK_TILE_CODE));
-  for (const layer of map.layers) {
+  for (const layer of sortEditableLayersById(map.layers)) {
     if (!layer.visible) {
       continue;
     }
@@ -224,6 +278,7 @@ export function updateTile(
   y: number,
   code: EditorTileCode,
   rotationQuarter = 0,
+  mirrorHorizontal = false,
 ): EditableMap {
   const next = cloneEditableMap(map);
   const layer = next.layers.find((entry) => entry.id === layerId);
@@ -237,16 +292,15 @@ export function updateTile(
     return map;
   }
 
-  const safeRotation = sanitizeRotationQuarter(rotationQuarter);
-  const rotationChar = String(safeRotation);
-  const nextRotation = code === BLANK_TILE_CODE ? '0' : rotationChar;
-  if (row[x] === code && (rotationRow?.[x] ?? '0') === nextRotation) {
+  const nextTransform = code === BLANK_TILE_CODE ? 0 : encodeTileTransform(rotationQuarter, mirrorHorizontal);
+  const transformChar = String(nextTransform);
+  if (row[x] === code && (rotationRow?.[x] ?? '0') === transformChar) {
     return map;
   }
 
   layer.tiles[y] = `${row.slice(0, x)}${code}${row.slice(x + 1)}`;
   const currentRotationRow = rotationRow ?? '0'.repeat(row.length);
-  layer.rotations[y] = `${currentRotationRow.slice(0, x)}${nextRotation}${currentRotationRow.slice(x + 1)}`;
+  layer.rotations[y] = `${currentRotationRow.slice(0, x)}${transformChar}${currentRotationRow.slice(x + 1)}`;
   return next;
 }
 
@@ -257,6 +311,7 @@ export function floodFill(
   startY: number,
   code: EditorTileCode,
   rotationQuarter = 0,
+  mirrorHorizontal = false,
 ): EditableMap {
   const targetCode = getTileCodeAt(map, startX, startY, layerId);
   if (!targetCode || targetCode === code) {
@@ -272,7 +327,7 @@ export function floodFill(
   const { width, height } = getMapSize(next);
   const queue: Array<{ x: number; y: number }> = [{ x: startX, y: startY }];
   const visited = new Set<string>();
-  const nextRotation = String(code === BLANK_TILE_CODE ? 0 : sanitizeRotationQuarter(rotationQuarter));
+  const nextTransform = String(code === BLANK_TILE_CODE ? 0 : encodeTileTransform(rotationQuarter, mirrorHorizontal));
 
   while (queue.length > 0) {
     const current = queue.shift();
@@ -298,7 +353,7 @@ export function floodFill(
     const row = layer.tiles[current.y];
     layer.tiles[current.y] = `${row.slice(0, current.x)}${code}${row.slice(current.x + 1)}`;
     const rotationRow = layer.rotations[current.y] ?? '0'.repeat(row.length);
-    layer.rotations[current.y] = `${rotationRow.slice(0, current.x)}${nextRotation}${rotationRow.slice(current.x + 1)}`;
+    layer.rotations[current.y] = `${rotationRow.slice(0, current.x)}${nextTransform}${rotationRow.slice(current.x + 1)}`;
 
     queue.push({ x: current.x + 1, y: current.y });
     queue.push({ x: current.x - 1, y: current.y });
@@ -348,7 +403,21 @@ export function getTileRotationAt(map: EditableMap, x: number, y: number, layerI
   }
 
   const value = Number.parseInt(row[x] ?? '0', 10);
-  return Number.isFinite(value) ? sanitizeRotationQuarter(value) : 0;
+  return decodeTileTransform(value).rotationQuarter;
+}
+
+export function getTileMirrorHorizontalAt(map: EditableMap, x: number, y: number, layerId: string): boolean {
+  const layer = map.layers.find((entry) => entry.id === layerId);
+  if (!layer) {
+    return false;
+  }
+  const row = layer.rotations[y];
+  if (!row || x < 0 || x >= row.length) {
+    return false;
+  }
+
+  const value = Number.parseInt(row[x] ?? '0', 10);
+  return decodeTileTransform(value).mirrorHorizontal;
 }
 
 export function getCollisionEdgeMaskAt(map: EditableMap, x: number, y: number, layerId: string): number {
@@ -411,6 +480,15 @@ export function parseEditableMapJson(raw: string): EditableMap {
     throw new Error('Map JSON must include "tiles" or non-empty "layers".');
   }
 
+  const cameraSize =
+    parsed.cameraSize && typeof parsed.cameraSize.widthTiles === 'number' && typeof parsed.cameraSize.heightTiles === 'number'
+      ? { widthTiles: parsed.cameraSize.widthTiles, heightTiles: parsed.cameraSize.heightTiles }
+      : { widthTiles: DEFAULT_CAMERA_WIDTH_TILES, heightTiles: DEFAULT_CAMERA_HEIGHT_TILES };
+  const cameraPoint =
+    parsed.cameraPoint && typeof parsed.cameraPoint.x === 'number' && typeof parsed.cameraPoint.y === 'number'
+      ? { x: parsed.cameraPoint.x, y: parsed.cameraPoint.y }
+      : null;
+
   return {
     id: parsed.id,
     name: parsed.name,
@@ -424,6 +502,13 @@ export function parseEditableMapJson(raw: string): EditableMap {
     interactions: Array.isArray(parsed.interactions)
       ? (parsed.interactions as InteractionDefinition[])
       : [],
+    encounterGroups: sanitizeMapEncounterGroups(
+      parsed.encounterGroups,
+      layers[0]?.tiles[0]?.length ?? 0,
+      layers[0]?.tiles.length ?? 0,
+    ),
+    cameraSize,
+    cameraPoint,
   };
 }
 
@@ -461,6 +546,47 @@ export function toConstName(mapId: string): string {
 
 export function clampInt(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
+export function parseLayerOrderId(value: string | number | null | undefined): number | null {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      return null;
+    }
+    const normalized = Math.floor(value);
+    return normalized >= 1 ? normalized : null;
+  }
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.toLowerCase() === 'base') {
+    return 1;
+  }
+  if (trimmed.toLowerCase() === 'npc') {
+    return NPC_LAYER_ORDER_ID;
+  }
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+
+  const normalized = Number.parseInt(trimmed, 10);
+  return Number.isFinite(normalized) && normalized >= 1 ? normalized : null;
+}
+
+export function sortEditableLayersById(layers: EditableMapLayer[]): EditableMapLayer[] {
+  return [...layers].sort((left, right) => {
+    const leftOrder = parseLayerOrderId(left.id) ?? Number.MAX_SAFE_INTEGER;
+    const rightOrder = parseLayerOrderId(right.id) ?? Number.MAX_SAFE_INTEGER;
+    if (leftOrder !== rightOrder) {
+      return leftOrder - rightOrder;
+    }
+    return left.name.localeCompare(right.name, undefined, { sensitivity: 'base' });
+  });
 }
 
 function toTsLiteral(value: unknown, indent: number): string {
@@ -529,11 +655,14 @@ export function createBlankLayer(
 }
 
 function worldLayerToEditable(layer: WorldMapLayer): EditableMapLayer {
+  const layerOrderId = Number.isFinite(layer.orderId) ? Math.max(1, Math.floor(layer.orderId)) : 1;
   return {
-    id: layer.id,
-    name: layer.name,
+    id: String(layerOrderId),
+    name:
+      layer.name?.trim() ||
+      (layerOrderId === 1 ? 'Base' : layerOrderId === NPC_LAYER_ORDER_ID ? 'NPC' : `Layer ${layerOrderId}`),
     tiles: layer.tiles.map((row) => row.join('')),
-    rotations: layer.rotations.map((row) => row.map((value) => String(sanitizeRotationQuarter(value))).join('')),
+    rotations: layer.rotations.map((row) => row.map((value) => String(sanitizeTileTransform(value))).join('')),
     collisionEdges: layer.collisionEdges.map((row) =>
       row.map((value) => sanitizeCollisionEdgeMask(value).toString(16)).join(''),
     ),
@@ -546,7 +675,14 @@ function cloneNpc(npc: NpcDefinition): NpcDefinition {
   return {
     ...npc,
     position: { ...npc.position },
+    facing: npc.facing,
     dialogueLines: npc.dialogueLines ? [...npc.dialogueLines] : undefined,
+    firstInteractBattle: npc.firstInteractBattle,
+    interactBattleRepeatable: npc.interactBattleRepeatable,
+    interactBattleDefeatedFlag: npc.interactBattleDefeatedFlag,
+    battleRewards: npc.battleRewards ? npc.battleRewards.map((entry) => ({ ...entry })) : undefined,
+    interactionRewards: npc.interactionRewards ? npc.interactionRewards.map((entry) => ({ ...entry })) : undefined,
+    interactionRewardSetFlag: npc.interactionRewardSetFlag,
     battleTeamIds: npc.battleTeamIds ? [...npc.battleTeamIds] : undefined,
     movement: npc.movement
       ? {
@@ -554,8 +690,89 @@ function cloneNpc(npc: NpcDefinition): NpcDefinition {
           pattern: npc.movement.pattern ? [...npc.movement.pattern] : undefined,
         }
       : undefined,
+    movementGuards: npc.movementGuards
+      ? npc.movementGuards.map((guard) => ({
+          ...guard,
+          dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+          postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+          battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
+          battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
+        }))
+      : undefined,
+    interactionScript: npc.interactionScript
+      ? npc.interactionScript.map((step) => ({
+          ...step,
+          ...(step.type === 'dialogue' && Array.isArray(step.lines) ? { lines: [...step.lines] } : {}),
+          ...(step.type === 'move_path' && Array.isArray(step.directions) ? { directions: [...step.directions] } : {}),
+        }))
+      : undefined,
     idleAnimation: npc.idleAnimation,
     moveAnimation: npc.moveAnimation,
+    storyStates: npc.storyStates
+      ? npc.storyStates.map((state) => ({
+          ...state,
+          position: state.position ? { ...state.position } : undefined,
+          dialogueLines: state.dialogueLines ? [...state.dialogueLines] : undefined,
+          firstInteractBattle: state.firstInteractBattle,
+          interactBattleRepeatable: state.interactBattleRepeatable,
+          interactBattleDefeatedFlag: state.interactBattleDefeatedFlag,
+          battleRewards: state.battleRewards ? state.battleRewards.map((entry) => ({ ...entry })) : undefined,
+          interactionRewards: state.interactionRewards ? state.interactionRewards.map((entry) => ({ ...entry })) : undefined,
+          interactionRewardSetFlag: state.interactionRewardSetFlag,
+          battleTeamIds: state.battleTeamIds ? [...state.battleTeamIds] : undefined,
+          movement: state.movement
+            ? {
+                ...state.movement,
+                pattern: state.movement.pattern ? [...state.movement.pattern] : undefined,
+              }
+            : undefined,
+          movementGuards: state.movementGuards
+            ? state.movementGuards.map((guard) => ({
+                ...guard,
+                dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
+                postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+                battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
+                battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
+              }))
+            : undefined,
+          interactionScript: state.interactionScript
+            ? state.interactionScript.map((step) => ({
+                ...step,
+                ...(step.type === 'dialogue' && Array.isArray(step.lines) ? { lines: [...step.lines] } : {}),
+                ...(step.type === 'move_path' && Array.isArray(step.directions) ? { directions: [...step.directions] } : {}),
+              }))
+            : undefined,
+          sprite: state.sprite
+            ? {
+                ...state.sprite,
+                animationSets: state.sprite.animationSets
+                  ? Object.fromEntries(
+                      Object.entries(state.sprite.animationSets).map(([name, directions]) => [
+                        name,
+                        {
+                          up: directions?.up ? [...directions.up] : undefined,
+                          down: directions?.down ? [...directions.down] : undefined,
+                          left: directions?.left ? [...directions.left] : undefined,
+                          right: directions?.right ? [...directions.right] : undefined,
+                        },
+                      ]),
+                    )
+                  : undefined,
+                defaultIdleAnimation: state.sprite.defaultIdleAnimation,
+                defaultMoveAnimation: state.sprite.defaultMoveAnimation,
+                facingFrames: { ...state.sprite.facingFrames },
+                walkFrames: state.sprite.walkFrames
+                  ? {
+                      up: state.sprite.walkFrames.up ? [...state.sprite.walkFrames.up] : undefined,
+                      down: state.sprite.walkFrames.down ? [...state.sprite.walkFrames.down] : undefined,
+                      left: state.sprite.walkFrames.left ? [...state.sprite.walkFrames.left] : undefined,
+                      right: state.sprite.walkFrames.right ? [...state.sprite.walkFrames.right] : undefined,
+                    }
+                  : undefined,
+              }
+            : undefined,
+        }))
+      : undefined,
     sprite: npc.sprite
       ? {
         ...npc.sprite,
@@ -590,7 +807,7 @@ function cloneNpc(npc: NpcDefinition): NpcDefinition {
 
 function parseMapLayersFromInput(input: Partial<WorldMapInput>): EditableMapLayer[] {
   if (Array.isArray(input.layers) && input.layers.length > 0) {
-    const parsed = input.layers.map((layer, index) => parseLayerInput(layer, index));
+    const parsed = normalizeEditableLayerIds(input.layers.map((layer, index) => parseLayerInput(layer, index)));
     const width = parsed[0].tiles[0]?.length ?? 0;
     const height = parsed[0].tiles.length;
     if (width <= 0 || height <= 0) {
@@ -630,15 +847,27 @@ function parseMapLayersFromInput(input: Partial<WorldMapInput>): EditableMapLaye
       }
     }
 
+    const height = input.tiles.length;
+    const blankRow = BLANK_TILE_CODE.repeat(width);
+    const blankRotationRow = '0'.repeat(width);
     return [
       {
-        id: 'base',
+        id: '1',
         name: 'Base',
         tiles: [...input.tiles],
         rotations: input.tiles.map((row) => '0'.repeat(row.length)),
         collisionEdges: input.tiles.map((row) => '0'.repeat(row.length)),
         visible: true,
         collision: true,
+      },
+      {
+        id: String(NPC_LAYER_ORDER_ID),
+        name: 'NPC',
+        tiles: Array.from({ length: height }, () => blankRow),
+        rotations: Array.from({ length: height }, () => blankRotationRow),
+        collisionEdges: Array.from({ length: height }, () => blankRotationRow),
+        visible: true,
+        collision: false,
       },
     ];
   }
@@ -650,44 +879,46 @@ function parseLayerInput(rawLayer: WorldMapLayerInput, index: number): EditableM
   if (!rawLayer || typeof rawLayer !== 'object') {
     throw new Error(`Layer ${index} must be an object.`);
   }
-  if (typeof rawLayer.id !== 'string' || !rawLayer.id.trim()) {
-    throw new Error(`Layer ${index} must include a non-empty string id.`);
-  }
+  const parsedOrderId = parseLayerOrderId(rawLayer.id);
+  const layerOrderId = parsedOrderId ?? Math.max(1, index + 1);
+  const layerId = String(layerOrderId);
   if (!Array.isArray(rawLayer.tiles) || rawLayer.tiles.length === 0) {
-    throw new Error(`Layer "${rawLayer.id}" must include non-empty tiles.`);
+    throw new Error(`Layer "${layerId}" must include non-empty tiles.`);
   }
 
   const width = rawLayer.tiles[0].length;
   if (width <= 0) {
-    throw new Error(`Layer "${rawLayer.id}" rows cannot be empty.`);
+    throw new Error(`Layer "${layerId}" rows cannot be empty.`);
   }
 
   const tiles = rawLayer.tiles.map((row, rowIndex) => {
     if (typeof row !== 'string') {
-      throw new Error(`Layer "${rawLayer.id}" row ${rowIndex} must be a string.`);
+      throw new Error(`Layer "${layerId}" row ${rowIndex} must be a string.`);
     }
     if (row.length !== width) {
-      throw new Error(`Layer "${rawLayer.id}" row ${rowIndex} width ${row.length} does not match expected ${width}.`);
+      throw new Error(`Layer "${layerId}" row ${rowIndex} width ${row.length} does not match expected ${width}.`);
     }
     for (const code of row) {
       if (!code || code.length !== 1) {
-        throw new Error(`Layer "${rawLayer.id}" has invalid tile code "${code}" at row ${rowIndex}.`);
+        throw new Error(`Layer "${layerId}" has invalid tile code "${code}" at row ${rowIndex}.`);
       }
     }
     return row;
   });
 
-  const rotations = normalizeRotationRows(rawLayer.rotations, width, tiles.length, rawLayer.id);
+  const rotations = normalizeRotationRows(rawLayer.rotations, width, tiles.length, layerId);
   const collisionEdges = normalizeCollisionEdgeRows(
     rawLayer.collisionEdges,
     width,
     tiles.length,
-    rawLayer.id,
+    layerId,
   );
 
   return {
-    id: rawLayer.id,
-    name: rawLayer.name?.trim() || rawLayer.id,
+    id: layerId,
+    name:
+      rawLayer.name?.trim() ||
+      (layerOrderId === 1 ? 'Base' : layerOrderId === NPC_LAYER_ORDER_ID ? 'NPC' : `Layer ${layerOrderId}`),
     tiles,
     rotations,
     collisionEdges,
@@ -720,7 +951,7 @@ function normalizeRotationRows(
     let normalized = '';
     for (let i = 0; i < row.length; i += 1) {
       const value = Number.parseInt(row[i] ?? '0', 10);
-      normalized += String(Number.isFinite(value) ? sanitizeRotationQuarter(value) : 0);
+      normalized += String(Number.isFinite(value) ? sanitizeTileTransform(value) : 0);
     }
     return normalized;
   });
@@ -766,6 +997,13 @@ function toWorldMapInput(map: EditableMap): WorldMapInput {
     name: map.name,
   };
 
+  if (map.cameraSize) {
+    payload.cameraSize = { widthTiles: map.cameraSize.widthTiles, heightTiles: map.cameraSize.heightTiles };
+  }
+  if (map.cameraPoint) {
+    payload.cameraPoint = { x: map.cameraPoint.x, y: map.cameraPoint.y };
+  }
+
   if (map.npcs.length > 0) {
     payload.npcs = map.npcs;
   }
@@ -775,15 +1013,19 @@ function toWorldMapInput(map: EditableMap): WorldMapInput {
   if (map.interactions.length > 0) {
     payload.interactions = map.interactions;
   }
+  if (map.encounterGroups.length > 0) {
+    payload.encounterGroups = map.encounterGroups.map(cloneEncounterGroup);
+  }
 
   if (shouldSerializeAsLegacyTiles(map)) {
     payload.tiles = map.layers[0].tiles;
     return payload;
   }
 
-  payload.layers = map.layers.map((layer) => {
+  payload.layers = sortEditableLayersById(map.layers).map((layer) => {
+    const layerOrderId = parseLayerOrderId(layer.id) ?? 1;
     const layerPayload: WorldMapLayerInput = {
-      id: layer.id,
+      id: layerOrderId,
       name: layer.name,
       tiles: layer.tiles,
     };
@@ -793,7 +1035,7 @@ function toWorldMapInput(map: EditableMap): WorldMapInput {
     if (layer.collision === false) {
       layerPayload.collision = false;
     }
-    if (layer.rotations.some((row) => /[1-3]/.test(row))) {
+    if (layer.rotations.some((row) => /[1-7]/.test(row))) {
       layerPayload.rotations = layer.rotations;
     }
     if (layer.collisionEdges.some((row) => /[1-9a-f]/i.test(row))) {
@@ -807,16 +1049,17 @@ function toWorldMapInput(map: EditableMap): WorldMapInput {
 }
 
 function shouldSerializeAsLegacyTiles(map: EditableMap): boolean {
-  if (map.layers.length !== 1) {
+  const orderedLayers = sortEditableLayersById(map.layers);
+  if (orderedLayers.length !== 1) {
     return false;
   }
-  const layer = map.layers[0];
-  if (layer.id !== 'base' || layer.name !== 'Base' || !layer.visible || !layer.collision) {
+  const layer = orderedLayers[0];
+  if (parseLayerOrderId(layer.id) !== 1 || layer.name !== 'Base' || !layer.visible || !layer.collision) {
     return false;
   }
 
   return (
-    !layer.rotations.some((row) => /[1-3]/.test(row)) &&
+    !layer.rotations.some((row) => /[1-7]/.test(row)) &&
     !layer.collisionEdges.some((row) => /[1-9a-f]/i.test(row))
   );
 }
@@ -828,6 +1071,17 @@ function cloneWarp(warp: WarpDefinition): WarpDefinition {
     fromPositions: warp.fromPositions?.map((position) => ({ ...position })),
     to: { ...warp.to },
     toPositions: warp.toPositions?.map((position) => ({ ...position })),
+  };
+}
+
+function cloneEncounterGroup(group: MapEncounterGroupDefinition): MapEncounterGroupDefinition {
+  return {
+    ...group,
+    tilePositions: group.tilePositions.map((position) => ({ ...position })),
+    walkEncounterTableId: group.walkEncounterTableId ?? null,
+    fishEncounterTableId: group.fishEncounterTableId ?? null,
+    walkFrequency: Number.isFinite(group.walkFrequency) ? Math.max(0, Math.min(1, group.walkFrequency)) : 0,
+    fishFrequency: Number.isFinite(group.fishFrequency) ? Math.max(0, Math.min(1, group.fishFrequency)) : 0,
   };
 }
 
@@ -876,7 +1130,51 @@ function sanitizeRotationQuarter(value: number): number {
   return intValue % 4;
 }
 
+export function sanitizeTileTransform(value: number): number {
+  const intValue = Number.isFinite(value) ? Math.floor(Math.abs(value)) : 0;
+  return intValue % 8;
+}
+
+export function encodeTileTransform(rotationQuarter: number, mirrorHorizontal = false): number {
+  const normalizedRotation = sanitizeRotationQuarter(rotationQuarter);
+  return mirrorHorizontal ? normalizedRotation + 4 : normalizedRotation;
+}
+
+export function decodeTileTransform(value: number): { rotationQuarter: number; mirrorHorizontal: boolean } {
+  const normalized = sanitizeTileTransform(value);
+  return {
+    rotationQuarter: normalized % 4,
+    mirrorHorizontal: normalized >= 4,
+  };
+}
+
 function sanitizeCollisionEdgeMask(value: number): number {
   const intValue = Number.isFinite(value) ? Math.floor(value) : 0;
   return intValue & 0b1111;
+}
+
+function normalizeEditableLayerIds(layers: EditableMapLayer[]): EditableMapLayer[] {
+  const usedOrderIds = new Set<number>();
+  const normalized = layers.map((layer, index) => {
+    const parsedOrderId = parseLayerOrderId(layer.id);
+    const start = parsedOrderId ?? Math.max(1, index + 1);
+    const orderId = nextAvailableLayerOrderId(start, usedOrderIds);
+    usedOrderIds.add(orderId);
+
+    return {
+      ...layer,
+      id: String(orderId),
+      name: layer.name?.trim() || (orderId === 1 ? 'Base' : `Layer ${orderId}`),
+    };
+  });
+
+  return sortEditableLayersById(normalized);
+}
+
+function nextAvailableLayerOrderId(start: number, usedOrderIds: Set<number>): number {
+  let candidate = Math.max(1, Math.floor(start));
+  while (usedOrderIds.has(candidate)) {
+    candidate += 1;
+  }
+  return candidate;
 }

@@ -1,4 +1,10 @@
 import type { Direction, Vector2 } from '@/shared/types';
+import type { MapEncounterGroupDefinition } from '@/game/encounters/types';
+
+/** Layer order id for the Base (floor) layer. */
+export const BASE_LAYER_ORDER_ID = 1;
+/** Layer order id for the NPC layer; layers below this are floor (no y-sort). Layers at or above participate in y-ordered rendering with actors. */
+export const NPC_LAYER_ORDER_ID = 2;
 
 export type TileCode =
   string;
@@ -11,6 +17,11 @@ export interface TileDefinition {
   accentColor?: string;
   height: number;
   atlasIndex?: number;
+  ySortWithActors?: boolean;
+  /** When set, this tile is drawn from this tileset image (e.g. Supabase URL) instead of the global one. */
+  tilesetUrl?: string;
+  tilePixelWidth?: number;
+  tilePixelHeight?: number;
 }
 
 export interface NpcSpriteConfig {
@@ -31,16 +42,128 @@ export interface NpcSpriteConfig {
 }
 
 export interface NpcMovementDefinition {
-  type: 'static' | 'loop' | 'random';
+  // `loop` and `random` remain for legacy compatibility with older saved data.
+  type: 'static' | 'static-turning' | 'wander' | 'path' | 'loop' | 'random';
   pattern?: Direction[];
   stepIntervalMs?: number;
+  pathMode?: 'loop' | 'pingpong';
+  leashRadius?: number;
+}
+
+export interface NpcMovementGuardDefinition {
+  id?: string;
+  requiresFlag?: string;
+  hideIfFlag?: string;
+  x?: number;
+  y?: number;
+  minX?: number;
+  maxX?: number;
+  minY?: number;
+  maxY?: number;
+  dialogueSpeaker?: string;
+  dialogueLines?: string[];
+  setFlag?: string;
+  /** Set when player wins the guard battle; guard becomes inactive unless battleRepeatable is true. */
+  defeatedFlag?: string;
+  /** Optional per-guard battle team override. Falls back to NPC battleTeamIds when omitted. */
+  battleTeamIds?: string[];
+  /** Optional rewards granted after winning this guard battle. */
+  battleRewards?: NpcItemRewardDefinition[];
+  /** When true, this guard battle can still trigger after defeatedFlag has been set. */
+  battleRepeatable?: boolean;
+  /** After defeat, show this dialogue on interact instead of instance dialogue. */
+  postDuelDialogueSpeaker?: string;
+  postDuelDialogueLines?: string[];
+}
+
+export interface NpcItemRewardDefinition {
+  itemId: string;
+  quantity: number;
+}
+
+export type NpcInteractionActionDefinition =
+  | {
+      type: 'dialogue';
+      speaker?: string;
+      lines: string[];
+      setFlag?: string;
+    }
+  | {
+      type: 'set_flag';
+      flag: string;
+    }
+  | {
+      type: 'move_to_player';
+    }
+  | {
+      type: 'move_path';
+      directions: Direction[];
+    }
+  | {
+      type: 'face_player';
+    }
+  | {
+      type: 'wait';
+      durationMs: number;
+    }
+  | {
+      type: 'give_item';
+      itemId: string;
+      quantity: number;
+      setFlag?: string;
+      message?: string;
+    };
+
+export interface NpcStoryStateDefinition {
+  id?: string;
+  requiresFlag?: string;
+  firstInteractionSetFlag?: string;
+  firstInteractBattle?: boolean;
+  /** When true, interact battle remains available even after defeat flag is set. */
+  interactBattleRepeatable?: boolean;
+  /** Flag set when this NPC interact-battle instance is defeated. */
+  interactBattleDefeatedFlag?: string;
+  /** Rewards granted after winning this interact battle (shown/granted through post-battle dialogue). */
+  battleRewards?: NpcItemRewardDefinition[];
+  healer?: boolean;
+  shopId?: string;
+  /** Rewards granted directly from interaction dialogue/script (supports multiple item IDs and quantities). */
+  interactionRewards?: NpcItemRewardDefinition[];
+  /** Optional one-time gate flag for interaction rewards. If set and already true, rewards are skipped. */
+  interactionRewardSetFlag?: string;
+  mapId?: string;
+  position?: Vector2;
+  facing?: Direction;
+  dialogueId?: string;
+  dialogueLines?: string[];
+  dialogueSpeaker?: string;
+  dialogueSetFlag?: string;
+  battleTeamIds?: string[];
+  movement?: NpcMovementDefinition;
+  idleAnimation?: string;
+  moveAnimation?: string;
+  sprite?: NpcSpriteConfig;
+  movementGuards?: NpcMovementGuardDefinition[];
+  interactionScript?: NpcInteractionActionDefinition[];
 }
 
 export interface NpcDefinition {
   id: string;
   name: string;
   position: Vector2;
+  facing?: Direction;
   color: string;
+  requiresFlag?: string;
+  hideIfFlag?: string;
+  firstInteractionSetFlag?: string;
+  firstInteractBattle?: boolean;
+  interactBattleRepeatable?: boolean;
+  interactBattleDefeatedFlag?: string;
+  battleRewards?: NpcItemRewardDefinition[];
+  healer?: boolean;
+  shopId?: string;
+  interactionRewards?: NpcItemRewardDefinition[];
+  interactionRewardSetFlag?: string;
   dialogueId: string;
   dialogueLines?: string[];
   dialogueSpeaker?: string;
@@ -50,6 +173,9 @@ export interface NpcDefinition {
   idleAnimation?: string;
   moveAnimation?: string;
   sprite?: NpcSpriteConfig;
+  movementGuards?: NpcMovementGuardDefinition[];
+  storyStates?: NpcStoryStateDefinition[];
+  interactionScript?: NpcInteractionActionDefinition[];
 }
 
 export interface WarpDefinition {
@@ -70,19 +196,32 @@ export interface InteractionDefinition {
   position: Vector2;
   lines: string[];
   speaker?: string;
+  kind?: 'dialogue' | 'heal_tile';
   requiresFlag?: string;
   hideIfFlag?: string;
   setFlag?: string;
 }
 
 export interface WorldMapLayerInput {
-  id: string;
+  id: string | number;
   name?: string;
   tiles: string[];
   rotations?: string[];
   collisionEdges?: string[];
   visible?: boolean;
   collision?: boolean;
+}
+
+/** Camera size in tile units (width/height of the viewport the player sees). */
+export interface CameraSize {
+  widthTiles: number;
+  heightTiles: number;
+}
+
+/** Optional point (tile coords) to center the camera on when no player (e.g. initial view / editor preview). */
+export interface CameraPoint {
+  x: number;
+  y: number;
 }
 
 export interface WorldMapInput {
@@ -93,10 +232,16 @@ export interface WorldMapInput {
   npcs?: NpcDefinition[];
   warps?: WarpDefinition[];
   interactions?: InteractionDefinition[];
+  encounterGroups?: MapEncounterGroupDefinition[];
+  /** Viewport size in tiles. Defaults to 19×15 if omitted. */
+  cameraSize?: CameraSize;
+  /** Optional center point for camera (e.g. initial view before player moves). */
+  cameraPoint?: CameraPoint;
 }
 
 export interface WorldMapLayer {
   id: string;
+  orderId: number;
   name: string;
   tiles: TileCode[][];
   rotations: number[][];
@@ -115,4 +260,7 @@ export interface WorldMap {
   npcs: NpcDefinition[];
   warps: WarpDefinition[];
   interactions: InteractionDefinition[];
+  encounterGroups: MapEncounterGroupDefinition[];
+  cameraSize: CameraSize;
+  cameraPoint: CameraPoint | null;
 }

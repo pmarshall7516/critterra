@@ -1,7 +1,25 @@
 import type { WorldMapInput } from '@/game/world/types';
 import type { TileDefinition, NpcSpriteConfig } from '@/game/world/types';
 import type { CustomTilesetConfig } from '@/game/world/customTiles';
+import type { NpcCharacterTemplateEntry, NpcSpriteLibraryEntry } from '@/game/world/npcCatalog';
 import { apiFetchJson } from '@/shared/apiClient';
+import type { CritterDefinition } from '@/game/critters/types';
+import { sanitizeCritterDatabase } from '@/game/critters/schema';
+import { sanitizeEncounterTableLibrary } from '@/game/encounters/schema';
+import type { EncounterTableDefinition } from '@/game/encounters/types';
+import type { SkillDefinition, SkillEffectDefinition, ElementChart } from '@/game/skills/types';
+import {
+  sanitizeSkillLibrary,
+  sanitizeSkillEffectLibrary,
+  sanitizeElementChart,
+  buildDefaultElementChart,
+} from '@/game/skills/schema';
+import type { GameItemDefinition } from '@/game/items/types';
+import { sanitizeItemCatalog } from '@/game/items/schema';
+import type { ShopDefinition } from '@/game/shops/types';
+import { sanitizeShopCatalog } from '@/game/shops/schema';
+import type { EquipmentEffectDefinition } from '@/game/equipmentEffects/types';
+import { sanitizeEquipmentEffectLibrary } from '@/game/equipmentEffects/schema';
 
 const WORLD_CONTENT_STORAGE_KEY = 'critterra.world.content.v1';
 
@@ -23,7 +41,16 @@ export interface StoredWorldContent {
   customTileDefinitions: Record<string, TileDefinition>;
   customTilesetConfig: CustomTilesetConfig | null;
   playerSpriteConfig: NpcSpriteConfig | null;
-  critters: unknown[];
+  npcSpriteLibrary: NpcSpriteLibraryEntry[];
+  npcCharacterLibrary: NpcCharacterTemplateEntry[];
+  critters: CritterDefinition[];
+  encounterTables: EncounterTableDefinition[];
+  critterSkills: SkillDefinition[];
+  skillEffects: SkillEffectDefinition[];
+  elementChart: ElementChart;
+  items: GameItemDefinition[];
+  shops: ShopDefinition[];
+  equipmentEffects: EquipmentEffectDefinition[];
 }
 
 interface BootstrapResponse {
@@ -34,7 +61,16 @@ interface BootstrapResponse {
     customTileDefinitions?: unknown;
     customTilesetConfig?: unknown;
     playerSpriteConfig?: unknown;
+    npcSpriteLibrary?: unknown;
+    npcCharacterLibrary?: unknown;
     critters?: unknown;
+    encounterTables?: unknown;
+    critterSkills?: unknown;
+    skillEffects?: unknown;
+    elementChart?: unknown;
+    items?: unknown;
+    shops?: unknown;
+    equipmentEffects?: unknown;
   };
 }
 
@@ -99,11 +135,33 @@ export function readStoredWorldContent(): StoredWorldContent | null {
           : {},
       customTilesetConfig: sanitizeCustomTilesetConfig(parsed.customTilesetConfig),
       playerSpriteConfig: sanitizePlayerSpriteConfig(parsed.playerSpriteConfig),
-      critters: Array.isArray(parsed.critters) ? parsed.critters : [],
+      npcSpriteLibrary: Array.isArray(parsed.npcSpriteLibrary)
+        ? (parsed.npcSpriteLibrary as NpcSpriteLibraryEntry[])
+        : [],
+      npcCharacterLibrary: Array.isArray(parsed.npcCharacterLibrary)
+        ? (parsed.npcCharacterLibrary as NpcCharacterTemplateEntry[])
+        : [],
+      critters: sanitizeCritterDatabase(parsed.critters),
+      encounterTables: sanitizeEncounterTableLibrary(parsed.encounterTables),
+      critterSkills: sanitizeStoredSkills(parsed.critterSkills, parsed.skillEffects),
+      skillEffects: sanitizeSkillEffectLibrary(parsed.skillEffects),
+      elementChart: sanitizeElementChart(parsed.elementChart),
+      items: sanitizeItemCatalog(parsed.items),
+      shops: sanitizeShopCatalog(parsed.shops),
+      equipmentEffects: sanitizeEquipmentEffectLibrary(parsed.equipmentEffects),
     };
   } catch {
     return null;
   }
+}
+
+function sanitizeStoredSkills(
+  rawSkills: unknown,
+  rawEffects: unknown,
+): SkillDefinition[] {
+  const effects = sanitizeSkillEffectLibrary(rawEffects);
+  const knownEffectIds = new Set(effects.map((e) => e.effect_id));
+  return sanitizeSkillLibrary(rawSkills, knownEffectIds);
 }
 
 export function persistWorldContent(content: StoredWorldContent): void {
@@ -133,6 +191,8 @@ export async function hydrateWorldContentFromServer(): Promise<void> {
   }
 
   const content = result.data.content;
+  const skillEffects = sanitizeSkillEffectLibrary(content.skillEffects);
+  const knownEffectIds = new Set(skillEffects.map((e) => e.effect_id));
   const next: StoredWorldContent = {
     maps: Array.isArray(content.maps) ? (content.maps as WorldMapInput[]) : [],
     savedPaintTiles: Array.isArray(content.savedPaintTiles)
@@ -144,7 +204,20 @@ export async function hydrateWorldContentFromServer(): Promise<void> {
         : {},
     customTilesetConfig: sanitizeCustomTilesetConfig(content.customTilesetConfig),
     playerSpriteConfig: sanitizePlayerSpriteConfig(content.playerSpriteConfig),
-    critters: Array.isArray(content.critters) ? content.critters : [],
+    npcSpriteLibrary: Array.isArray(content.npcSpriteLibrary)
+      ? (content.npcSpriteLibrary as NpcSpriteLibraryEntry[])
+      : [],
+    npcCharacterLibrary: Array.isArray(content.npcCharacterLibrary)
+      ? (content.npcCharacterLibrary as NpcCharacterTemplateEntry[])
+      : [],
+    critters: sanitizeCritterDatabase(content.critters),
+    encounterTables: sanitizeEncounterTableLibrary(content.encounterTables),
+    critterSkills: sanitizeSkillLibrary(content.critterSkills, knownEffectIds),
+    skillEffects,
+    elementChart: sanitizeElementChart(content.elementChart),
+    items: sanitizeItemCatalog(content.items),
+    shops: sanitizeShopCatalog(content.shops),
+    equipmentEffects: sanitizeEquipmentEffectLibrary(content.equipmentEffects),
   };
 
   persistWorldContent(next);

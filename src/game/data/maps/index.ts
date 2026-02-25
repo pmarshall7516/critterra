@@ -7,8 +7,14 @@ import { spawnMap } from '@/game/data/maps/spawn';
 import { portlockMap } from '@/game/data/maps/portlock';
 import { userHouseMap } from '@/game/data/maps/userHouse';
 import { uncleSHouseMap } from '@/game/data/maps/uncleSHouse';
+import { portlockTrailMap } from '@/game/data/maps/portlockTrail';
+import { darkForestMap } from '@/game/data/maps/darkForest';
+import { germaniaMap } from '@/game/data/maps/germania';
+import { germaniaFishingLodgeMap } from '@/game/data/maps/germaniaFishingLodge';
+import { germaniaHospitalMap } from '@/game/data/maps/germaniaHospital';
+import { germaniaShopMap } from '@/game/data/maps/germaniaShop';
 
-export const WORLD_MAPS: WorldMap[] = [playerHouseMap, starterTownMap, rivalHouseMap, portlockPondMap, spawnMap, portlockMap, userHouseMap, uncleSHouseMap];
+export const WORLD_MAPS: WorldMap[] = [playerHouseMap, starterTownMap, rivalHouseMap, portlockPondMap, spawnMap, portlockMap, userHouseMap, uncleSHouseMap, portlockTrailMap, darkForestMap, germaniaMap, germaniaFishingLodgeMap, germaniaHospitalMap, germaniaShopMap];
 
 export const WORLD_MAP_REGISTRY = WORLD_MAPS.reduce<Record<string, WorldMap>>(
   (registry, map) => {

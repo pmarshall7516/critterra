@@ -5,7 +5,7 @@ export const userHouseMap = createMap({
   name: 'Home',
   layers: [
     {
-      id: 'base',
+      id: 1,
       name: 'Base',
       tiles: [
         '',
@@ -18,7 +18,7 @@ export const userHouseMap = createMap({
         '',
         '',
         '',
-        ''
+        ''
       ],
       collisionEdges: [
         '20000000008',
@@ -33,6 +33,24 @@ export const userHouseMap = createMap({
         '20000000008',
         '31113491119'
       ]
+    },
+    {
+      id: 2,
+      name: 'NPC',
+      tiles: [
+        '...........',
+        '...........',
+        '...........',
+        '...........',
+        '...........',
+        '...........',
+        '...........',
+        '...........',
+        '...........',
+        '...........',
+        '...........'
+      ],
+      collision: false
     }
   ],
   warps: [
@@ -60,7 +78,7 @@ export const userHouseMap = createMap({
           y: 10
         }
       ],
-      requireInteract: true
+      requireInteract: false
     }
   ]
 });

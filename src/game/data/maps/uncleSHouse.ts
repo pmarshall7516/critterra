@@ -5,7 +5,7 @@ export const uncleSHouseMap = createMap({
   name: 'Uncle Hank\'s House',
   layers: [
     {
-      id: 'base',
+      id: 1,
       name: 'Base',
       tiles: [
         '',
@@ -20,7 +20,7 @@ export const uncleSHouseMap = createMap({
         '',
         '',
         '',
-        ''
+        ''
       ],
       collisionEdges: [
         '2000000000008',
@@ -37,6 +37,26 @@ export const uncleSHouseMap = createMap({
         '2000000000008',
         '3111134911119'
       ]
+    },
+    {
+      id: 2,
+      name: 'NPC',
+      tiles: [
+        '.............',
+        '.............',
+        '.............',
+        '.............',
+        '.............',
+        '.............',
+        '.............',
+        '.............',
+        '.............',
+        '.............',
+        '.............',
+        '.............',
+        '.............'
+      ],
+      collision: false
     }
   ],
   warps: [
@@ -65,7 +85,7 @@ export const uncleSHouseMap = createMap({
         }
       ],
       requiredFacing: 'down',
-      requireInteract: true
+      requireInteract: false
     }
   ]
 });

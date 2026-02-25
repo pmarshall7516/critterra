@@ -7,7 +7,17 @@ import react from '@vitejs/plugin-react';
 import { resolve } from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 import bcrypt from 'bcryptjs';
-import { Pool } from 'pg';
+import { Pool, type PoolClient } from 'pg';
+
+interface CameraSizePayload {
+  widthTiles: number;
+  heightTiles: number;
+}
+
+interface CameraPointPayload {
+  x: number;
+  y: number;
+}
 
 interface EditableMapPayload {
   id: string;
@@ -17,10 +27,13 @@ interface EditableMapPayload {
   npcs: unknown[];
   warps: unknown[];
   interactions: unknown[];
+  encounterGroups: unknown[];
+  cameraSize?: CameraSizePayload;
+  cameraPoint?: CameraPointPayload | null;
 }
 
 interface EditableMapLayerPayload {
-  id: string;
+  id: string | number;
   name: string;
   tiles: string[];
   rotations: string[];
@@ -35,6 +48,10 @@ interface SavedPaintTilePayload {
   primaryCode?: unknown;
   width?: unknown;
   height?: unknown;
+  ySortWithActors?: unknown;
+  tilesetUrl?: unknown;
+  tilePixelWidth?: unknown;
+  tilePixelHeight?: unknown;
   cells?: Array<{
     code?: unknown;
     atlasIndex?: unknown;
@@ -123,6 +140,45 @@ interface PasswordRequestPayload {
 interface SaveNpcLibraryRequestPayload {
   npcSpriteLibrary?: unknown;
   npcCharacterLibrary?: unknown;
+}
+
+interface SaveEncounterLibraryRequestPayload {
+  encounterTables?: unknown;
+}
+
+interface SaveItemsRequestPayload {
+  items?: unknown;
+}
+
+interface SaveShopsRequestPayload {
+  shops?: unknown;
+}
+
+interface SaveSkillsRequestPayload {
+  critterSkills?: unknown;
+}
+
+interface SaveSkillEffectsRequestPayload {
+  skillEffects?: unknown;
+}
+
+interface SaveEquipmentEffectsRequestPayload {
+  equipmentEffects?: unknown;
+}
+
+interface SaveElementChartRequestPayload {
+  elementChart?: unknown;
+}
+
+interface SaveFlagsRequestPayload {
+  flags?: unknown;
+}
+
+interface FlagCatalogEntryPayload {
+  flagId: string;
+  label: string;
+  notes: string;
+  updatedAt: string;
 }
 
 interface SupabaseStorageListEntry {
@@ -303,6 +359,114 @@ function sanitizeIdentifier(value: string, fallback: string): string {
   return trimmed.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
 }
 
+function sanitizeFlagId(raw: unknown): string {
+  if (typeof raw !== 'string') {
+    return '';
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return '';
+  }
+  return trimmed.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-_:.]/g, '');
+}
+
+function sanitizeOptionalText(raw: unknown): string {
+  if (typeof raw !== 'string') {
+    return '';
+  }
+  return raw.trim();
+}
+
+function toDefaultFlagLabel(flagId: string): string {
+  const normalized = flagId
+    .trim()
+    .replace(/[_:.]+/g, '-')
+    .split('-')
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  if (normalized.length === 0) {
+    return flagId;
+  }
+  return normalized.map((token) => token[0].toUpperCase() + token.slice(1)).join(' ');
+}
+
+function parseLayerOrderId(value: unknown): number | null {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      return null;
+    }
+    const normalized = Math.floor(value);
+    return normalized >= 1 ? normalized : null;
+  }
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.toLowerCase() === 'base') {
+    return 1;
+  }
+  if (trimmed.toLowerCase() === 'npc') {
+    return 2;
+  }
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+
+  const normalized = Number.parseInt(trimmed, 10);
+  return Number.isFinite(normalized) && normalized >= 1 ? normalized : null;
+}
+
+function nextAvailableLayerOrderId(start: number, usedOrderIds: Set<number>): number {
+  let candidate = Math.max(1, Math.floor(start));
+  while (usedOrderIds.has(candidate)) {
+    candidate += 1;
+  }
+  return candidate;
+}
+
+function inferTileYSortWithActors(name: string, width: number, height: number): boolean {
+  if (width > 1 || height > 1) {
+    return true;
+  }
+
+  const normalizedName = name.trim().toLowerCase();
+  if (!normalizedName) {
+    return true;
+  }
+
+  const flatKeywords = ['grass', 'flower', 'path', 'sand', 'water', 'floor', 'ground'];
+  if (flatKeywords.some((keyword) => normalizedName.includes(keyword))) {
+    return false;
+  }
+
+  const overheadKeywords = [
+    'tree',
+    'bush',
+    'house',
+    'roof',
+    'wall',
+    'building',
+    'cliff',
+    'rock',
+    'fence',
+    'gate',
+    'pillar',
+    'tower',
+    'arch',
+    'sign',
+    'door',
+  ];
+  if (overheadKeywords.some((keyword) => normalizedName.includes(keyword))) {
+    return true;
+  }
+
+  return true;
+}
+
 function toMapConstName(mapId: string): string {
   const normalized = mapId
     .replace(/[^a-zA-Z0-9]+(.)/g, (_, char: string) => char.toUpperCase())
@@ -367,6 +531,19 @@ function parseEditableMapPayload(raw: SaveMapRequestPayload): EditableMapPayload
     }
   }
 
+  const cameraSize =
+    map.cameraSize &&
+    typeof map.cameraSize.widthTiles === 'number' &&
+    typeof map.cameraSize.heightTiles === 'number'
+      ? { widthTiles: map.cameraSize.widthTiles, heightTiles: map.cameraSize.heightTiles }
+      : undefined;
+  const cameraPoint =
+    map.cameraPoint &&
+    typeof map.cameraPoint.x === 'number' &&
+    typeof map.cameraPoint.y === 'number'
+      ? { x: map.cameraPoint.x, y: map.cameraPoint.y }
+      : undefined;
+
   return {
     id,
     name,
@@ -375,6 +552,9 @@ function parseEditableMapPayload(raw: SaveMapRequestPayload): EditableMapPayload
     npcs: Array.isArray(map.npcs) ? map.npcs : [],
     warps: Array.isArray(map.warps) ? map.warps : [],
     interactions: Array.isArray(map.interactions) ? map.interactions : [],
+    encounterGroups: parseMapEncounterGroups(map.encounterGroups, width, height),
+    cameraSize,
+    cameraPoint,
   };
 }
 
@@ -398,7 +578,8 @@ function parseMapLayers(rawLayers: unknown): EditableMapLayerPayload[] | null {
     return null;
   }
 
-  return rawLayers.map((rawLayer, index) => {
+  const usedLayerIds = new Set<number>();
+  const parsedLayers = rawLayers.map((rawLayer, index) => {
     if (!rawLayer || typeof rawLayer !== 'object') {
       throw new Error(`Layer ${index} must be an object.`);
     }
@@ -413,8 +594,19 @@ function parseMapLayers(rawLayers: unknown): EditableMapLayerPayload[] | null {
       collision?: unknown;
     };
 
-    const id = sanitizeIdentifier(typeof layer.id === 'string' ? layer.id : '', `layer-${index + 1}`);
-    const name = typeof layer.name === 'string' && layer.name.trim() ? layer.name : id;
+    const parsedLayerId = parseLayerOrderId(layer.id);
+    const fallbackLayerId = Math.max(1, index + 1);
+    const requestedLayerId = parsedLayerId ?? fallbackLayerId;
+    const id = nextAvailableLayerOrderId(requestedLayerId, usedLayerIds);
+    usedLayerIds.add(id);
+    const name =
+      typeof layer.name === 'string' && layer.name.trim()
+        ? layer.name
+        : id === 1
+          ? 'Base'
+          : id === 2
+            ? 'NPC'
+            : `Layer ${id}`;
     const tiles = parseMapTiles(layer.tiles);
     if (!tiles) {
       throw new Error(`Layer "${id}" must include non-empty tiles.`);
@@ -431,7 +623,9 @@ function parseMapLayers(rawLayers: unknown): EditableMapLayerPayload[] | null {
       if (rotations.length !== tiles.length) {
         throw new Error(`Layer "${id}" rotations height ${rotations.length} does not match tiles height ${tiles.length}.`);
       }
-      rotations = rotations.map((row, rowIndex) => normalizeRotationRow(row, tiles[rowIndex].length, id, rowIndex));
+      rotations = rotations.map((row, rowIndex) =>
+        normalizeRotationRow(row, tiles[rowIndex].length, String(id), rowIndex),
+      );
     } else {
       rotations = tiles.map((row) => '0'.repeat(row.length));
     }
@@ -450,7 +644,7 @@ function parseMapLayers(rawLayers: unknown): EditableMapLayerPayload[] | null {
         );
       }
       collisionEdges = collisionEdges.map((row, rowIndex) =>
-        normalizeCollisionEdgeRow(row, tiles[rowIndex].length, id, rowIndex),
+        normalizeCollisionEdgeRow(row, tiles[rowIndex].length, String(id), rowIndex),
       );
     } else {
       collisionEdges = tiles.map((row) => '0'.repeat(row.length));
@@ -465,6 +659,12 @@ function parseMapLayers(rawLayers: unknown): EditableMapLayerPayload[] | null {
       visible: layer.visible !== false,
       collision: layer.collision !== false,
     };
+  });
+
+  return parsedLayers.sort((left, right) => {
+    const leftId = parseLayerOrderId(left.id) ?? Number.MAX_SAFE_INTEGER;
+    const rightId = parseLayerOrderId(right.id) ?? Number.MAX_SAFE_INTEGER;
+    return leftId - rightId;
   });
 }
 
@@ -496,8 +696,8 @@ function normalizeRotationRow(rawRow: string, width: number, layerId: string, ro
   let normalized = '';
   for (const char of rawRow) {
     const parsed = Number.parseInt(char, 10);
-    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 3) {
-      throw new Error(`Layer "${layerId}" rotation "${char}" at row ${rowIndex} must be 0-3.`);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 7) {
+      throw new Error(`Layer "${layerId}" rotation "${char}" at row ${rowIndex} must be 0-7.`);
     }
     normalized += String(parsed);
   }
@@ -553,6 +753,77 @@ function scanMapFiles(): MapFileMeta[] {
   }
 
   return metas;
+}
+
+/**
+ * Parse a single map .ts file: extract the object passed to createMap(...) and return
+ * an EditableMapPayload. Used by sync-from-project.
+ */
+function parseMapFileToPayload(absolutePath: string): EditableMapPayload | { error: string } {
+  let source: string;
+  try {
+    source = fs.readFileSync(absolutePath, 'utf8');
+  } catch (e) {
+    return { error: `Read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+
+  const createIdx = source.indexOf('createMap(');
+  if (createIdx === -1) {
+    return { error: 'createMap(...) not found' };
+  }
+
+  const openParen = createIdx + 'createMap('.length;
+  const firstBrace = source.indexOf('{', openParen);
+  if (firstBrace === -1) {
+    return { error: 'Object argument not found' };
+  }
+
+  let depth = 0;
+  let inString: "'" | '"' | null = null;
+  let escape = false;
+  for (let i = firstBrace; i < source.length; i += 1) {
+    const c = source[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (c === '\\' && inString) {
+      escape = true;
+      continue;
+    }
+    if (!inString) {
+      if (c === '{') {
+        depth += 1;
+      } else if (c === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          const objStr = source.slice(firstBrace, i + 1);
+          let obj: unknown;
+          try {
+            obj = new Function('return ' + objStr)();
+          } catch (e) {
+            return { error: `Parse failed: ${e instanceof Error ? e.message : String(e)}` };
+          }
+          if (obj == null || typeof obj !== 'object') {
+            return { error: 'createMap argument is not an object' };
+          }
+          try {
+            return parseEditableMapPayload({ map: obj as Partial<EditableMapPayload> });
+          } catch (e) {
+            return { error: e instanceof Error ? e.message : String(e) };
+          }
+        }
+      } else if (c === "'" || c === '"') {
+        inString = c;
+      }
+      continue;
+    }
+    if (c === inString) {
+      inString = null;
+    }
+  }
+
+  return { error: 'Unbalanced braces in createMap argument' };
 }
 
 function readExistingIndexOrder(): string[] {
@@ -619,26 +890,33 @@ function buildMapFileSource(map: EditableMapPayload): { source: string; constNam
   if (shouldSerializeAsLegacyTiles(map)) {
     payload.tiles = map.layers?.[0].tiles ?? map.tiles ?? [];
   } else if (Array.isArray(map.layers) && map.layers.length > 0) {
-    payload.layers = map.layers.map((layer) => {
-      const layerPayload: Record<string, unknown> = {
-        id: layer.id,
-        name: layer.name,
-        tiles: layer.tiles,
-      };
-      if (layer.visible === false) {
-        layerPayload.visible = false;
-      }
-      if (layer.collision === false) {
-        layerPayload.collision = false;
-      }
-      if (layer.rotations.some((row) => /[1-3]/.test(row))) {
-        layerPayload.rotations = layer.rotations;
-      }
-      if (layer.collisionEdges.some((row) => /[1-9a-f]/i.test(row))) {
-        layerPayload.collisionEdges = layer.collisionEdges;
-      }
-      return layerPayload;
-    });
+    payload.layers = [...map.layers]
+      .sort((left, right) => {
+        const leftId = parseLayerOrderId(left.id) ?? Number.MAX_SAFE_INTEGER;
+        const rightId = parseLayerOrderId(right.id) ?? Number.MAX_SAFE_INTEGER;
+        return leftId - rightId;
+      })
+      .map((layer) => {
+        const layerOrderId = parseLayerOrderId(layer.id) ?? 1;
+        const layerPayload: Record<string, unknown> = {
+          id: layerOrderId,
+          name: layer.name,
+          tiles: layer.tiles,
+        };
+        if (layer.visible === false) {
+          layerPayload.visible = false;
+        }
+        if (layer.collision === false) {
+          layerPayload.collision = false;
+        }
+        if (layer.rotations.some((row) => /[1-7]/.test(row))) {
+          layerPayload.rotations = layer.rotations;
+        }
+        if (layer.collisionEdges.some((row) => /[1-9a-f]/i.test(row))) {
+          layerPayload.collisionEdges = layer.collisionEdges;
+        }
+        return layerPayload;
+      });
   } else {
     payload.tiles = map.tiles ?? [];
   }
@@ -651,6 +929,9 @@ function buildMapFileSource(map: EditableMapPayload): { source: string; constNam
   }
   if (map.interactions.length > 0) {
     payload.interactions = map.interactions;
+  }
+  if (map.encounterGroups.length > 0) {
+    payload.encounterGroups = map.encounterGroups;
   }
 
   const source = [
@@ -668,11 +949,11 @@ function shouldSerializeAsLegacyTiles(map: EditableMapPayload): boolean {
     return false;
   }
   const layer = map.layers[0];
-  if (layer.id !== 'base' || layer.name !== 'Base' || layer.visible === false || layer.collision === false) {
+  if (parseLayerOrderId(layer.id) !== 1 || layer.name !== 'Base' || layer.visible === false || layer.collision === false) {
     return false;
   }
   return (
-    !layer.rotations.some((row) => /[1-3]/.test(row)) &&
+    !layer.rotations.some((row) => /[1-7]/.test(row)) &&
     !layer.collisionEdges.some((row) => /[1-9a-f]/i.test(row))
   );
 }
@@ -790,6 +1071,10 @@ function parseSavedPaintTiles(raw: unknown): SavedPaintTilePayload[] {
       continue;
     }
 
+    const tilesetUrl = typeof record.tilesetUrl === 'string' && record.tilesetUrl.trim() ? record.tilesetUrl.trim() : undefined;
+    const tilePixelWidth = typeof record.tilePixelWidth === 'number' && Number.isFinite(record.tilePixelWidth) ? Math.max(1, Math.floor(record.tilePixelWidth)) : undefined;
+    const tilePixelHeight = typeof record.tilePixelHeight === 'number' && Number.isFinite(record.tilePixelHeight) ? Math.max(1, Math.floor(record.tilePixelHeight)) : undefined;
+
     parsed.push({
       id: typeof record.id === 'string' ? record.id : `tile-${Date.now()}-${parsed.length}`,
       name: typeof record.name === 'string' && record.name.trim() ? record.name.trim() : 'Saved Tile',
@@ -799,11 +1084,951 @@ function parseSavedPaintTiles(raw: unknown): SavedPaintTilePayload[] {
           : cells[0].code,
       width: typeof record.width === 'number' ? Math.max(1, Math.floor(record.width)) : 1,
       height: typeof record.height === 'number' ? Math.max(1, Math.floor(record.height)) : 1,
+      ySortWithActors:
+        typeof record.ySortWithActors === 'boolean'
+          ? record.ySortWithActors
+          : inferTileYSortWithActors(
+              typeof record.name === 'string' ? record.name : 'Saved Tile',
+              typeof record.width === 'number' ? Math.max(1, Math.floor(record.width)) : 1,
+              typeof record.height === 'number' ? Math.max(1, Math.floor(record.height)) : 1,
+            ),
+      ...(tilesetUrl !== undefined && { tilesetUrl }),
+      ...(tilePixelWidth !== undefined && { tilePixelWidth }),
+      ...(tilePixelHeight !== undefined && { tilePixelHeight }),
       cells,
     });
   }
 
   return parsed;
+}
+
+const CRITTER_ELEMENT_OPTIONS = new Set(['bloom', 'ember', 'tide', 'gust', 'stone', 'spark', 'shade', 'normal']);
+const CRITTER_RARITY_OPTIONS = new Set(['common', 'uncommon', 'rare', 'legendary']);
+const CRITTER_ABILITY_KIND_OPTIONS = new Set(['passive', 'active']);
+const CRITTER_MISSION_TYPE_OPTIONS = new Set(['opposing_knockouts', 'ascension', 'story_flag']);
+const BUDDO_NAME = 'buddo';
+const BUDDO_STORY_MISSION_ID = 'select-bloom-partner-critter';
+const BUDDO_STORY_FLAG_ID = 'selected-bloom-starter';
+const BUDDO_STORY_LABEL = 'Select Bloom Partner Critter';
+
+function parseCritterLibrary(
+  raw: unknown,
+  options?: { strictUnique?: boolean; strictUniqueNames?: boolean },
+): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const strictUnique = Boolean(options?.strictUnique);
+  const strictUniqueNames = Boolean(options?.strictUniqueNames);
+  const seen = new Set<number>();
+  const seenNames = new Set<string>();
+  const parsed: Array<Record<string, unknown>> = [];
+  for (let index = 0; index < raw.length; index += 1) {
+    const entry = raw[index];
+    const critter = parseCritterDefinition(entry, index);
+    if (!critter) {
+      continue;
+    }
+    const critterId = Number(critter.id);
+    if (seen.has(critterId)) {
+      if (strictUnique) {
+        throw new Error(`Duplicate critter ID ${critterId} is not allowed.`);
+      }
+      continue;
+    }
+    seen.add(critterId);
+    const critterName = String(critter.name ?? '').trim().toLowerCase();
+    if (critterName) {
+      if (seenNames.has(critterName)) {
+        if (strictUniqueNames) {
+          throw new Error(`Duplicate critter name "${String(critter.name)}" is not allowed.`);
+        }
+        continue;
+      }
+      seenNames.add(critterName);
+    }
+    parsed.push(critter);
+  }
+  return ensureBuddoStarterStoryMission(parsed);
+}
+
+function parseCritterDefinition(raw: unknown, index: number): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const id = critterClampInt(record.id, 1, 999999, index + 1);
+  const name =
+    typeof record.name === 'string' && record.name.trim() ? record.name.trim().slice(0, 40) : `Critter ${index + 1}`;
+  const elementRaw = typeof record.element === 'string' ? record.element.trim().toLowerCase() : 'bloom';
+  const rarityRaw = typeof record.rarity === 'string' ? record.rarity.trim().toLowerCase() : 'common';
+  const element = CRITTER_ELEMENT_OPTIONS.has(elementRaw) ? elementRaw : 'bloom';
+  const rarity = CRITTER_RARITY_OPTIONS.has(rarityRaw) ? rarityRaw : 'common';
+  const description =
+    typeof record.description === 'string' && record.description.trim()
+      ? record.description.trim()
+      : `${name} is ready for training.`;
+  const spriteRecord =
+    record.sprite && typeof record.sprite === 'object' && !Array.isArray(record.sprite)
+      ? (record.sprite as Record<string, unknown>)
+      : null;
+  const spriteUrl = parseCritterSpriteUrl(record.spriteUrl ?? spriteRecord?.url);
+
+  const statsRecord =
+    record.baseStats && typeof record.baseStats === 'object' && !Array.isArray(record.baseStats)
+      ? (record.baseStats as Record<string, unknown>)
+      : {};
+  const baseStats = {
+    hp: critterClampInt(statsRecord.hp, 1, 999, 12),
+    attack: critterClampInt(statsRecord.attack, 1, 999, 8),
+    defense: critterClampInt(statsRecord.defense, 1, 999, 8),
+    speed: critterClampInt(statsRecord.speed, 1, 999, 8),
+  };
+
+  const abilities = parseCritterAbilities(record.abilities);
+  const abilityIdSet = new Set(abilities.map((ability) => String(ability.id)));
+  const levels = parseCritterLevels(record.levels, abilityIdSet);
+
+  return {
+    id,
+    name,
+    element,
+    rarity,
+    description,
+    spriteUrl,
+    baseStats,
+    abilities,
+    levels,
+  };
+}
+
+function parseCritterSpriteUrl(raw: unknown): string {
+  if (typeof raw !== 'string') {
+    return '';
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return '';
+  }
+  return trimmed.slice(0, 1000);
+}
+
+function parseCritterAbilities(raw: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const parsed: Array<Record<string, unknown>> = [];
+  const seenIds = new Set<string>();
+  for (let index = 0; index < raw.length; index += 1) {
+    const entry = raw[index];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const id = sanitizeIdentifier(typeof record.id === 'string' ? record.id : '', `ability-${index + 1}`);
+    if (seenIds.has(id)) {
+      continue;
+    }
+    seenIds.add(id);
+    const name =
+      typeof record.name === 'string' && record.name.trim() ? record.name.trim().slice(0, 40) : `Ability ${index + 1}`;
+    const kindRaw = typeof record.kind === 'string' ? record.kind.trim().toLowerCase() : 'passive';
+    const kind = CRITTER_ABILITY_KIND_OPTIONS.has(kindRaw) ? kindRaw : 'passive';
+    const description = typeof record.description === 'string' ? record.description.trim().slice(0, 240) : '';
+    parsed.push({
+      id,
+      name,
+      kind,
+      description,
+    });
+  }
+  return parsed;
+}
+
+function parseCritterLevels(raw: unknown, abilityIdSet: Set<string>): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const parsed: Array<Record<string, unknown>> = [];
+  const seenLevels = new Set<number>();
+  for (let index = 0; index < raw.length; index += 1) {
+    const entry = raw[index];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const level = critterClampInt(record.level, 1, 99, index + 1);
+    if (seenLevels.has(level)) {
+      continue;
+    }
+    seenLevels.add(level);
+
+    const missions = parseCritterLevelMissions(record.missions, level);
+    const statDeltaRecord =
+      record.statDelta && typeof record.statDelta === 'object' && !Array.isArray(record.statDelta)
+        ? (record.statDelta as Record<string, unknown>)
+        : {};
+    const requiredMissionCount = critterClampInt(record.requiredMissionCount, 0, missions.length, missions.length);
+    const unlockEquipSlots = critterClampInt(record.unlockEquipSlots, 0, 8, level === 1 ? 1 : 0);
+    const abilityUnlockIds = Array.isArray(record.abilityUnlockIds)
+      ? record.abilityUnlockIds
+          .filter((entry): entry is string => typeof entry === 'string')
+          .map((entry) => entry.trim())
+          .filter((entry) => abilityIdSet.has(entry))
+          .slice(0, 20)
+      : [];
+
+    const skillUnlockIds = Array.isArray(record.skillUnlockIds)
+      ? record.skillUnlockIds
+          .filter((entry): entry is string => typeof entry === 'string')
+          .map((entry) => entry.trim())
+          .filter((entry) => entry.length > 0)
+          .slice(0, 30)
+      : [];
+
+    parsed.push({
+      level,
+      missions,
+      requiredMissionCount,
+      statDelta: {
+        hp: critterClampInt(statDeltaRecord.hp, -999, 999, 0),
+        attack: critterClampInt(statDeltaRecord.attack, -999, 999, 0),
+        defense: critterClampInt(statDeltaRecord.defense, -999, 999, 0),
+        speed: critterClampInt(statDeltaRecord.speed, -999, 999, 0),
+      },
+      unlockEquipSlots,
+      abilityUnlockIds,
+      skillUnlockIds,
+    });
+  }
+
+  parsed.sort((a, b) => Number(a.level) - Number(b.level));
+  return parsed;
+}
+
+function parseCritterLevelMissions(raw: unknown, level: number): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const parsed: Array<Record<string, unknown>> = [];
+  const seenIds = new Set<string>();
+  for (let index = 0; index < raw.length; index += 1) {
+    const entry = raw[index];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const id = sanitizeIdentifier(typeof record.id === 'string' ? record.id : '', `level-${level}-mission-${index + 1}`);
+    if (seenIds.has(id)) {
+      continue;
+    }
+    seenIds.add(id);
+    const missionTypeRaw = typeof record.type === 'string' ? record.type.trim().toLowerCase() : 'opposing_knockouts';
+    const type = CRITTER_MISSION_TYPE_OPTIONS.has(missionTypeRaw) ? missionTypeRaw : 'opposing_knockouts';
+    const mission: Record<string, unknown> = {
+      id,
+      type,
+      targetValue: critterClampInt(record.targetValue, 1, 999999, 1),
+    };
+    if (type === 'ascension') {
+      mission.ascendsFromCritterId = critterClampInt(record.ascendsFromCritterId, 1, 999999, 1);
+    }
+    if (type === 'story_flag') {
+      const storyFlagId = sanitizeStoryFlagId(record.storyFlagId);
+      mission.storyFlagId = storyFlagId;
+      const missionLabel =
+        typeof record.label === 'string' && record.label.trim()
+          ? record.label.trim().slice(0, 120)
+          : undefined;
+      if (missionLabel) {
+        mission.label = missionLabel;
+      }
+      mission.targetValue = 1;
+    }
+    if (type === 'opposing_knockouts') {
+      const knockoutElements = Array.isArray(record.knockoutElements)
+        ? record.knockoutElements
+            .filter((entry): entry is string => typeof entry === 'string')
+            .map((entry) => entry.trim().toLowerCase())
+            .filter((entry, index, values) => CRITTER_ELEMENT_OPTIONS.has(entry) && values.indexOf(entry) === index)
+            .slice(0, 10)
+        : [];
+      const knockoutCritterIds = Array.isArray(record.knockoutCritterIds)
+        ? record.knockoutCritterIds
+            .map((entry) => critterClampInt(entry, 1, 999999, -1))
+            .filter((entry, index, values) => entry > 0 && values.indexOf(entry) === index)
+            .slice(0, 60)
+        : [];
+      if (knockoutCritterIds.length > 0) {
+        mission.knockoutCritterIds = knockoutCritterIds;
+      } else if (knockoutElements.length > 0) {
+        mission.knockoutElements = knockoutElements;
+      }
+    }
+    parsed.push(mission);
+  }
+  return parsed;
+}
+
+function sanitizeStoryFlagId(value: unknown): string {
+  const normalized =
+    typeof value === 'string'
+      ? value
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9-_]+/g, '-')
+          .replace(/-+/g, '-')
+          .replace(/^-+/g, '')
+          .replace(/-+$/g, '')
+      : '';
+  return normalized || 'story-flag';
+}
+
+function ensureBuddoStarterStoryMission(critters: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return critters.map((critter) => {
+    const critterName = typeof critter.name === 'string' ? critter.name.trim().toLowerCase() : '';
+    if (critterName !== BUDDO_NAME) {
+      return critter;
+    }
+
+    const levelsRaw = Array.isArray(critter.levels) ? critter.levels : [];
+    const levels = levelsRaw
+      .filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry))
+      .map((entry) => ({ ...(entry as Record<string, unknown>) }));
+    const levelOneIndex = levels.findIndex((entry) => Number(entry.level) === 1);
+    const levelOneExisting = levelOneIndex >= 0 ? levels[levelOneIndex] : null;
+    const levelOne: Record<string, unknown> = {
+      ...(levelOneExisting ?? {
+        level: 1,
+        statDelta: {
+          hp: 0,
+          attack: 0,
+          defense: 0,
+          speed: 0,
+        },
+        unlockEquipSlots: 1,
+        abilityUnlockIds: [],
+        skillUnlockIds: [],
+      }),
+      missions: [
+        {
+          id: BUDDO_STORY_MISSION_ID,
+          type: 'story_flag',
+          targetValue: 1,
+          storyFlagId: BUDDO_STORY_FLAG_ID,
+          label: BUDDO_STORY_LABEL,
+        },
+      ],
+      requiredMissionCount: 1,
+      unlockEquipSlots: critterClampInt(levelOneExisting?.unlockEquipSlots, 0, 8, 1),
+    };
+
+    const nextLevels = levels.filter((entry) => Number(entry.level) !== 1);
+    nextLevels.push(levelOne);
+    nextLevels.sort((left, right) => Number(left.level) - Number(right.level));
+
+    return {
+      ...critter,
+      levels: nextLevels,
+    };
+  });
+}
+
+function critterClampInt(value: unknown, min: number, max: number, fallback: number): number {
+  const parsed = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function parseEncounterLibrary(
+  raw: unknown,
+  options?: { strictUnique?: boolean; strictEntries?: boolean; strictWeights?: boolean },
+): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const strictUnique = Boolean(options?.strictUnique);
+  const strictEntries = Boolean(options?.strictEntries);
+  const strictWeights = Boolean(options?.strictWeights);
+  const seenTableIds = new Set<string>();
+  const parsed: Array<Record<string, unknown>> = [];
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const entry = raw[index];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const id = sanitizeIdentifier(typeof record.id === 'string' ? record.id : '', `encounter-table-${index + 1}`);
+    if (seenTableIds.has(id)) {
+      if (strictUnique) {
+        throw new Error(`Duplicate encounter table ID "${id}" is not allowed.`);
+      }
+      continue;
+    }
+    seenTableIds.add(id);
+
+    const entries = parseEncounterEntries(record.entries, { strictUnique: strictUnique || strictEntries });
+    if (strictEntries && entries.length === 0) {
+      throw new Error(`Encounter table "${id}" must include at least one encounter entry.`);
+    }
+    if (strictWeights) {
+      const totalWeight = entries.reduce((sum, tableEntry) => sum + Number(tableEntry.weight ?? 0), 0);
+      if (Math.abs(totalWeight - 1) > 0.000001) {
+        throw new Error(`Encounter table "${id}" weights must total exactly 1.0.`);
+      }
+    }
+
+    parsed.push({
+      id,
+      entries,
+    });
+  }
+
+  return parsed;
+}
+
+function parseEncounterEntries(
+  raw: unknown,
+  _options?: { strictUnique?: boolean },
+): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const parsed: Array<Record<string, unknown>> = [];
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const entry = raw[index];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const weight = typeof record.weight === 'number' && Number.isFinite(record.weight) ? record.weight : 0;
+    const normalizedWeight = Math.round(Math.max(0, Math.min(1, weight)) * 1000000) / 1000000;
+    const kindRaw = typeof record.kind === 'string' ? record.kind.trim().toLowerCase() : '';
+    const isItemEntry = kindRaw === 'item' || (kindRaw === '' && typeof record.itemId === 'string');
+    if (isItemEntry) {
+      const itemId = sanitizeItemIdentifier(record.itemId);
+      if (!itemId) {
+        continue;
+      }
+      const [minAmount, maxAmount] = parseEncounterAmountRange(
+        record.minAmount ?? record.minQty ?? record.minQuantity ?? record.minLevel,
+        record.maxAmount ?? record.maxQty ?? record.maxQuantity ?? record.maxLevel,
+      );
+      parsed.push({
+        kind: 'item',
+        itemId,
+        weight: normalizedWeight,
+        minAmount,
+        maxAmount,
+      });
+      continue;
+    }
+
+    const critterId = critterClampInt(record.critterId, 1, 999999, -1);
+    if (critterId < 0) {
+      continue;
+    }
+    const [minLevel, maxLevel] = parseEncounterLevelRange(record.minLevel, record.maxLevel);
+    parsed.push({
+      kind: 'critter',
+      critterId,
+      weight: normalizedWeight,
+      minLevel,
+      maxLevel,
+    });
+  }
+
+  return parsed;
+}
+
+function parseEncounterLevelRange(minRaw: unknown, maxRaw: unknown): [number | null, number | null] {
+  const minLevel = parseEncounterLevelValue(minRaw);
+  const maxLevel = parseEncounterLevelValue(maxRaw);
+  if (minLevel !== null && maxLevel !== null && minLevel > maxLevel) {
+    return [maxLevel, minLevel];
+  }
+  return [minLevel, maxLevel];
+}
+
+function parseEncounterLevelValue(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return null;
+  }
+  return critterClampInt(raw, 1, 99, 1);
+}
+
+function parseEncounterAmountRange(minRaw: unknown, maxRaw: unknown): [number | null, number | null] {
+  const minAmount = parseEncounterAmountValue(minRaw);
+  const maxAmount = parseEncounterAmountValue(maxRaw);
+  if (minAmount !== null && maxAmount !== null && minAmount > maxAmount) {
+    return [maxAmount, minAmount];
+  }
+  return [minAmount, maxAmount];
+}
+
+function parseEncounterAmountValue(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return null;
+  }
+  return critterClampInt(raw, 1, 9999, 1);
+}
+
+function sanitizeItemIdentifier(raw: unknown): string {
+  if (typeof raw !== 'string') {
+    return '';
+  }
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+/g, '')
+    .replace(/-+$/g, '');
+}
+
+const ITEM_EFFECT_TYPE_OPTIONS = new Set(['tool_action', 'equip_effect', 'equip_stub', 'heal_flat', 'heal_percent', 'other_stub']);
+const ITEM_DEFAULT_CATEGORIES = new Set(['tool', 'equipment', 'healing', 'material', 'other']);
+const DEFAULT_SEEDED_ITEMS: Array<Record<string, unknown>> = [
+  {
+    id: 'field-bandage',
+    name: 'Field Bandage',
+    category: 'healing',
+    description: 'Heals one squad critter by 20 HP.',
+    imageUrl: '',
+    misuseText: 'Choose an injured squad critter to use this.',
+    successText: '<Critter> was healed by X HP!',
+    effectType: 'heal_flat',
+    effectConfig: {
+      healAmount: 20,
+      curesStatus: false,
+    },
+    value: 20,
+    consumable: true,
+    maxStack: 99,
+    isActive: true,
+    starterGrantAmount: 3,
+  },
+];
+
+const DEFAULT_SEEDED_SHOPS: Array<Record<string, unknown>> = [
+  {
+    id: 'starter-shop',
+    name: 'Starter Shop',
+    entries: [
+      {
+        id: 'starter-field-bandage',
+        kind: 'item',
+        itemId: 'field-bandage',
+        quantity: 1,
+        repeatable: true,
+        costs: [
+          {
+            itemId: 'lume',
+            quantity: 10,
+          },
+        ],
+      },
+    ],
+  },
+];
+
+function parseItemCatalog(
+  raw: unknown,
+  options?: { strictUnique?: boolean },
+): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const strictUnique = Boolean(options?.strictUnique);
+  const seenIds = new Set<string>();
+  const parsed: Array<Record<string, unknown>> = [];
+  for (let index = 0; index < raw.length; index += 1) {
+    const item = parseItemDefinition(raw[index], index);
+    if (!item) {
+      continue;
+    }
+    const id = String(item.id);
+    if (seenIds.has(id)) {
+      if (strictUnique) {
+        throw new Error(`Duplicate item ID "${id}" is not allowed.`);
+      }
+      continue;
+    }
+    seenIds.add(id);
+    parsed.push(item);
+  }
+  return parsed;
+}
+
+function parseItemDefinition(raw: unknown, index: number): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const id = sanitizeIdentifier(typeof record.id === 'string' ? record.id : '', `item-${index + 1}`);
+  const name =
+    typeof record.name === 'string' && record.name.trim() ? record.name.trim().slice(0, 60) : `Item ${index + 1}`;
+  const categoryRaw = sanitizeIdentifier(typeof record.category === 'string' ? record.category : '', 'other');
+  const category = categoryRaw || 'other';
+  const effectTypeRaw = sanitizeIdentifier(typeof record.effectType === 'string' ? record.effectType : '', '');
+  const effectType = ITEM_EFFECT_TYPE_OPTIONS.has(effectTypeRaw)
+    ? effectTypeRaw
+    : category === 'tool'
+      ? 'tool_action'
+      : category === 'equipment'
+        ? 'equip_effect'
+        : category === 'healing'
+          ? 'heal_flat'
+          : 'other_stub';
+  const effectConfig =
+    record.effectConfig && typeof record.effectConfig === 'object' && !Array.isArray(record.effectConfig)
+      ? (record.effectConfig as Record<string, unknown>)
+      : {};
+  const normalizedEffectConfig = parseItemEffectConfig(effectType, effectConfig);
+  const explicitValue = typeof record.value === 'number' && Number.isFinite(record.value) ? record.value : undefined;
+  const derivedValue = deriveItemValueFromEffectConfig(effectType, normalizedEffectConfig);
+
+  return {
+    id,
+    name,
+    category: ITEM_DEFAULT_CATEGORIES.has(category) ? category : category || 'other',
+    description:
+      typeof record.description === 'string' && record.description.trim()
+        ? record.description.trim().slice(0, 300)
+        : '',
+    imageUrl: typeof record.imageUrl === 'string' ? record.imageUrl.trim().slice(0, 1200) : '',
+    misuseText:
+      typeof record.misuseText === 'string' && record.misuseText.trim()
+        ? record.misuseText.trim().slice(0, 160)
+        : 'That item cannot be used right now.',
+    successText:
+      typeof record.successText === 'string' && record.successText.trim()
+        ? record.successText.trim().slice(0, 200)
+        : typeof record.success_text === 'string' && record.success_text.trim()
+          ? record.success_text.trim().slice(0, 200)
+          : undefined,
+    effectType,
+    effectConfig: normalizedEffectConfig,
+    value: explicitValue ?? derivedValue,
+    consumable: typeof record.consumable === 'boolean' ? record.consumable : effectType.startsWith('heal_'),
+    maxStack: critterClampInt(record.maxStack, 1, 9999, 99),
+    isActive: typeof record.isActive === 'boolean' ? record.isActive : true,
+    starterGrantAmount: critterClampInt(record.starterGrantAmount, 0, 9999, 0),
+  };
+}
+
+function parseItemEffectConfig(effectType: string, rawConfig: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...rawConfig };
+  if (effectType === 'tool_action') {
+    const actionIdRaw = sanitizeIdentifier(typeof rawConfig.actionId === 'string' ? rawConfig.actionId : '', '');
+    if (actionIdRaw === 'fish') {
+      next.actionId = 'fishing';
+    } else if (actionIdRaw) {
+      next.actionId = actionIdRaw;
+    }
+    if (typeof rawConfig.power === 'number' && Number.isFinite(rawConfig.power)) {
+      next.power = Math.max(0, Math.min(1, rawConfig.power));
+    }
+  } else if (effectType === 'equip_effect' || effectType === 'equip_stub') {
+    const equipSize =
+      typeof rawConfig.equipSize === 'number'
+        ? rawConfig.equipSize
+        : typeof rawConfig.equip_size === 'number'
+          ? rawConfig.equip_size
+          : 1;
+    next.equipSize = critterClampInt(equipSize, 1, 8, 1);
+    const rawEffectIds = Array.isArray(rawConfig.equipmentEffectIds)
+      ? rawConfig.equipmentEffectIds
+      : Array.isArray(rawConfig.equipment_effect_ids)
+        ? rawConfig.equipment_effect_ids
+        : [];
+    next.equipmentEffectIds = rawEffectIds
+      .filter((entry): entry is string => typeof entry === 'string')
+      .map((entry) => sanitizeIdentifier(entry, ''))
+      .filter((entry, index, values) => entry.length > 0 && values.indexOf(entry) === index)
+      .slice(0, 16);
+  }
+  return next;
+}
+
+function deriveItemValueFromEffectConfig(effectType: string, effectConfig: Record<string, unknown>): number | undefined {
+  if (effectType === 'heal_flat') {
+    const healAmount = effectConfig.healAmount;
+    if (typeof healAmount === 'number' && Number.isFinite(healAmount)) {
+      return Math.max(1, Math.floor(healAmount));
+    }
+    return undefined;
+  }
+  if (effectType === 'tool_action') {
+    const power = effectConfig.power;
+    if (typeof power === 'number' && Number.isFinite(power)) {
+      return Math.max(0, Math.min(1, power));
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
+function parseShopCatalog(
+  raw: unknown,
+  options?: { strictUnique?: boolean; strictEntryUnique?: boolean },
+): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const strictUnique = Boolean(options?.strictUnique);
+  const strictEntryUnique = options?.strictEntryUnique === undefined ? strictUnique : Boolean(options?.strictEntryUnique);
+  const parsed: Array<Record<string, unknown>> = [];
+  const seenShopIds = new Set<string>();
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const shop = parseShopDefinition(raw[index], index, {
+      strictUnique,
+      strictEntryUnique,
+    });
+    if (!shop) {
+      continue;
+    }
+    const shopId = String(shop.id);
+    if (seenShopIds.has(shopId)) {
+      if (strictUnique) {
+        throw new Error(`Duplicate shop ID "${shopId}" is not allowed.`);
+      }
+      continue;
+    }
+    seenShopIds.add(shopId);
+    parsed.push(shop);
+  }
+
+  return parsed;
+}
+
+function parseShopDefinition(
+  raw: unknown,
+  index: number,
+  options: { strictUnique: boolean; strictEntryUnique: boolean },
+): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const id = sanitizeIdentifier(typeof record.id === 'string' ? record.id : '', `shop-${index + 1}`);
+  const name =
+    typeof record.name === 'string' && record.name.trim() ? record.name.trim().slice(0, 80) : `Shop ${index + 1}`;
+  const entriesRaw = Array.isArray(record.entries) ? record.entries : [];
+  const entries: Array<Record<string, unknown>> = [];
+  const seenEntryIds = new Set<string>();
+
+  for (let entryIndex = 0; entryIndex < entriesRaw.length; entryIndex += 1) {
+    const entry = parseShopEntryDefinition(entriesRaw[entryIndex], entryIndex, options.strictUnique);
+    if (!entry) {
+      continue;
+    }
+    const entryId = String(entry.id);
+    if (seenEntryIds.has(entryId)) {
+      if (options.strictEntryUnique) {
+        throw new Error(`Shop "${id}" contains duplicate entry ID "${entryId}".`);
+      }
+      continue;
+    }
+    seenEntryIds.add(entryId);
+    entries.push(entry);
+  }
+
+  return {
+    id,
+    name,
+    entries,
+  };
+}
+
+function parseShopEntryDefinition(raw: unknown, index: number, strict: boolean): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const kind = sanitizeIdentifier(typeof record.kind === 'string' ? record.kind : '', '');
+  if (kind !== 'item' && kind !== 'critter') {
+    return null;
+  }
+  const id = sanitizeIdentifier(typeof record.id === 'string' ? record.id : '', `entry-${index + 1}`);
+  const costs = parseShopCosts(record.costs);
+  if (costs.length === 0) {
+    if (strict) {
+      throw new Error(`Shop entry "${id}" must include at least one cost row.`);
+    }
+    return null;
+  }
+
+  if (kind === 'item') {
+    const itemId = sanitizeItemIdentifier(record.itemId);
+    if (!itemId) {
+      if (strict) {
+        throw new Error(`Shop item entry "${id}" requires itemId.`);
+      }
+      return null;
+    }
+    return {
+      id,
+      kind: 'item',
+      itemId,
+      quantity: critterClampInt(record.quantity, 1, 9999, 1),
+      repeatable: typeof record.repeatable === 'boolean' ? record.repeatable : true,
+      costs,
+    };
+  }
+
+  const critterId = critterClampInt(record.critterId, 1, 999999, -1);
+  if (critterId <= 0) {
+    if (strict) {
+      throw new Error(`Shop critter entry "${id}" requires critterId.`);
+    }
+    return null;
+  }
+  const unlockFlagId = sanitizeFlagId(record.unlockFlagId);
+  if (!unlockFlagId) {
+    if (strict) {
+      throw new Error(`Shop critter entry "${id}" requires unlockFlagId.`);
+    }
+    return null;
+  }
+  return {
+    id,
+    kind: 'critter',
+    critterId,
+    unlockFlagId,
+    costs,
+  };
+}
+
+function parseShopCosts(raw: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const merged = new Map<string, number>();
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const itemId = sanitizeItemIdentifier(record.itemId);
+    if (!itemId) {
+      continue;
+    }
+    const quantity = critterClampInt(record.quantity, 1, 9999, 1);
+    merged.set(itemId, (merged.get(itemId) ?? 0) + quantity);
+  }
+  return Array.from(merged.entries(), ([itemId, quantity]) => ({ itemId, quantity }));
+}
+
+function parseMapEncounterGroups(raw: unknown, mapWidth: number, mapHeight: number): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const parsed: Array<Record<string, unknown>> = [];
+  const seenIds = new Set<string>();
+  for (let index = 0; index < raw.length; index += 1) {
+    const entry = raw[index];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const id = sanitizeIdentifier(typeof record.id === 'string' ? record.id : '', `encounter-group-${index + 1}`);
+    if (seenIds.has(id)) {
+      continue;
+    }
+    seenIds.add(id);
+
+    const tilePositions = parseMapEncounterPositions(record.tilePositions, mapWidth, mapHeight);
+    if (tilePositions.length === 0) {
+      continue;
+    }
+
+    const walkEncounterTableId = sanitizeEncounterTableReference(record.walkEncounterTableId);
+    const fishEncounterTableId = sanitizeEncounterTableReference(record.fishEncounterTableId);
+    const walkFrequency = sanitizeEncounterFrequency(record.walkFrequency);
+    const fishFrequency = sanitizeEncounterFrequency(record.fishFrequency);
+
+    parsed.push({
+      id,
+      tilePositions,
+      walkEncounterTableId,
+      fishEncounterTableId,
+      walkFrequency,
+      fishFrequency,
+    });
+  }
+  return parsed;
+}
+
+function parseMapEncounterPositions(raw: unknown, mapWidth: number, mapHeight: number): Array<Record<string, number>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const parsed: Array<Record<string, number>> = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const x = critterClampInt(record.x, 0, Math.max(0, mapWidth - 1), -1);
+    const y = critterClampInt(record.y, 0, Math.max(0, mapHeight - 1), -1);
+    if (x < 0 || y < 0) {
+      continue;
+    }
+    const key = `${x},${y}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    parsed.push({ x, y });
+  }
+  return parsed;
+}
+
+function sanitizeEncounterTableReference(raw: unknown): string | null {
+  if (typeof raw !== 'string') {
+    return null;
+  }
+  const id = sanitizeIdentifier(raw, '');
+  return id || null;
+}
+
+function sanitizeEncounterFrequency(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return 0;
+  }
+  const clamped = Math.max(0, Math.min(1, raw));
+  return Math.round(clamped * 1000) / 1000;
+}
+
+function createStarterEncounterTables(critters: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  if (critters.length === 0) {
+    return [];
+  }
+  const starterCritter =
+    critters.find((critter) => String(critter.name ?? '').trim().toLowerCase() === 'buddo') ?? critters[0];
+  const critterId = critterClampInt(starterCritter.id, 1, 999999, -1);
+  if (critterId < 0) {
+    return [];
+  }
+  return [
+    {
+      id: 'starter-critter',
+      entries: [
+        {
+          critterId,
+          weight: 1,
+        },
+      ],
+    },
+  ];
 }
 
 function getMapTileRows(map: EditableMapPayload): string[] {
@@ -828,49 +2053,41 @@ function writeCustomTiles(
         }))
       : [];
 
+    const width = typeof tile.width === 'number' ? Math.max(1, Math.floor(tile.width)) : 1;
+    const height = typeof tile.height === 'number' ? Math.max(1, Math.floor(tile.height)) : 1;
+    const tileName = typeof tile.name === 'string' ? tile.name : 'Saved Tile';
+    const ySortWithActors =
+      typeof tile.ySortWithActors === 'boolean'
+        ? tile.ySortWithActors
+        : inferTileYSortWithActors(tileName, width, height);
+
     return {
       id: typeof tile.id === 'string' ? tile.id : '',
-      name: typeof tile.name === 'string' ? tile.name : 'Saved Tile',
+      name: tileName,
       primaryCode:
         typeof tile.primaryCode === 'string' && tile.primaryCode
           ? tile.primaryCode.slice(0, 1)
           : (cells[0]?.code ?? ''),
-      width: typeof tile.width === 'number' ? Math.max(1, Math.floor(tile.width)) : 1,
-      height: typeof tile.height === 'number' ? Math.max(1, Math.floor(tile.height)) : 1,
+      width,
+      height,
+      ySortWithActors,
+      ...(typeof tile.tilesetUrl === 'string' && tile.tilesetUrl.trim()
+        ? { tilesetUrl: tile.tilesetUrl.trim() }
+        : {}),
+      ...(typeof tile.tilePixelWidth === 'number' && Number.isFinite(tile.tilePixelWidth)
+        ? { tilePixelWidth: Math.max(1, Math.floor(tile.tilePixelWidth)) }
+        : {}),
+      ...(typeof tile.tilePixelHeight === 'number' && Number.isFinite(tile.tilePixelHeight)
+        ? { tilePixelHeight: Math.max(1, Math.floor(tile.tilePixelHeight)) }
+        : {}),
       cells,
     };
   });
 
-  const customEntries = new Map<string, { label: string; atlasIndex: number }>();
-  for (const tile of savedPaintTiles) {
-    const tileName =
-      typeof tile.name === 'string' && tile.name.trim() ? tile.name.trim() : 'Custom Tile';
-    const cells = Array.isArray(tile.cells) ? tile.cells : [];
-    for (const cell of cells) {
-      const code = typeof cell.code === 'string' ? cell.code.trim().slice(0, 1) : '';
-      const atlasIndex = typeof cell.atlasIndex === 'number' ? Math.max(0, Math.floor(cell.atlasIndex)) : 0;
-      if (!code || BASE_TILE_CODES.has(code) || customEntries.has(code)) {
-        continue;
-      }
-      customEntries.set(code, {
-        label: `${tileName} ${code}`.slice(0, 60),
-        atlasIndex,
-      });
-    }
-  }
-  for (const row of getMapTileRows(map)) {
-    for (const rawCode of row) {
-      const code = rawCode.slice(0, 1);
-      if (!code || BASE_TILE_CODES.has(code) || customEntries.has(code)) {
-        continue;
-      }
-      customEntries.set(code, {
-        label: `Map Tile ${code}`,
-        atlasIndex: 0,
-      });
-    }
-  }
-
+  const customEntries = new Map<
+    string,
+    { label: string; atlasIndex: number; ySortWithActors: boolean; tilesetUrl?: string; tilePixelWidth?: number; tilePixelHeight?: number }
+  >();
   const safeTileset =
     tileset &&
     typeof tileset.url === 'string' &&
@@ -888,6 +2105,55 @@ function writeCustomTiles(
           tileHeight: Math.floor(tileset.tilePixelHeight),
         }
       : null;
+  for (const tile of savedPaintTiles) {
+    const tileName =
+      typeof tile.name === 'string' && tile.name.trim() ? tile.name.trim() : 'Custom Tile';
+    const tileWidth = typeof tile.width === 'number' ? Math.max(1, Math.floor(tile.width)) : 1;
+    const tileHeight = typeof tile.height === 'number' ? Math.max(1, Math.floor(tile.height)) : 1;
+    const tileYSortWithActors =
+      typeof tile.ySortWithActors === 'boolean'
+        ? tile.ySortWithActors
+        : inferTileYSortWithActors(tileName, tileWidth, tileHeight);
+    const tilesetUrl = typeof tile.tilesetUrl === 'string' && tile.tilesetUrl.trim() ? tile.tilesetUrl.trim() : undefined;
+    const tilePixelWidth = typeof tile.tilePixelWidth === 'number' && Number.isFinite(tile.tilePixelWidth) ? Math.max(1, Math.floor(tile.tilePixelWidth)) : undefined;
+    const tilePixelHeight = typeof tile.tilePixelHeight === 'number' && Number.isFinite(tile.tilePixelHeight) ? Math.max(1, Math.floor(tile.tilePixelHeight)) : undefined;
+    const cells = Array.isArray(tile.cells) ? tile.cells : [];
+    for (const cell of cells) {
+      const code = typeof cell.code === 'string' ? cell.code.trim().slice(0, 1) : '';
+      const atlasIndex = typeof cell.atlasIndex === 'number' ? Math.max(0, Math.floor(cell.atlasIndex)) : 0;
+      if (!code || BASE_TILE_CODES.has(code) || customEntries.has(code)) {
+        continue;
+      }
+      customEntries.set(code, {
+        label: `${tileName} ${code}`.slice(0, 60),
+        atlasIndex,
+        ySortWithActors: tileYSortWithActors,
+        ...(tilesetUrl !== undefined && { tilesetUrl }),
+        ...(tilePixelWidth !== undefined && { tilePixelWidth }),
+        ...(tilePixelHeight !== undefined && { tilePixelHeight }),
+      });
+    }
+  }
+  for (const row of getMapTileRows(map)) {
+    for (const rawCode of row) {
+      const code = rawCode.slice(0, 1);
+      if (!code || BASE_TILE_CODES.has(code) || customEntries.has(code)) {
+        continue;
+      }
+      customEntries.set(code, {
+        label: `Map Tile ${code}`,
+        atlasIndex: 0,
+        ySortWithActors: true,
+        ...(safeTileset
+          ? {
+              tilesetUrl: safeTileset.url,
+              tilePixelWidth: safeTileset.tileWidth,
+              tilePixelHeight: safeTileset.tileHeight,
+            }
+          : {}),
+      });
+    }
+  }
 
   const entries = Array.from(customEntries.entries()).sort(([a], [b]) => a.localeCompare(b));
   const customDefinitions: Record<string, unknown> = {};
@@ -900,6 +2166,10 @@ function writeCustomTiles(
       accentColor: colorForCode(code, 1),
       height: 0,
       atlasIndex: entry.atlasIndex,
+      ySortWithActors: entry.ySortWithActors,
+      ...(entry.tilesetUrl !== undefined && { tilesetUrl: entry.tilesetUrl }),
+      ...(entry.tilePixelWidth !== undefined && { tilePixelWidth: entry.tilePixelWidth }),
+      ...(entry.tilePixelHeight !== undefined && { tilePixelHeight: entry.tilePixelHeight }),
     };
   }
 
@@ -929,6 +2199,10 @@ function writeCustomTiles(
     '  primaryCode: string;',
     '  width: number;',
     '  height: number;',
+    '  ySortWithActors: boolean;',
+    '  tilesetUrl?: string;',
+    '  tilePixelWidth?: number;',
+    '  tilePixelHeight?: number;',
     '  cells: SavedPaintTileDatabaseCell[];',
     '}',
     '',
@@ -993,6 +2267,7 @@ function saveTileDatabaseToProject(payload: SaveTilesRequestPayload): {
     npcs: [],
     warps: [],
     interactions: [],
+    encounterGroups: [],
   };
 
   const mapPayload = payload.map ? parseEditableMapPayload({ map: payload.map }) : fallbackMap;
@@ -1257,10 +2532,22 @@ function sanitizeTilesetConfig(raw: SaveMapRequestPayload['tileset']): {
 }
 
 function buildCustomTileDefinitions(savedPaintTiles: SavedPaintTilePayload[]): Record<string, unknown> {
-  const customEntries = new Map<string, { label: string; atlasIndex: number }>();
+  const customEntries = new Map<
+    string,
+    { label: string; atlasIndex: number; ySortWithActors: boolean; tilesetUrl?: string; tilePixelWidth?: number; tilePixelHeight?: number }
+  >();
   for (const tile of savedPaintTiles) {
     const tileName =
       typeof tile.name === 'string' && tile.name.trim() ? tile.name.trim() : 'Custom Tile';
+    const tileWidth = typeof tile.width === 'number' ? Math.max(1, Math.floor(tile.width)) : 1;
+    const tileHeight = typeof tile.height === 'number' ? Math.max(1, Math.floor(tile.height)) : 1;
+    const tileYSortWithActors =
+      typeof tile.ySortWithActors === 'boolean'
+        ? tile.ySortWithActors
+        : inferTileYSortWithActors(tileName, tileWidth, tileHeight);
+    const tilesetUrl = typeof tile.tilesetUrl === 'string' && tile.tilesetUrl.trim() ? tile.tilesetUrl.trim() : undefined;
+    const tilePixelWidth = typeof tile.tilePixelWidth === 'number' && Number.isFinite(tile.tilePixelWidth) ? Math.max(1, Math.floor(tile.tilePixelWidth)) : undefined;
+    const tilePixelHeight = typeof tile.tilePixelHeight === 'number' && Number.isFinite(tile.tilePixelHeight) ? Math.max(1, Math.floor(tile.tilePixelHeight)) : undefined;
     const cells = Array.isArray(tile.cells) ? tile.cells : [];
     for (const cell of cells) {
       const code = typeof cell.code === 'string' ? cell.code.trim().slice(0, 1) : '';
@@ -1271,6 +2558,10 @@ function buildCustomTileDefinitions(savedPaintTiles: SavedPaintTilePayload[]): R
       customEntries.set(code, {
         label: `${tileName} ${code}`.slice(0, 60),
         atlasIndex,
+        ySortWithActors: tileYSortWithActors,
+        ...(tilesetUrl !== undefined && { tilesetUrl }),
+        ...(tilePixelWidth !== undefined && { tilePixelWidth }),
+        ...(tilePixelHeight !== undefined && { tilePixelHeight }),
       });
     }
   }
@@ -1286,6 +2577,10 @@ function buildCustomTileDefinitions(savedPaintTiles: SavedPaintTilePayload[]): R
       accentColor: colorForCode(code, 1),
       height: 0,
       atlasIndex: entry.atlasIndex,
+      ySortWithActors: entry.ySortWithActors,
+      ...(entry.tilesetUrl !== undefined && { tilesetUrl: entry.tilesetUrl }),
+      ...(entry.tilePixelWidth !== undefined && { tilePixelWidth: entry.tilePixelWidth }),
+      ...(entry.tilePixelHeight !== undefined && { tilePixelHeight: entry.tilePixelHeight }),
     };
   }
   return definitions;
@@ -1293,6 +2588,396 @@ function buildCustomTileDefinitions(savedPaintTiles: SavedPaintTilePayload[]): R
 
 const WORLD_MAP_BASELINE_VERSION = 1;
 const SPAWN_MAP_ID = 'spawn';
+const GLOBAL_CATALOG_KEY = 'main';
+const GLOBAL_WORLD_STATE_KEY = 'world';
+
+/** Optional default tileset URL (e.g. Supabase public URL). When set, game_tiles rows without a tileset_url are backfilled with this so the game and admin read from this image. */
+function getDefaultTilesetConfigFromEnv(): { url: string; tilePixelWidth: number; tilePixelHeight: number } | null {
+  const url = (process.env.CRITTERRA_DEFAULT_TILESET_URL ?? '').trim();
+  if (!url || url.startsWith('blob:')) return null;
+  const w = Math.max(1, Math.floor(Number(process.env.CRITTERRA_DEFAULT_TILESET_TILE_WIDTH ?? 16)));
+  const h = Math.max(1, Math.floor(Number(process.env.CRITTERRA_DEFAULT_TILESET_TILE_HEIGHT ?? 16)));
+  return { url, tilePixelWidth: w, tilePixelHeight: h };
+}
+const DEFAULT_SYSTEM_FLAGS = [
+  'demo-start',
+  'selected-starter-critter',
+  'starter-selection-done',
+  'demo-done',
+  'jacob-left-house',
+  'jacob-battle-won',
+] as const;
+const FLAG_REFERENCE_KEYS = new Set([
+  'requiresFlag',
+  'hideIfFlag',
+  'setFlag',
+  'dialogueSetFlag',
+  'firstInteractionSetFlag',
+  'interactBattleDefeatedFlag',
+  'postDefeatSetFlag',
+  'interactionRewardSetFlag',
+  'unlockFlagId',
+  'storyFlagId',
+  'flag',
+  'defeatedFlag',
+]);
+const LEGACY_CATALOG_TABLES = [
+  'world_maps',
+  'user_world_state',
+  'tile_libraries',
+  'npc_libraries',
+  'player_sprite_configs',
+  'critter_libraries',
+  'encounter_libraries',
+] as const;
+const JACOB_BATTLE_WIN_FLAG_ID = 'jacob-battle-won';
+const DEFAULT_BATTLE_REWARD_ITEM_ID = 'lume';
+const DEFAULT_BATTLE_REWARD_QUANTITY = 25;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function sanitizeBattleTeamIdsForMigration(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const teams = raw
+    .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    .map((entry) => entry.trim());
+  return teams.length > 0 ? teams : undefined;
+}
+
+function sanitizeBattleRewardsForMigration(raw: unknown): Array<{ itemId: string; quantity: number }> | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const merged = new Map<string, number>();
+  for (const entry of raw) {
+    if (!isPlainRecord(entry)) {
+      continue;
+    }
+    const itemId = sanitizeIdentifier(typeof entry.itemId === 'string' ? entry.itemId : '', '');
+    const quantity =
+      typeof entry.quantity === 'number' && Number.isFinite(entry.quantity) ? Math.max(0, Math.floor(entry.quantity)) : 0;
+    if (!itemId || quantity <= 0) {
+      continue;
+    }
+    merged.set(itemId, (merged.get(itemId) ?? 0) + quantity);
+  }
+  if (merged.size === 0) {
+    return undefined;
+  }
+  return Array.from(merged.entries()).map(([itemId, quantity]) => ({ itemId, quantity }));
+}
+
+function migrateMovementGuardsForBattleCompatibility(
+  raw: unknown,
+  options?: {
+    fallbackBattleTeamIds?: string[];
+    fallbackBattleRewards?: Array<{ itemId: string; quantity: number }>;
+  },
+): { guards: unknown; changed: boolean } {
+  if (!Array.isArray(raw)) {
+    return { guards: raw, changed: false };
+  }
+  let changed = false;
+  const guards = raw.map((entry) => {
+    if (!isPlainRecord(entry)) {
+      return entry;
+    }
+    const before = JSON.stringify(entry);
+    const next: Record<string, unknown> = { ...entry };
+    const explicitBattleTeams = sanitizeBattleTeamIdsForMigration(next.battleTeamIds);
+    const battleTeams = explicitBattleTeams ?? options?.fallbackBattleTeamIds;
+    if (battleTeams) {
+      if (explicitBattleTeams) {
+        next.battleTeamIds = explicitBattleTeams;
+      } else if (next.battleTeamIds !== undefined) {
+        delete next.battleTeamIds;
+      }
+    } else if (next.battleTeamIds !== undefined) {
+      delete next.battleTeamIds;
+    }
+    const explicitBattleRewards = sanitizeBattleRewardsForMigration(next.battleRewards);
+    const battleRewards = explicitBattleRewards ?? options?.fallbackBattleRewards;
+    if (battleRewards) {
+      if (explicitBattleRewards) {
+        next.battleRewards = explicitBattleRewards;
+      } else if (next.battleRewards !== undefined) {
+        delete next.battleRewards;
+      }
+    } else if (next.battleRewards !== undefined) {
+      delete next.battleRewards;
+    }
+    const defeatedFlag = sanitizeFlagId(next.defeatedFlag) || sanitizeFlagId(next.postDefeatSetFlag);
+    if (next.postDefeatSetFlag !== undefined) {
+      delete next.postDefeatSetFlag;
+    }
+    if (defeatedFlag) {
+      next.defeatedFlag = defeatedFlag;
+    } else if (next.defeatedFlag !== undefined) {
+      delete next.defeatedFlag;
+    }
+    if (battleTeams && battleTeams.length > 0) {
+      const normalizedRewards = sanitizeBattleRewardsForMigration(next.battleRewards);
+      if (!normalizedRewards || normalizedRewards.length === 0) {
+        next.battleRewards = [
+          { itemId: DEFAULT_BATTLE_REWARD_ITEM_ID, quantity: DEFAULT_BATTLE_REWARD_QUANTITY },
+        ];
+      }
+    }
+    const after = JSON.stringify(next);
+    if (after !== before) {
+      changed = true;
+    }
+    return next;
+  });
+  return { guards, changed };
+}
+
+function migrateBattleStateRecordForCompatibility(
+  rawState: unknown,
+  options: {
+    inheritedBattleTeamIds?: string[];
+  },
+): { state: unknown; changed: boolean; hasBattleTeams: boolean } {
+  if (!isPlainRecord(rawState)) {
+    return { state: rawState, changed: false, hasBattleTeams: false };
+  }
+  const before = JSON.stringify(rawState);
+  const next: Record<string, unknown> = { ...rawState };
+  let hasBattleTeams = false;
+
+  const battleTeamIds = sanitizeBattleTeamIdsForMigration(next.battleTeamIds) ?? options.inheritedBattleTeamIds;
+  if (battleTeamIds && battleTeamIds.length > 0) {
+    hasBattleTeams = true;
+    next.battleTeamIds = battleTeamIds;
+  } else if (next.battleTeamIds !== undefined) {
+    delete next.battleTeamIds;
+  }
+
+  if (next.firstInteractBattle === true) {
+    const defeatedFlag = sanitizeFlagId(next.interactBattleDefeatedFlag) || sanitizeFlagId(next.postDefeatSetFlag);
+    if (defeatedFlag) {
+      next.interactBattleDefeatedFlag = defeatedFlag;
+    } else if (next.interactBattleDefeatedFlag !== undefined) {
+      delete next.interactBattleDefeatedFlag;
+    }
+
+    const rewards = sanitizeBattleRewardsForMigration(next.battleRewards);
+    next.battleRewards =
+      rewards && rewards.length > 0
+        ? rewards
+        : [{ itemId: DEFAULT_BATTLE_REWARD_ITEM_ID, quantity: DEFAULT_BATTLE_REWARD_QUANTITY }];
+  } else {
+    const defeatedFlag = sanitizeFlagId(next.interactBattleDefeatedFlag);
+    if (defeatedFlag) {
+      next.interactBattleDefeatedFlag = defeatedFlag;
+    } else if (next.interactBattleDefeatedFlag !== undefined) {
+      delete next.interactBattleDefeatedFlag;
+    }
+    const rewards = sanitizeBattleRewardsForMigration(next.battleRewards);
+    if (rewards) {
+      next.battleRewards = rewards;
+    } else if (next.battleRewards !== undefined) {
+      delete next.battleRewards;
+    }
+  }
+
+  const postDefeatSetFlag = sanitizeFlagId(next.postDefeatSetFlag);
+  if (postDefeatSetFlag && next.interactBattleDefeatedFlag === undefined) {
+    next.interactBattleDefeatedFlag = postDefeatSetFlag;
+  }
+  if (next.postDefeatSetFlag !== undefined) {
+    delete next.postDefeatSetFlag;
+  }
+
+  const interactionRewardSetFlag = sanitizeFlagId(next.interactionRewardSetFlag);
+  if (interactionRewardSetFlag) {
+    next.interactionRewardSetFlag = interactionRewardSetFlag;
+  } else if (next.interactionRewardSetFlag !== undefined) {
+    delete next.interactionRewardSetFlag;
+  }
+
+  const interactionRewards = sanitizeBattleRewardsForMigration(next.interactionRewards);
+  if (interactionRewards) {
+    next.interactionRewards = interactionRewards;
+  } else if (next.interactionRewards !== undefined) {
+    delete next.interactionRewards;
+  }
+
+  const movementGuards = migrateMovementGuardsForBattleCompatibility(next.movementGuards, {
+    fallbackBattleTeamIds: battleTeamIds,
+    fallbackBattleRewards: sanitizeBattleRewardsForMigration(next.battleRewards),
+  });
+  if (movementGuards.changed) {
+    next.movementGuards = movementGuards.guards;
+  }
+
+  const after = JSON.stringify(next);
+  return {
+    state: next,
+    changed: after !== before,
+    hasBattleTeams,
+  };
+}
+
+function migrateNpcRecordForBattleCompatibility(
+  rawRecord: unknown,
+  seed: string,
+): { record: unknown; changed: boolean } {
+  if (!isPlainRecord(rawRecord)) {
+    return { record: rawRecord, changed: false };
+  }
+  const before = JSON.stringify(rawRecord);
+  const next: Record<string, unknown> = { ...rawRecord };
+  const characterId = sanitizeIdentifier(typeof next.id === 'string' ? next.id : '', seed) || seed;
+
+  const baseBattleTeams = sanitizeBattleTeamIdsForMigration(next.battleTeamIds);
+  if (baseBattleTeams) {
+    next.battleTeamIds = baseBattleTeams;
+  } else if (next.battleTeamIds !== undefined) {
+    delete next.battleTeamIds;
+  }
+
+  if (next.firstInteractBattle === true) {
+    const defeatedFlag = sanitizeFlagId(next.interactBattleDefeatedFlag) || sanitizeFlagId(next.postDefeatSetFlag);
+    if (defeatedFlag) {
+      next.interactBattleDefeatedFlag = defeatedFlag;
+    } else if (next.interactBattleDefeatedFlag !== undefined) {
+      delete next.interactBattleDefeatedFlag;
+    }
+    const rewards = sanitizeBattleRewardsForMigration(next.battleRewards);
+    next.battleRewards =
+      rewards && rewards.length > 0
+        ? rewards
+        : [{ itemId: DEFAULT_BATTLE_REWARD_ITEM_ID, quantity: DEFAULT_BATTLE_REWARD_QUANTITY }];
+  } else {
+    const defeatedFlag = sanitizeFlagId(next.interactBattleDefeatedFlag);
+    if (defeatedFlag) {
+      next.interactBattleDefeatedFlag = defeatedFlag;
+    }
+    const rewards = sanitizeBattleRewardsForMigration(next.battleRewards);
+    if (rewards) {
+      next.battleRewards = rewards;
+    }
+  }
+
+  const storyStatesRaw = Array.isArray(next.storyStates) ? next.storyStates : [];
+  const migratedStates = storyStatesRaw.map((state) => {
+    const migrated = migrateBattleStateRecordForCompatibility(state, {
+      inheritedBattleTeamIds: baseBattleTeams,
+    });
+    return migrated.state;
+  });
+  if (storyStatesRaw.length > 0) {
+    next.storyStates = migratedStates;
+  }
+
+  const postDefeatSetFlag = sanitizeFlagId(next.postDefeatSetFlag);
+  if (postDefeatSetFlag && next.interactBattleDefeatedFlag === undefined) {
+    next.interactBattleDefeatedFlag = postDefeatSetFlag;
+  }
+  if (next.postDefeatSetFlag !== undefined) {
+    delete next.postDefeatSetFlag;
+  }
+
+  const movementGuards = migrateMovementGuardsForBattleCompatibility(next.movementGuards, {
+    fallbackBattleTeamIds: baseBattleTeams,
+    fallbackBattleRewards: sanitizeBattleRewardsForMigration(next.battleRewards),
+  });
+  if (movementGuards.changed) {
+    next.movementGuards = movementGuards.guards;
+  }
+
+  const interactionRewardSetFlag = sanitizeFlagId(next.interactionRewardSetFlag);
+  if (interactionRewardSetFlag) {
+    next.interactionRewardSetFlag = interactionRewardSetFlag;
+  } else if (next.interactionRewardSetFlag !== undefined) {
+    delete next.interactionRewardSetFlag;
+  }
+
+  const interactionRewards = sanitizeBattleRewardsForMigration(next.interactionRewards);
+  if (interactionRewards) {
+    next.interactionRewards = interactionRewards;
+  } else if (next.interactionRewards !== undefined) {
+    delete next.interactionRewards;
+  }
+
+  const after = JSON.stringify(next);
+  return { record: next, changed: after !== before };
+}
+
+function migrateNpcCharacterLibraryForBattleCompatibility(raw: unknown): { characterLibrary: unknown[]; changed: boolean } {
+  if (!Array.isArray(raw)) {
+    return { characterLibrary: [], changed: false };
+  }
+  let changed = false;
+  const characterLibrary = raw.map((entry, index) => {
+    const migrated = migrateNpcRecordForBattleCompatibility(entry, `npc-${index + 1}`);
+    if (migrated.changed) {
+      changed = true;
+    }
+    return migrated.record;
+  });
+  return { characterLibrary, changed };
+}
+
+function migrateMapsForBattleCompatibility(
+  rows: Array<{ map_id: string; map_data: unknown }>,
+): Array<{ mapId: string; mapData: unknown }> {
+  const updates: Array<{ mapId: string; mapData: unknown }> = [];
+  for (const row of rows) {
+    if (!isPlainRecord(row.map_data) || !Array.isArray(row.map_data.npcs)) {
+      continue;
+    }
+    const mapData = row.map_data as Record<string, unknown>;
+    const npcs = mapData.npcs as unknown[];
+    let changed = false;
+    const migratedNpcs = npcs.map((entry, index) => {
+      const migrated = migrateNpcRecordForBattleCompatibility(entry, `${row.map_id}-npc-${index + 1}`);
+      if (migrated.changed) {
+        changed = true;
+      }
+      return migrated.record;
+    });
+    if (!changed) {
+      continue;
+    }
+    updates.push({
+      mapId: row.map_id,
+      mapData: {
+        ...mapData,
+        npcs: migratedNpcs,
+      },
+    });
+  }
+  return updates;
+}
+
+function migrateSaveDataForBattleCompatibility(raw: unknown): { saveData: unknown; changed: boolean } {
+  if (!isPlainRecord(raw)) {
+    return { saveData: raw, changed: false };
+  }
+  const before = JSON.stringify(raw);
+  const next: Record<string, unknown> = { ...raw };
+  const progressTracking = isPlainRecord(next.progressTracking) ? { ...next.progressTracking } : {};
+  const mainStory = isPlainRecord(progressTracking.mainStory) ? { ...progressTracking.mainStory } : {};
+  const flags = isPlainRecord(mainStory.flags) ? { ...(mainStory.flags as Record<string, unknown>) } : {};
+
+  const demoDone = Boolean(flags['demo-done']);
+  const jacobLeftHouse = Boolean(flags['jacob-left-house']);
+  if ((demoDone || jacobLeftHouse) && !Boolean(flags[JACOB_BATTLE_WIN_FLAG_ID])) {
+    flags[JACOB_BATTLE_WIN_FLAG_ID] = true;
+  }
+
+  mainStory.flags = flags;
+  progressTracking.mainStory = mainStory;
+  next.progressTracking = progressTracking;
+  const after = JSON.stringify(next);
+  return { saveData: next, changed: after !== before };
+}
 
 function createSpawnMapPayload(): EditableMapPayload {
   const width = 11;
@@ -1305,7 +2990,7 @@ function createSpawnMapPayload(): EditableMapPayload {
     name: 'Portlock Beach',
     layers: [
       {
-        id: 'base',
+        id: 1,
         name: 'Base',
         tiles: Array.from({ length: height }, () => blankRow),
         rotations: Array.from({ length: height }, () => emptyCollisionRow),
@@ -1313,10 +2998,20 @@ function createSpawnMapPayload(): EditableMapPayload {
         visible: true,
         collision: true,
       },
+      {
+        id: 2,
+        name: 'NPC',
+        tiles: Array.from({ length: height }, () => blankRow),
+        rotations: Array.from({ length: height }, () => emptyCollisionRow),
+        collisionEdges: Array.from({ length: height }, () => emptyCollisionRow),
+        visible: true,
+        collision: false,
+      },
     ],
     npcs: [],
     warps: [],
     interactions: [],
+    encounterGroups: [],
   };
 }
 
@@ -1334,6 +3029,367 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       : null;
   let schemaReady = false;
 
+  const legacyTableExists = async (client: PoolClient, tableName: (typeof LEGACY_CATALOG_TABLES)[number]): Promise<boolean> => {
+    const result = await client.query<{ relation_name: string | null }>('SELECT to_regclass($1) AS relation_name', [
+      `public.${tableName}`,
+    ]);
+    return typeof result.rows[0]?.relation_name === 'string' && result.rows[0].relation_name.length > 0;
+  };
+
+  const migrateLegacyCatalogData = async (client: PoolClient): Promise<void> => {
+    const existingLegacyTables = new Set<(typeof LEGACY_CATALOG_TABLES)[number]>();
+    for (const tableName of LEGACY_CATALOG_TABLES) {
+      if (await legacyTableExists(client, tableName)) {
+        existingLegacyTables.add(tableName);
+      }
+    }
+
+    if (existingLegacyTables.size === 0) {
+      return;
+    }
+
+    const gameMapCountResult = await client.query('SELECT COUNT(*)::int AS count FROM game_maps');
+    const gameMapCount = Number(gameMapCountResult.rows[0]?.count ?? 0);
+    if (gameMapCount === 0 && existingLegacyTables.has('world_maps')) {
+      await client.query(`
+        INSERT INTO game_maps (map_id, map_data, updated_at)
+        SELECT map_id, map_data, COALESCE(updated_at, NOW())
+        FROM (
+          SELECT DISTINCT ON (map_id) map_id, map_data, updated_at
+          FROM world_maps
+          ORDER BY map_id, updated_at DESC NULLS LAST
+        ) legacy_maps
+        ON CONFLICT (map_id)
+        DO UPDATE SET map_data = EXCLUDED.map_data, updated_at = EXCLUDED.updated_at
+      `);
+    }
+
+    if (existingLegacyTables.has('tile_libraries')) {
+      const legacyTileResult = await client.query(
+        'SELECT saved_tiles, tileset_config FROM tile_libraries ORDER BY updated_at DESC NULLS LAST LIMIT 1',
+      );
+      const legacySavedTiles = legacyTileResult.rows[0]?.saved_tiles;
+      const legacyTilesetConfig = sanitizeTilesetConfig(legacyTileResult.rows[0]?.tileset_config ?? null);
+      const catalogUrl = typeof legacyTilesetConfig?.url === 'string' && !legacyTilesetConfig.url.startsWith('blob:') ? legacyTilesetConfig.url.trim() : null;
+      const catalogW = typeof legacyTilesetConfig?.tilePixelWidth === 'number' ? Math.max(1, Math.floor(legacyTilesetConfig.tilePixelWidth)) : null;
+      const catalogH = typeof legacyTilesetConfig?.tilePixelHeight === 'number' ? Math.max(1, Math.floor(legacyTilesetConfig.tilePixelHeight)) : null;
+      const parsed = Array.isArray(legacySavedTiles) ? parseSavedPaintTiles(legacySavedTiles) : [];
+      for (const tile of parsed) {
+        const id = typeof tile.id === 'string' && tile.id.trim() ? tile.id : `tile-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        const name = typeof tile.name === 'string' && tile.name.trim() ? tile.name.trim() : 'Saved Tile';
+        const primaryCode = typeof tile.primaryCode === 'string' && tile.primaryCode.trim() ? tile.primaryCode.trim().slice(0, 1) : ' ';
+        const width = typeof tile.width === 'number' ? Math.max(1, Math.floor(tile.width)) : 1;
+        const height = typeof tile.height === 'number' ? Math.max(1, Math.floor(tile.height)) : 1;
+        const ySort = typeof tile.ySortWithActors === 'boolean' ? tile.ySortWithActors : false;
+        const cells = Array.isArray(tile.cells) ? tile.cells : [];
+        await client.query(
+          `
+            INSERT INTO game_tiles (id, name, primary_code, width, height, y_sort_with_actors, tileset_url, tile_pixel_width, tile_pixel_height, cells, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, NOW())
+            ON CONFLICT (id) DO UPDATE SET
+              name = EXCLUDED.name, primary_code = EXCLUDED.primary_code, width = EXCLUDED.width, height = EXCLUDED.height,
+              y_sort_with_actors = EXCLUDED.y_sort_with_actors, cells = EXCLUDED.cells, updated_at = NOW(),
+              tileset_url = COALESCE(game_tiles.tileset_url, EXCLUDED.tileset_url),
+              tile_pixel_width = COALESCE(game_tiles.tile_pixel_width, EXCLUDED.tile_pixel_width),
+              tile_pixel_height = COALESCE(game_tiles.tile_pixel_height, EXCLUDED.tile_pixel_height)
+          `,
+          [id, name, primaryCode, width, height, ySort, catalogUrl, catalogW, catalogH, JSON.stringify(cells)],
+        );
+      }
+    }
+
+    const globalNpcResult = await client.query('SELECT catalog_key FROM game_npc_libraries WHERE catalog_key = $1', [
+      GLOBAL_CATALOG_KEY,
+    ]);
+    if ((globalNpcResult.rowCount ?? 0) === 0 && existingLegacyTables.has('npc_libraries')) {
+      const legacyNpcResult = await client.query(
+        'SELECT sprite_library, character_library FROM npc_libraries ORDER BY updated_at DESC NULLS LAST LIMIT 1',
+      );
+      const legacySpriteLibrary = Array.isArray(legacyNpcResult.rows[0]?.sprite_library) ? legacyNpcResult.rows[0].sprite_library : [];
+      const legacyCharacterLibrary = Array.isArray(legacyNpcResult.rows[0]?.character_library)
+        ? legacyNpcResult.rows[0].character_library
+        : [];
+      await client.query(
+        `
+          INSERT INTO game_npc_libraries (catalog_key, sprite_library, character_library, updated_at)
+          VALUES ($1, $2::jsonb, $3::jsonb, NOW())
+          ON CONFLICT (catalog_key)
+          DO UPDATE SET sprite_library = EXCLUDED.sprite_library, character_library = EXCLUDED.character_library, updated_at = NOW()
+        `,
+        [GLOBAL_CATALOG_KEY, JSON.stringify(legacySpriteLibrary), JSON.stringify(legacyCharacterLibrary)],
+      );
+    }
+
+    const globalPlayerSpriteResult = await client.query(
+      'SELECT catalog_key FROM game_player_sprite_configs WHERE catalog_key = $1',
+      [GLOBAL_CATALOG_KEY],
+    );
+    if ((globalPlayerSpriteResult.rowCount ?? 0) === 0 && existingLegacyTables.has('player_sprite_configs')) {
+      const legacyPlayerSpriteResult = await client.query(
+        'SELECT sprite_config FROM player_sprite_configs ORDER BY updated_at DESC NULLS LAST LIMIT 1',
+      );
+      const legacySpriteConfig = sanitizeLoadedPlayerSpriteConfig(legacyPlayerSpriteResult.rows[0]?.sprite_config) ?? {};
+      await client.query(
+        `
+          INSERT INTO game_player_sprite_configs (catalog_key, sprite_config, updated_at)
+          VALUES ($1, $2::jsonb, NOW())
+          ON CONFLICT (catalog_key)
+          DO UPDATE SET sprite_config = EXCLUDED.sprite_config, updated_at = NOW()
+        `,
+        [GLOBAL_CATALOG_KEY, JSON.stringify(legacySpriteConfig)],
+      );
+    }
+
+    const globalCritterCountResult = await client.query('SELECT COUNT(*)::int AS count FROM game_critter_catalog');
+    const globalCritterCount = Number(globalCritterCountResult.rows[0]?.count ?? 0);
+    if (globalCritterCount === 0 && existingLegacyTables.has('critter_libraries')) {
+      const legacyCritterResult = await client.query(
+        'SELECT critters FROM critter_libraries ORDER BY updated_at DESC NULLS LAST LIMIT 1',
+      );
+      const legacyCritters = parseCritterLibrary(legacyCritterResult.rows[0]?.critters);
+      const seenCritterIds = new Set<number>();
+      const seenCritterNames = new Set<string>();
+      for (const critter of legacyCritters) {
+        const critterName = String(critter.name ?? '').trim();
+        const critterNameKey = critterName.toLowerCase();
+        const critterId = critterClampInt(critter.id, 1, 999999, -1);
+        if (!critterName || critterId < 0 || seenCritterIds.has(critterId) || seenCritterNames.has(critterNameKey)) {
+          continue;
+        }
+        seenCritterIds.add(critterId);
+        seenCritterNames.add(critterNameKey);
+        await client.query(
+          `
+            INSERT INTO game_critter_catalog (name, critter_id, critter_data, updated_at)
+            VALUES ($1, $2, $3::jsonb, NOW())
+            ON CONFLICT (name)
+            DO UPDATE SET critter_id = EXCLUDED.critter_id, critter_data = EXCLUDED.critter_data, updated_at = NOW()
+          `,
+          [critterName, critterId, JSON.stringify(critter)],
+        );
+      }
+    }
+
+    const globalEncounterCountResult = await client.query('SELECT COUNT(*)::int AS count FROM game_encounter_catalog');
+    const globalEncounterCount = Number(globalEncounterCountResult.rows[0]?.count ?? 0);
+    if (globalEncounterCount === 0 && existingLegacyTables.has('encounter_libraries')) {
+      const legacyEncounterResult = await client.query(
+        'SELECT encounter_tables FROM encounter_libraries ORDER BY updated_at DESC NULLS LAST LIMIT 1',
+      );
+      const legacyEncounterTables = parseEncounterLibrary(legacyEncounterResult.rows[0]?.encounter_tables);
+      const seenTableIds = new Set<string>();
+      for (const table of legacyEncounterTables) {
+        const tableId = sanitizeIdentifier(typeof table.id === 'string' ? table.id : '', '');
+        if (!tableId || seenTableIds.has(tableId)) {
+          continue;
+        }
+        seenTableIds.add(tableId);
+        await client.query(
+          `
+            INSERT INTO game_encounter_catalog (table_id, table_data, updated_at)
+            VALUES ($1, $2::jsonb, NOW())
+            ON CONFLICT (table_id)
+            DO UPDATE SET table_data = EXCLUDED.table_data, updated_at = NOW()
+          `,
+          [tableId, JSON.stringify(table)],
+        );
+      }
+    }
+  };
+
+  const dropLegacyCatalogTables = async (client: PoolClient): Promise<void> => {
+    for (const tableName of LEGACY_CATALOG_TABLES) {
+      await client.query(`DROP TABLE IF EXISTS ${tableName} CASCADE`);
+    }
+  };
+
+  const collectFlagIdsFromUnknown = (
+    input: unknown,
+    sink: Set<string>,
+    depth = 0,
+  ): void => {
+    if (depth > 24 || input === null || input === undefined) {
+      return;
+    }
+    if (typeof input === 'string') {
+      return;
+    }
+    if (Array.isArray(input)) {
+      for (const entry of input) {
+        collectFlagIdsFromUnknown(entry, sink, depth + 1);
+      }
+      return;
+    }
+    if (typeof input !== 'object') {
+      return;
+    }
+    const record = input as Record<string, unknown>;
+    for (const [key, value] of Object.entries(record)) {
+      if (FLAG_REFERENCE_KEYS.has(key)) {
+        const flagId = sanitizeFlagId(value);
+        if (flagId) {
+          sink.add(flagId);
+        }
+      }
+      if (
+        key === 'flags' &&
+        value &&
+        typeof value === 'object' &&
+        !Array.isArray(value)
+      ) {
+        for (const candidate of Object.keys(value as Record<string, unknown>)) {
+          if (candidate.trim().toLowerCase().startsWith('shop-purchase:')) {
+            continue;
+          }
+          const flagId = sanitizeFlagId(candidate);
+          if (flagId) {
+            sink.add(flagId);
+          }
+        }
+      }
+      collectFlagIdsFromUnknown(value, sink, depth + 1);
+    }
+  };
+
+  const upsertFlagCatalogRows = async (
+    client: PoolClient,
+    flagEntries: Array<{ flagId: string; label: string; notes: string }>,
+  ): Promise<void> => {
+    for (const entry of flagEntries) {
+      const flagId = sanitizeFlagId(entry.flagId);
+      if (!flagId) {
+        continue;
+      }
+      const label = sanitizeOptionalText(entry.label) || toDefaultFlagLabel(flagId);
+      const notes = sanitizeOptionalText(entry.notes);
+      await client.query(
+        `
+          INSERT INTO flags (flag_id, label, notes, created_at, updated_at)
+          VALUES ($1, $2, $3, NOW(), NOW())
+          ON CONFLICT (flag_id)
+          DO UPDATE
+          SET label = EXCLUDED.label,
+              notes = EXCLUDED.notes,
+              updated_at = NOW()
+        `,
+        [flagId, label, notes],
+      );
+    }
+  };
+
+  const parseFlagCatalogPayload = (raw: unknown): Array<{ flagId: string; label: string; notes: string }> => {
+    if (!Array.isArray(raw)) {
+      return [];
+    }
+    const deduped = new Map<string, { flagId: string; label: string; notes: string }>();
+    for (const entry of raw) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        continue;
+      }
+      const record = entry as Record<string, unknown>;
+      const flagId = sanitizeFlagId(record.flagId);
+      if (!flagId) {
+        continue;
+      }
+      deduped.set(flagId, {
+        flagId,
+        label: sanitizeOptionalText(record.label),
+        notes: sanitizeOptionalText(record.notes),
+      });
+    }
+    return Array.from(deduped.values());
+  };
+
+  const readFlagCatalog = async (): Promise<FlagCatalogEntryPayload[]> => {
+    if (!pool) {
+      return [];
+    }
+    const result = await pool.query<{ flag_id: string; label: string; notes: string; updated_at: Date | string }>(
+      `
+        SELECT flag_id, label, notes, updated_at
+        FROM flags
+        ORDER BY flag_id ASC
+      `,
+    );
+    return result.rows.map((row) => ({
+      flagId: row.flag_id,
+      label: row.label ?? '',
+      notes: row.notes ?? '',
+      updatedAt:
+        row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at ?? ''),
+    }));
+  };
+
+  const syncDiscoveredFlags = async (client: PoolClient): Promise<void> => {
+    const discovered = new Set<string>(DEFAULT_SYSTEM_FLAGS.map((entry) => sanitizeFlagId(entry)));
+
+    const [mapsResult, npcResult, critterResult, encounterResult, shopsResult, savesResult] = await Promise.all([
+      client.query('SELECT map_data FROM game_maps'),
+      client.query('SELECT character_library FROM game_npc_libraries WHERE catalog_key = $1', [GLOBAL_CATALOG_KEY]),
+      client.query('SELECT critter_data FROM game_critter_catalog'),
+      client.query('SELECT table_data FROM game_encounter_catalog'),
+      client.query('SELECT shop_data FROM game_shops'),
+      client.query('SELECT save_data FROM user_saves'),
+    ]);
+
+    for (const row of mapsResult.rows) {
+      collectFlagIdsFromUnknown(row.map_data, discovered);
+    }
+    for (const row of npcResult.rows) {
+      collectFlagIdsFromUnknown(row.character_library, discovered);
+    }
+    for (const row of critterResult.rows) {
+      collectFlagIdsFromUnknown(row.critter_data, discovered);
+    }
+    for (const row of encounterResult.rows) {
+      collectFlagIdsFromUnknown(row.table_data, discovered);
+    }
+    for (const row of shopsResult.rows) {
+      collectFlagIdsFromUnknown(row.shop_data, discovered);
+    }
+    for (const row of savesResult.rows) {
+      collectFlagIdsFromUnknown(row.save_data, discovered);
+    }
+
+    for (const flagId of Array.from(discovered)) {
+      if (!flagId) {
+        continue;
+      }
+      await client.query(
+        `
+          INSERT INTO flags (flag_id, label, notes, created_at, updated_at)
+          VALUES ($1, $2, '', NOW(), NOW())
+          ON CONFLICT (flag_id)
+          DO UPDATE
+          SET label = COALESCE(NULLIF(flags.label, ''), EXCLUDED.label),
+              updated_at = NOW()
+        `,
+        [flagId, toDefaultFlagLabel(flagId)],
+      );
+    }
+  };
+
+  const writeFlagCatalog = async (
+    entries: Array<{ flagId: string; label: string; notes: string }>,
+  ): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM flags');
+      await upsertFlagCatalogRows(client, entries);
+      await syncDiscoveredFlags(client);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
   const ensureSchema = async () => {
     if (!pool) {
       throw new Error('DB_CONNECTION_STRING is missing. Configure it in .env.');
@@ -1348,9 +3404,14 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         email TEXT NOT NULL UNIQUE,
         password_hash TEXT NOT NULL,
         display_name TEXT NOT NULL,
+        is_admin BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+    `);
+    await pool.query(`
+      ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
     `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS app_sessions (
@@ -1368,55 +3429,154 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       );
     `);
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS world_maps (
-        owner_user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
-        map_id TEXT NOT NULL,
-        map_data JSONB NOT NULL,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        PRIMARY KEY (owner_user_id, map_id)
-      );
-    `);
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS user_world_state (
-        owner_user_id TEXT PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
+      CREATE TABLE IF NOT EXISTS game_catalog_state (
+        catalog_key TEXT PRIMARY KEY,
         map_init_version INTEGER NOT NULL DEFAULT 0,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS tile_libraries (
-        owner_user_id TEXT PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
-        tileset_config JSONB,
-        saved_tiles JSONB NOT NULL DEFAULT '[]'::jsonb,
+      CREATE TABLE IF NOT EXISTS game_maps (
+        map_id TEXT PRIMARY KEY,
+        map_data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`DROP TABLE IF EXISTS game_tile_libraries CASCADE`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_tiles (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL DEFAULT '',
+        primary_code TEXT NOT NULL DEFAULT ' ',
+        width INTEGER NOT NULL DEFAULT 1,
+        height INTEGER NOT NULL DEFAULT 1,
+        y_sort_with_actors BOOLEAN NOT NULL DEFAULT false,
+        tileset_url TEXT,
+        tile_pixel_width INTEGER,
+        tile_pixel_height INTEGER,
+        cells JSONB NOT NULL DEFAULT '[]'::jsonb,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS npc_libraries (
-        owner_user_id TEXT PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
+      CREATE TABLE IF NOT EXISTS game_npc_libraries (
+        catalog_key TEXT PRIMARY KEY,
         sprite_library JSONB NOT NULL DEFAULT '[]'::jsonb,
         character_library JSONB NOT NULL DEFAULT '[]'::jsonb,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS player_sprite_configs (
-        owner_user_id TEXT PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
+      CREATE TABLE IF NOT EXISTS game_player_sprite_configs (
+        catalog_key TEXT PRIMARY KEY,
         sprite_config JSONB NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS critter_libraries (
-        owner_user_id TEXT PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
-        critters JSONB NOT NULL DEFAULT '[]'::jsonb,
+      CREATE TABLE IF NOT EXISTS game_critter_catalog (
+        name TEXT PRIMARY KEY,
+        critter_id INTEGER NOT NULL UNIQUE,
+        critter_data JSONB NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_encounter_catalog (
+        table_id TEXT PRIMARY KEY,
+        table_data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_items (
+        item_id TEXT PRIMARY KEY,
+        item_name TEXT NOT NULL,
+        item_data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_shops (
+        shop_id TEXT PRIMARY KEY,
+        shop_name TEXT NOT NULL,
+        shop_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_skill_catalog (
+        skill_id TEXT PRIMARY KEY,
+        skill_data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_skill_effects_catalog (
+        effect_id TEXT PRIMARY KEY,
+        effect_data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_equipment_effects_catalog (
+        effect_id TEXT PRIMARY KEY,
+        effect_data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_element_chart (
+        catalog_key TEXT PRIMARY KEY,
+        chart_data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS flags (
+        flag_id TEXT PRIMARY KEY,
+        label TEXT NOT NULL DEFAULT '',
+        notes TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await migrateLegacyCatalogData(client);
+      await dropLegacyCatalogTables(client);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
     schemaReady = true;
   };
 
-  const ensureWorldBaselineForUser = async (userId: string): Promise<void> => {
+  /** Get tileset config from game_tiles (first tile with a tileset_url). Used for bootstrap and admin. */
+  const getTilesetConfigFromGameTiles = async (client: PoolClient): Promise<{ url: string; tilePixelWidth: number; tilePixelHeight: number } | null> => {
+    const result = await client.query(
+      'SELECT tileset_url, tile_pixel_width, tile_pixel_height FROM game_tiles WHERE tileset_url IS NOT NULL AND tileset_url != \'\' LIMIT 1',
+    );
+    const row = result.rows[0];
+    if (!row || typeof row.tileset_url !== 'string') {
+      return null;
+    }
+    const url = row.tileset_url.trim();
+    if (!url || url.startsWith('blob:')) {
+      return null;
+    }
+    const w = typeof row.tile_pixel_width === 'number' ? Math.max(1, Math.floor(row.tile_pixel_width)) : 16;
+    const h = typeof row.tile_pixel_height === 'number' ? Math.max(1, Math.floor(row.tile_pixel_height)) : 16;
+    return { url, tilePixelWidth: w, tilePixelHeight: h };
+  };
+
+  const ensureGlobalCatalogBaseline = async (): Promise<void> => {
     await ensureSchema();
     if (!pool) {
       throw new Error('Database unavailable.');
@@ -1427,49 +3587,160 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       await client.query('BEGIN');
 
       const stateResult = await client.query(
-        'SELECT map_init_version FROM user_world_state WHERE owner_user_id = $1',
-        [userId],
+        'SELECT map_init_version FROM game_catalog_state WHERE catalog_key = $1',
+        [GLOBAL_WORLD_STATE_KEY],
       );
       const mapInitVersion = Number(stateResult.rows[0]?.map_init_version ?? 0);
-      const mapCountResult = await client.query('SELECT COUNT(*)::int AS count FROM world_maps WHERE owner_user_id = $1', [
-        userId,
-      ]);
+      const mapCountResult = await client.query('SELECT COUNT(*)::int AS count FROM game_maps');
       const mapCount = Number(mapCountResult.rows[0]?.count ?? 0);
 
-      if (mapInitVersion < WORLD_MAP_BASELINE_VERSION) {
-        if (mapCount === 0) {
-          const spawnMap = createSpawnMapPayload();
-          await client.query(
-            `
-              INSERT INTO world_maps (owner_user_id, map_id, map_data, updated_at)
-              VALUES ($1, $2, $3::jsonb, NOW())
-              ON CONFLICT (owner_user_id, map_id)
-              DO UPDATE SET map_data = EXCLUDED.map_data, updated_at = NOW()
-            `,
-            [userId, spawnMap.id, JSON.stringify(spawnMap)],
-          );
-        }
-        await client.query(
-          `
-            INSERT INTO user_world_state (owner_user_id, map_init_version, updated_at)
-            VALUES ($1, $2, NOW())
-            ON CONFLICT (owner_user_id)
-            DO UPDATE SET map_init_version = EXCLUDED.map_init_version, updated_at = NOW()
-          `,
-          [userId, WORLD_MAP_BASELINE_VERSION],
-        );
-      } else if (mapCount === 0) {
+      if (mapCount === 0) {
         const spawnMap = createSpawnMapPayload();
         await client.query(
           `
-            INSERT INTO world_maps (owner_user_id, map_id, map_data, updated_at)
-            VALUES ($1, $2, $3::jsonb, NOW())
-            ON CONFLICT (owner_user_id, map_id)
+            INSERT INTO game_maps (map_id, map_data, updated_at)
+            VALUES ($1, $2::jsonb, NOW())
+            ON CONFLICT (map_id)
             DO UPDATE SET map_data = EXCLUDED.map_data, updated_at = NOW()
           `,
-          [userId, spawnMap.id, JSON.stringify(spawnMap)],
+          [spawnMap.id, JSON.stringify(spawnMap)],
         );
       }
+      if (mapInitVersion < WORLD_MAP_BASELINE_VERSION || mapCount === 0) {
+        await client.query(
+          `
+            INSERT INTO game_catalog_state (catalog_key, map_init_version, updated_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (catalog_key)
+            DO UPDATE SET map_init_version = EXCLUDED.map_init_version, updated_at = NOW()
+          `,
+          [GLOBAL_WORLD_STATE_KEY, WORLD_MAP_BASELINE_VERSION],
+        );
+      }
+
+      const globalNpcResult = await client.query('SELECT catalog_key FROM game_npc_libraries WHERE catalog_key = $1', [
+        GLOBAL_CATALOG_KEY,
+      ]);
+      if ((globalNpcResult.rowCount ?? 0) === 0) {
+        await client.query(
+          `
+            INSERT INTO game_npc_libraries (catalog_key, sprite_library, character_library, updated_at)
+            VALUES ($1, '[]'::jsonb, '[]'::jsonb, NOW())
+          `,
+          [GLOBAL_CATALOG_KEY],
+        );
+      }
+
+      const globalPlayerSpriteResult = await client.query(
+        'SELECT catalog_key FROM game_player_sprite_configs WHERE catalog_key = $1',
+        [GLOBAL_CATALOG_KEY],
+      );
+      if ((globalPlayerSpriteResult.rowCount ?? 0) === 0) {
+        await client.query(
+          `
+            INSERT INTO game_player_sprite_configs (catalog_key, sprite_config, updated_at)
+            VALUES ($1, '{}'::jsonb, NOW())
+          `,
+          [GLOBAL_CATALOG_KEY],
+        );
+      }
+
+      const itemCountResult = await client.query('SELECT COUNT(*)::int AS count FROM game_items');
+      const itemCount = Number(itemCountResult.rows[0]?.count ?? 0);
+      if (itemCount === 0) {
+        const seededItems = parseItemCatalog(DEFAULT_SEEDED_ITEMS, { strictUnique: true });
+        for (const item of seededItems) {
+          const itemId = sanitizeIdentifier(typeof item.id === 'string' ? item.id : '', '');
+          const itemName = typeof item.name === 'string' ? item.name.trim() : '';
+          if (!itemId || !itemName) {
+            continue;
+          }
+          await client.query(
+            `
+              INSERT INTO game_items (item_id, item_name, item_data, updated_at)
+              VALUES ($1, $2, $3::jsonb, NOW())
+              ON CONFLICT (item_id)
+              DO UPDATE SET item_name = EXCLUDED.item_name, item_data = EXCLUDED.item_data, updated_at = NOW()
+            `,
+            [itemId, itemName, JSON.stringify(item)],
+          );
+        }
+      }
+
+      const shopCountResult = await client.query('SELECT COUNT(*)::int AS count FROM game_shops');
+      const shopCount = Number(shopCountResult.rows[0]?.count ?? 0);
+      if (shopCount === 0) {
+        const seededShops = parseShopCatalog(DEFAULT_SEEDED_SHOPS, { strictUnique: true, strictEntryUnique: true });
+        for (const shop of seededShops) {
+          const shopId = sanitizeIdentifier(typeof shop.id === 'string' ? shop.id : '', '');
+          const shopName = typeof shop.name === 'string' && shop.name.trim() ? shop.name.trim() : '';
+          if (!shopId || !shopName) {
+            continue;
+          }
+          await client.query(
+            `
+              INSERT INTO game_shops (shop_id, shop_name, shop_data, updated_at)
+              VALUES ($1, $2, $3::jsonb, NOW())
+              ON CONFLICT (shop_id)
+              DO UPDATE SET shop_name = EXCLUDED.shop_name, shop_data = EXCLUDED.shop_data, updated_at = NOW()
+            `,
+            [shopId, shopName, JSON.stringify(shop)],
+          );
+        }
+      }
+
+      const npcCatalogResult = await client.query<{ character_library: unknown }>(
+        'SELECT character_library FROM game_npc_libraries WHERE catalog_key = $1',
+        [GLOBAL_CATALOG_KEY],
+      );
+      const migratedNpcCatalog = migrateNpcCharacterLibraryForBattleCompatibility(
+        npcCatalogResult.rows[0]?.character_library,
+      );
+      if (migratedNpcCatalog.changed) {
+        await client.query(
+          `
+            UPDATE game_npc_libraries
+            SET character_library = $2::jsonb, updated_at = NOW()
+            WHERE catalog_key = $1
+          `,
+          [GLOBAL_CATALOG_KEY, JSON.stringify(migratedNpcCatalog.characterLibrary)],
+        );
+      }
+
+      const mapRowsResult = await client.query<{ map_id: string; map_data: unknown }>(
+        'SELECT map_id, map_data FROM game_maps',
+      );
+      const migratedMaps = migrateMapsForBattleCompatibility(mapRowsResult.rows);
+      for (const migratedMap of migratedMaps) {
+        await client.query(
+          `
+            UPDATE game_maps
+            SET map_data = $2::jsonb, updated_at = NOW()
+            WHERE map_id = $1
+          `,
+          [migratedMap.mapId, JSON.stringify(migratedMap.mapData)],
+        );
+      }
+
+      const saveRowsResult = await client.query<{ user_id: string; save_data: unknown }>(
+        'SELECT user_id, save_data FROM user_saves',
+      );
+      for (const row of saveRowsResult.rows) {
+        const migratedSave = migrateSaveDataForBattleCompatibility(row.save_data);
+        if (!migratedSave.changed) {
+          continue;
+        }
+        await client.query(
+          `
+            UPDATE user_saves
+            SET save_data = $2::jsonb, updated_at = NOW()
+            WHERE user_id = $1
+          `,
+          [row.user_id, JSON.stringify(migratedSave.saveData)],
+        );
+      }
+
+      await syncDiscoveredFlags(client);
 
       await client.query('COMMIT');
     } catch (error) {
@@ -1478,6 +3749,308 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
     } finally {
       client.release();
     }
+  };
+
+  const readGlobalCritterCatalog = async (): Promise<Array<Record<string, unknown>>> => {
+    if (!pool) {
+      return [];
+    }
+    const result = await pool.query(
+      'SELECT critter_data FROM game_critter_catalog ORDER BY critter_id ASC, name ASC',
+    );
+    return parseCritterLibrary(result.rows.map((row) => row.critter_data));
+  };
+
+  const writeGlobalCritterCatalog = async (critters: Array<Record<string, unknown>>): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM game_critter_catalog');
+      for (const critter of critters) {
+        const critterName = String(critter.name ?? '').trim();
+        const critterId = critterClampInt(critter.id, 1, 999999, -1);
+        if (!critterName || critterId < 0) {
+          continue;
+        }
+        await client.query(
+          `
+            INSERT INTO game_critter_catalog (name, critter_id, critter_data, updated_at)
+            VALUES ($1, $2, $3::jsonb, NOW())
+          `,
+          [critterName, critterId, JSON.stringify(critter)],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
+  const readGlobalEncounterCatalog = async (): Promise<Array<Record<string, unknown>>> => {
+    if (!pool) {
+      return [];
+    }
+    const result = await pool.query(
+      'SELECT table_data FROM game_encounter_catalog ORDER BY table_id ASC',
+    );
+    return parseEncounterLibrary(result.rows.map((row) => row.table_data));
+  };
+
+  const writeGlobalEncounterCatalog = async (encounterTables: Array<Record<string, unknown>>): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM game_encounter_catalog');
+      for (const table of encounterTables) {
+        const tableId = sanitizeIdentifier(typeof table.id === 'string' ? table.id : '', '');
+        if (!tableId) {
+          continue;
+        }
+        await client.query(
+          `
+            INSERT INTO game_encounter_catalog (table_id, table_data, updated_at)
+            VALUES ($1, $2::jsonb, NOW())
+          `,
+          [tableId, JSON.stringify(table)],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
+  const readGlobalItemCatalog = async (): Promise<Array<Record<string, unknown>>> => {
+    if (!pool) {
+      return [];
+    }
+    const result = await pool.query('SELECT item_data FROM game_items ORDER BY item_id ASC');
+    return parseItemCatalog(result.rows.map((row) => row.item_data));
+  };
+
+  const writeGlobalItemCatalog = async (items: Array<Record<string, unknown>>): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM game_items');
+      for (const item of items) {
+        const itemId = sanitizeIdentifier(typeof item.id === 'string' ? item.id : '', '');
+        const itemName = typeof item.name === 'string' ? item.name.trim() : '';
+        if (!itemId || !itemName) {
+          continue;
+        }
+        await client.query(
+          `
+            INSERT INTO game_items (item_id, item_name, item_data, updated_at)
+            VALUES ($1, $2, $3::jsonb, NOW())
+          `,
+          [itemId, itemName, JSON.stringify(item)],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
+  const readGlobalShopCatalog = async (): Promise<Array<Record<string, unknown>>> => {
+    if (!pool) {
+      return [];
+    }
+    const result = await pool.query('SELECT shop_data FROM game_shops ORDER BY shop_id ASC');
+    return parseShopCatalog(result.rows.map((row) => row.shop_data));
+  };
+
+  const writeGlobalShopCatalog = async (shops: Array<Record<string, unknown>>): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM game_shops');
+      for (const shop of shops) {
+        const shopId = sanitizeIdentifier(typeof shop.id === 'string' ? shop.id : '', '');
+        const shopName = typeof shop.name === 'string' ? shop.name.trim() : '';
+        if (!shopId || !shopName) {
+          continue;
+        }
+        await client.query(
+          `
+            INSERT INTO game_shops (shop_id, shop_name, shop_data, updated_at)
+            VALUES ($1, $2, $3::jsonb, NOW())
+          `,
+          [shopId, shopName, JSON.stringify(shop)],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
+  const readGlobalSkillCatalog = async (): Promise<Array<Record<string, unknown>>> => {
+    if (!pool) {
+      return [];
+    }
+    const result = await pool.query('SELECT skill_data FROM game_skill_catalog ORDER BY skill_id ASC');
+    return (result.rows.map((row) => row.skill_data) as Array<Record<string, unknown>>).filter(Boolean);
+  };
+
+  const writeGlobalSkillCatalog = async (skills: Array<Record<string, unknown>>): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM game_skill_catalog');
+      for (const skill of skills) {
+        const skillId = typeof skill.skill_id === 'string' ? String(skill.skill_id).trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-') : '';
+        if (!skillId) {
+          continue;
+        }
+        await client.query(
+          `
+            INSERT INTO game_skill_catalog (skill_id, skill_data, updated_at)
+            VALUES ($1, $2::jsonb, NOW())
+          `,
+          [skillId, JSON.stringify(skill)],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
+  const readGlobalSkillEffectsCatalog = async (): Promise<Array<Record<string, unknown>>> => {
+    if (!pool) {
+      return [];
+    }
+    const result = await pool.query('SELECT effect_data FROM game_skill_effects_catalog ORDER BY effect_id ASC');
+    return (result.rows.map((row) => row.effect_data) as Array<Record<string, unknown>>).filter(Boolean);
+  };
+
+  const writeGlobalSkillEffectsCatalog = async (effects: Array<Record<string, unknown>>): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM game_skill_effects_catalog');
+      for (const effect of effects) {
+        const effectId = typeof effect.effect_id === 'string' ? String(effect.effect_id).trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-') : '';
+        if (!effectId) {
+          continue;
+        }
+        await client.query(
+          `
+            INSERT INTO game_skill_effects_catalog (effect_id, effect_data, updated_at)
+            VALUES ($1, $2::jsonb, NOW())
+          `,
+          [effectId, JSON.stringify(effect)],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
+  const readGlobalEquipmentEffectsCatalog = async (): Promise<Array<Record<string, unknown>>> => {
+    if (!pool) {
+      return [];
+    }
+    const result = await pool.query('SELECT effect_data FROM game_equipment_effects_catalog ORDER BY effect_id ASC');
+    return (result.rows.map((row) => row.effect_data) as Array<Record<string, unknown>>).filter(Boolean);
+  };
+
+  const writeGlobalEquipmentEffectsCatalog = async (effects: Array<Record<string, unknown>>): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM game_equipment_effects_catalog');
+      for (const effect of effects) {
+        const effectId =
+          typeof effect.effect_id === 'string'
+            ? String(effect.effect_id).trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-')
+            : '';
+        if (!effectId) {
+          continue;
+        }
+        await client.query(
+          `
+            INSERT INTO game_equipment_effects_catalog (effect_id, effect_data, updated_at)
+            VALUES ($1, $2::jsonb, NOW())
+          `,
+          [effectId, JSON.stringify(effect)],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
+  const ELEMENT_CHART_KEY = 'default';
+
+  const readElementChart = async (): Promise<Array<Record<string, unknown>>> => {
+    if (!pool) {
+      return [];
+    }
+    const result = await pool.query('SELECT chart_data FROM game_element_chart WHERE catalog_key = $1', [ELEMENT_CHART_KEY]);
+    const raw = result.rows[0]?.chart_data;
+    return Array.isArray(raw) ? (raw as Array<Record<string, unknown>>) : [];
+  };
+
+  const writeElementChart = async (chart: Array<Record<string, unknown>>): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    await pool.query(
+      `
+        INSERT INTO game_element_chart (catalog_key, chart_data, updated_at)
+        VALUES ($1, $2::jsonb, NOW())
+        ON CONFLICT (catalog_key)
+        DO UPDATE SET chart_data = EXCLUDED.chart_data, updated_at = NOW()
+      `,
+      [ELEMENT_CHART_KEY, JSON.stringify(chart)],
+    );
   };
 
   const requireAuth = async (req: IncomingMessage, res: ServerResponse) => {
@@ -1496,14 +4069,14 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
     const tokenHash = hashToken(token);
     const sessionResult = await pool.query(
       `
-        SELECT u.id, u.email, u.display_name
+        SELECT u.id, u.email, u.display_name, u.is_admin
         FROM app_sessions s
         JOIN app_users u ON u.id = s.user_id
         WHERE s.token_hash = $1 AND s.expires_at > NOW()
       `,
       [tokenHash],
     );
-    const user = sessionResult.rows[0] as { id: string; email: string; display_name: string } | undefined;
+    const user = sessionResult.rows[0] as { id: string; email: string; display_name: string; is_admin: boolean } | undefined;
     if (!user) {
       sendJson(res, 401, { ok: false, error: 'Session expired. Please sign in again.' });
       return null;
@@ -1516,8 +4089,21 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         id: user.id,
         email: user.email,
         displayName: user.display_name,
+        isAdmin: Boolean(user.is_admin),
       },
     };
+  };
+
+  const requireAdminAuth = async (req: IncomingMessage, res: ServerResponse) => {
+    const auth = await requireAuth(req, res);
+    if (!auth) {
+      return null;
+    }
+    if (!auth.user.isAdmin) {
+      sendJson(res, 403, { ok: false, error: 'Admin access required.' });
+      return null;
+    }
+    return auth;
   };
 
   const rewriteAdminRoute = (req: IncomingMessage, _res: ServerResponse, next: () => void) => {
@@ -1557,6 +4143,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       '/api/admin/maps/list',
       '/api/admin/tiles/save',
       '/api/admin/tiles/list',
+      '/api/admin/tiles/clear',
       '/api/admin/npc/save',
       '/api/admin/npc/list',
       '/api/admin/player-sprite/save',
@@ -1564,6 +4151,22 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       '/api/admin/spritesheets/list',
       '/api/admin/critters/save',
       '/api/admin/critters/list',
+      '/api/admin/encounters/save',
+      '/api/admin/encounters/list',
+      '/api/admin/items/save',
+      '/api/admin/items/list',
+      '/api/admin/shops/save',
+      '/api/admin/shops/list',
+      '/api/admin/skills/list',
+      '/api/admin/skills/save',
+      '/api/admin/skill-effects/list',
+      '/api/admin/skill-effects/save',
+      '/api/admin/equipment-effects/list',
+      '/api/admin/equipment-effects/save',
+      '/api/admin/element-chart/get',
+      '/api/admin/element-chart/save',
+      '/api/admin/flags/save',
+      '/api/admin/flags/list',
     ]);
     if (!handledRoutes.has(url)) {
       next();
@@ -1600,8 +4203,8 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         const passwordHash = await bcrypt.hash(password, 10);
         await pool.query(
           `
-            INSERT INTO app_users (id, email, password_hash, display_name, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, NOW(), NOW())
+            INSERT INTO app_users (id, email, password_hash, display_name, is_admin, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, FALSE, NOW(), NOW())
           `,
           [userId, email, passwordHash, displayName],
         );
@@ -1623,6 +4226,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
               id: userId,
               email,
               displayName,
+              isAdmin: false,
             },
           },
         });
@@ -1644,7 +4248,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         }
 
         const userResult = await pool.query(
-          'SELECT id, email, display_name, password_hash FROM app_users WHERE email = $1',
+          'SELECT id, email, display_name, password_hash, is_admin FROM app_users WHERE email = $1',
           [email],
         );
         const user = userResult.rows[0] as
@@ -1653,6 +4257,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
               email: string;
               display_name: string;
               password_hash: string;
+              is_admin: boolean;
             }
           | undefined;
         if (!user) {
@@ -1684,6 +4289,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
               id: user.id,
               email: user.email,
               displayName: user.display_name,
+              isAdmin: Boolean(user.is_admin),
             },
           },
         });
@@ -1785,51 +4391,123 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         if (!auth || !pool) {
           return;
         }
-        await ensureWorldBaselineForUser(auth.user.id);
-        const [mapsResult, tileResult, playerSpriteResult, crittersResult] = await Promise.all([
-          pool.query('SELECT map_data FROM world_maps WHERE owner_user_id = $1 ORDER BY updated_at DESC', [auth.user.id]),
-          pool.query('SELECT saved_tiles, tileset_config FROM tile_libraries WHERE owner_user_id = $1', [auth.user.id]),
-          pool.query('SELECT sprite_config FROM player_sprite_configs WHERE owner_user_id = $1', [auth.user.id]),
-          pool.query('SELECT critters FROM critter_libraries WHERE owner_user_id = $1', [auth.user.id]),
+        await ensureGlobalCatalogBaseline();
+        const client = await pool.connect();
+        let tilesetConfig: { url: string; tilePixelWidth: number; tilePixelHeight: number } | null = null;
+        try {
+          tilesetConfig = await getTilesetConfigFromGameTiles(client);
+        } finally {
+          client.release();
+        }
+        const [mapsResult, tilesRowsResult, playerSpriteResult, npcLibraryResult, crittersResult, encounterResult, skills, effects, equipmentEffects, elementChart, items, shops] = await Promise.all([
+          pool.query('SELECT map_data FROM game_maps ORDER BY updated_at DESC'),
+          pool.query('SELECT id, name, primary_code, width, height, y_sort_with_actors, tileset_url, tile_pixel_width, tile_pixel_height, cells FROM game_tiles ORDER BY updated_at DESC'),
+          pool.query('SELECT sprite_config FROM game_player_sprite_configs WHERE catalog_key = $1', [GLOBAL_CATALOG_KEY]),
+          pool.query('SELECT sprite_library, character_library FROM game_npc_libraries WHERE catalog_key = $1', [GLOBAL_CATALOG_KEY]),
+          pool.query('SELECT critter_data FROM game_critter_catalog ORDER BY critter_id ASC, name ASC'),
+          pool.query('SELECT table_data FROM game_encounter_catalog ORDER BY table_id ASC'),
+          readGlobalSkillCatalog(),
+          readGlobalSkillEffectsCatalog(),
+          readGlobalEquipmentEffectsCatalog(),
+          readElementChart(),
+          readGlobalItemCatalog(),
+          readGlobalShopCatalog(),
         ]);
-        const savedTiles = parseSavedPaintTiles(tileResult.rows[0]?.saved_tiles);
+        const savedTiles = (tilesRowsResult.rows ?? []).map((row: Record<string, unknown>) => ({
+          id: row.id,
+          name: row.name,
+          primaryCode: row.primary_code,
+          width: row.width,
+          height: row.height,
+          ySortWithActors: row.y_sort_with_actors,
+          ...(row.tileset_url != null && { tilesetUrl: row.tileset_url }),
+          ...(row.tile_pixel_width != null && { tilePixelWidth: row.tile_pixel_width }),
+          ...(row.tile_pixel_height != null && { tilePixelHeight: row.tile_pixel_height }),
+          cells: row.cells ?? [],
+        })) as SavedPaintTilePayload[];
         const customTileDefinitions = buildCustomTileDefinitions(savedTiles);
+        const critters = parseCritterLibrary(crittersResult.rows.map((row) => row.critter_data));
+        const encounterTables = parseEncounterLibrary(encounterResult.rows.map((row) => row.table_data));
         sendJson(res, 200, {
           ok: true,
           content: {
             maps: mapsResult.rows.map((row) => row.map_data),
             savedPaintTiles: savedTiles,
             customTileDefinitions,
-            customTilesetConfig: tileResult.rows[0]?.tileset_config ?? null,
+            customTilesetConfig: tilesetConfig,
             playerSpriteConfig: sanitizeLoadedPlayerSpriteConfig(playerSpriteResult.rows[0]?.sprite_config),
-            critters: crittersResult.rows[0]?.critters ?? [],
+            npcSpriteLibrary: npcLibraryResult.rows[0]?.sprite_library ?? [],
+            npcCharacterLibrary: npcLibraryResult.rows[0]?.character_library ?? [],
+            critters,
+            encounterTables,
+            critterSkills: skills,
+            skillEffects: effects,
+            equipmentEffects,
+            elementChart,
+            items,
+            shops,
           },
         });
         return;
       }
 
       if (url === '/api/admin/maps/list' && req.method === 'GET') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
-        await ensureWorldBaselineForUser(auth.user.id);
-        const mapsResult = await pool.query(
-          'SELECT map_data FROM world_maps WHERE owner_user_id = $1 ORDER BY updated_at DESC',
-          [auth.user.id],
-        );
-        sendJson(res, 200, { ok: true, maps: mapsResult.rows.map((row) => row.map_data) });
+        await ensureGlobalCatalogBaseline();
+        const mapsResult = await pool.query('SELECT map_id, map_data FROM game_maps ORDER BY updated_at DESC');
+        sendJson(res, 200, {
+          ok: true,
+          maps: mapsResult.rows.map((row: { map_id: string; map_data: unknown }) => ({
+            mapId: row.map_id,
+            mapData: row.map_data,
+          })),
+        });
+        return;
+      }
+
+      if (url === '/api/admin/maps/sync-from-project' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const metas = scanMapFiles();
+        const errors: string[] = [];
+        let synced = 0;
+        for (const meta of metas) {
+          const result = parseMapFileToPayload(meta.absolutePath);
+          if ('error' in result) {
+            errors.push(`${meta.fileName} (${meta.id}): ${result.error}`);
+            continue;
+          }
+          await pool.query(
+            `
+              INSERT INTO game_maps (map_id, map_data, updated_at)
+              VALUES ($1, $2::jsonb, NOW())
+              ON CONFLICT (map_id)
+              DO UPDATE SET map_data = EXCLUDED.map_data, updated_at = NOW()
+            `,
+            [result.id, JSON.stringify(result)],
+          );
+          synced += 1;
+        }
+        sendJson(res, 200, { ok: true, synced, errors: errors.length > 0 ? errors : undefined });
         return;
       }
 
       if (url === '/api/admin/maps/save' && req.method === 'POST') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
-        await ensureWorldBaselineForUser(auth.user.id);
+        await ensureGlobalCatalogBaseline();
         const rawBody = (await readJsonBody(req)) as SaveMapRequestPayload;
         const map = parseEditableMapPayload(rawBody);
+        const hasIncomingSavedPaintTiles = Object.prototype.hasOwnProperty.call(rawBody, 'savedPaintTiles');
+        const hasIncomingTilesetConfig = Object.prototype.hasOwnProperty.call(rawBody, 'tileset');
 
         let fileResult: ReturnType<typeof saveMapToProject> | null = null;
         try {
@@ -1840,62 +4518,239 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
 
         await pool.query(
           `
-            INSERT INTO world_maps (owner_user_id, map_id, map_data, updated_at)
-            VALUES ($1, $2, $3::jsonb, NOW())
-            ON CONFLICT (owner_user_id, map_id)
+            INSERT INTO game_maps (map_id, map_data, updated_at)
+            VALUES ($1, $2::jsonb, NOW())
+            ON CONFLICT (map_id)
             DO UPDATE SET map_data = EXCLUDED.map_data, updated_at = NOW()
           `,
-          [auth.user.id, map.id, JSON.stringify(map)],
+          [map.id, JSON.stringify(map)],
         );
 
-        const savedTiles = parseSavedPaintTiles(rawBody.savedPaintTiles);
-        const tilesetConfig = sanitizeTilesetConfig(rawBody.tileset ?? null);
-        await pool.query(
-          `
-            INSERT INTO tile_libraries (owner_user_id, saved_tiles, tileset_config, updated_at)
-            VALUES ($1, $2::jsonb, $3::jsonb, NOW())
-            ON CONFLICT (owner_user_id)
-            DO UPDATE SET saved_tiles = EXCLUDED.saved_tiles, tileset_config = EXCLUDED.tileset_config, updated_at = NOW()
-          `,
-          [auth.user.id, JSON.stringify(savedTiles), JSON.stringify(tilesetConfig)],
+        const existingTilesResult = await pool.query(
+          'SELECT id, name, primary_code, width, height, y_sort_with_actors, tileset_url, tile_pixel_width, tile_pixel_height, cells FROM game_tiles ORDER BY updated_at DESC',
         );
+        const existingSavedTiles = (existingTilesResult.rows ?? []).map((row: Record<string, unknown>) => ({
+          id: row.id,
+          name: row.name,
+          primaryCode: row.primary_code,
+          width: row.width,
+          height: row.height,
+          ySortWithActors: row.y_sort_with_actors,
+          ...(row.tileset_url != null && { tilesetUrl: row.tileset_url }),
+          ...(row.tile_pixel_width != null && { tilePixelWidth: row.tile_pixel_width }),
+          ...(row.tile_pixel_height != null && { tilePixelHeight: row.tile_pixel_height }),
+          cells: row.cells ?? [],
+        }));
+        const savedTiles = hasIncomingSavedPaintTiles ? parseSavedPaintTiles(rawBody.savedPaintTiles) : existingSavedTiles;
+        
+        // If tileset config is provided, update all tiles in game_tiles that don't have a tileset_url
+        if (hasIncomingTilesetConfig) {
+          const tilesetConfig = sanitizeTilesetConfig(rawBody.tileset ?? null);
+          if (tilesetConfig && typeof tilesetConfig.url === 'string' && tilesetConfig.url.trim() && !tilesetConfig.url.startsWith('blob:')) {
+            const url = tilesetConfig.url.trim();
+            const w = typeof tilesetConfig.tilePixelWidth === 'number' ? Math.max(1, Math.floor(tilesetConfig.tilePixelWidth)) : 16;
+            const h = typeof tilesetConfig.tilePixelHeight === 'number' ? Math.max(1, Math.floor(tilesetConfig.tilePixelHeight)) : 16;
+            await pool.query(
+              `
+                UPDATE game_tiles
+                SET tileset_url = $1, tile_pixel_width = $2, tile_pixel_height = $3, updated_at = NOW()
+                WHERE tileset_url IS NULL
+              `,
+              [url, w, h],
+            );
+          }
+        }
 
         sendJson(res, 200, {
           ok: true,
           mapId: map.id,
-          mapFilePath: fileResult?.mapFilePath ?? 'database:world_maps',
-          indexFilePath: fileResult?.indexFilePath ?? 'database:world_maps',
-          customTilesFilePath: fileResult?.customTilesFilePath ?? 'database:tile_libraries',
+          mapFilePath: fileResult?.mapFilePath ?? 'database:game_maps',
+          indexFilePath: fileResult?.indexFilePath ?? 'database:game_maps',
+          customTilesFilePath: fileResult?.customTilesFilePath ?? 'database:game_tiles',
           customTileCodes: Object.keys(buildCustomTileDefinitions(savedTiles)),
         });
         return;
       }
 
       if (url === '/api/admin/tiles/list' && req.method === 'GET') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
-        const result = await pool.query(
-          'SELECT saved_tiles, tileset_config FROM tile_libraries WHERE owner_user_id = $1',
-          [auth.user.id],
+        await ensureGlobalCatalogBaseline();
+        const tilesResult = await pool.query(
+          'SELECT id, name, primary_code, width, height, y_sort_with_actors, tileset_url, tile_pixel_width, tile_pixel_height, cells FROM game_tiles ORDER BY updated_at DESC',
         );
+        const savedPaintTiles = (tilesResult.rows ?? []).map((row: Record<string, unknown>) => ({
+          id: row.id,
+          name: row.name,
+          primaryCode: row.primary_code,
+          width: row.width,
+          height: row.height,
+          ySortWithActors: row.y_sort_with_actors,
+          ...(row.tileset_url != null && { tilesetUrl: row.tileset_url }),
+          ...(row.tile_pixel_width != null && { tilePixelWidth: row.tile_pixel_width }),
+          ...(row.tile_pixel_height != null && { tilePixelHeight: row.tile_pixel_height }),
+          cells: row.cells ?? [],
+        }));
+        const client = await pool.connect();
+        let tilesetConfig: { url: string; tilePixelWidth: number; tilePixelHeight: number } | null = null;
+        try {
+          tilesetConfig = await getTilesetConfigFromGameTiles(client);
+        } finally {
+          client.release();
+        }
         sendJson(res, 200, {
           ok: true,
-          savedPaintTiles: result.rows[0]?.saved_tiles ?? [],
-          tileset: result.rows[0]?.tileset_config ?? null,
+          savedPaintTiles,
+          tileset: tilesetConfig,
+        });
+        return;
+      }
+
+      if (url === '/api/admin/tiles/clear' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const result = await pool.query('DELETE FROM game_tiles');
+        const deletedCount = result.rowCount ?? 0;
+        sendJson(res, 200, {
+          ok: true,
+          deletedCount,
         });
         return;
       }
 
       if (url === '/api/admin/tiles/save' && req.method === 'POST') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
+        await ensureGlobalCatalogBaseline();
         const rawBody = (await readJsonBody(req)) as SaveTilesRequestPayload;
         const parsedTiles = parseSavedPaintTiles(rawBody.savedPaintTiles);
         const tilesetConfig = sanitizeTilesetConfig(rawBody.tileset ?? null);
+        let fallbackTilesetUrl =
+          tilesetConfig &&
+          typeof tilesetConfig.url === 'string' &&
+          tilesetConfig.url.trim() &&
+          !tilesetConfig.url.startsWith('blob:')
+            ? tilesetConfig.url.trim()
+            : null;
+        let fallbackTilePixelWidth =
+          tilesetConfig && typeof tilesetConfig.tilePixelWidth === 'number'
+            ? Math.max(1, Math.floor(tilesetConfig.tilePixelWidth))
+            : null;
+        let fallbackTilePixelHeight =
+          tilesetConfig && typeof tilesetConfig.tilePixelHeight === 'number'
+            ? Math.max(1, Math.floor(tilesetConfig.tilePixelHeight))
+            : null;
+
+        if (!fallbackTilesetUrl || !fallbackTilePixelWidth || !fallbackTilePixelHeight) {
+          const existingTilesetResult = await pool.query(
+            `
+              SELECT tileset_url, tile_pixel_width, tile_pixel_height
+              FROM game_tiles
+              WHERE tileset_url IS NOT NULL AND tileset_url != ''
+              ORDER BY updated_at DESC NULLS LAST
+              LIMIT 1
+            `,
+          );
+          const row = existingTilesetResult.rows[0] as
+            | { tileset_url?: unknown; tile_pixel_width?: unknown; tile_pixel_height?: unknown }
+            | undefined;
+          const existingUrl = typeof row?.tileset_url === 'string' ? row.tileset_url.trim() : '';
+          const existingW =
+            typeof row?.tile_pixel_width === 'number' && Number.isFinite(row.tile_pixel_width)
+              ? Math.max(1, Math.floor(row.tile_pixel_width))
+              : 0;
+          const existingH =
+            typeof row?.tile_pixel_height === 'number' && Number.isFinite(row.tile_pixel_height)
+              ? Math.max(1, Math.floor(row.tile_pixel_height))
+              : 0;
+          if (existingUrl && !existingUrl.startsWith('blob:') && existingW > 0 && existingH > 0) {
+            fallbackTilesetUrl = fallbackTilesetUrl ?? existingUrl;
+            fallbackTilePixelWidth = fallbackTilePixelWidth ?? existingW;
+            fallbackTilePixelHeight = fallbackTilePixelHeight ?? existingH;
+          }
+        }
+        if (!fallbackTilesetUrl || !fallbackTilePixelWidth || !fallbackTilePixelHeight) {
+          const defaultTileset = getDefaultTilesetConfigFromEnv();
+          if (defaultTileset) {
+            fallbackTilesetUrl = fallbackTilesetUrl ?? defaultTileset.url;
+            fallbackTilePixelWidth = fallbackTilePixelWidth ?? defaultTileset.tilePixelWidth;
+            fallbackTilePixelHeight = fallbackTilePixelHeight ?? defaultTileset.tilePixelHeight;
+          }
+        }
+
+        const persistedIds: string[] = [];
+        await pool.query('BEGIN');
+        try {
+          for (const tile of parsedTiles) {
+            const id = typeof tile.id === 'string' && tile.id.trim() ? tile.id : `tile-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+            const name = typeof tile.name === 'string' && tile.name.trim() ? tile.name.trim() : 'Saved Tile';
+            const primaryCode = typeof tile.primaryCode === 'string' && tile.primaryCode.trim() ? tile.primaryCode.trim().slice(0, 1) : ' ';
+            const width = typeof tile.width === 'number' ? Math.max(1, Math.floor(tile.width)) : 1;
+            const height = typeof tile.height === 'number' ? Math.max(1, Math.floor(tile.height)) : 1;
+            const ySort = typeof tile.ySortWithActors === 'boolean' ? tile.ySortWithActors : false;
+            const tileTilesetUrl = typeof tile.tilesetUrl === 'string' && tile.tilesetUrl.trim() ? tile.tilesetUrl.trim() : null;
+            const tileTilePixelWidth = typeof tile.tilePixelWidth === 'number' && Number.isFinite(tile.tilePixelWidth) ? Math.max(1, Math.floor(tile.tilePixelWidth)) : null;
+            const tileTilePixelHeight = typeof tile.tilePixelHeight === 'number' && Number.isFinite(tile.tilePixelHeight) ? Math.max(1, Math.floor(tile.tilePixelHeight)) : null;
+            const useFallbackTileset =
+              !tileTilesetUrl &&
+              fallbackTilesetUrl &&
+              fallbackTilePixelWidth &&
+              fallbackTilePixelHeight;
+            const tilesetUrl = useFallbackTileset ? fallbackTilesetUrl : tileTilesetUrl;
+            const tilePixelWidth = useFallbackTileset ? fallbackTilePixelWidth : tileTilePixelWidth;
+            const tilePixelHeight = useFallbackTileset ? fallbackTilePixelHeight : tileTilePixelHeight;
+            const cells = Array.isArray(tile.cells) ? tile.cells : [];
+            await pool.query(
+              `
+                INSERT INTO game_tiles (id, name, primary_code, width, height, y_sort_with_actors, tileset_url, tile_pixel_width, tile_pixel_height, cells, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, NOW())
+                ON CONFLICT (id) DO UPDATE SET
+                  name = EXCLUDED.name,
+                  primary_code = EXCLUDED.primary_code,
+                  width = EXCLUDED.width,
+                  height = EXCLUDED.height,
+                  y_sort_with_actors = EXCLUDED.y_sort_with_actors,
+                  tileset_url = EXCLUDED.tileset_url,
+                  tile_pixel_width = EXCLUDED.tile_pixel_width,
+                  tile_pixel_height = EXCLUDED.tile_pixel_height,
+                  cells = EXCLUDED.cells,
+                  updated_at = NOW()
+              `,
+              [id, name, primaryCode, width, height, ySort, tilesetUrl, tilePixelWidth, tilePixelHeight, JSON.stringify(cells)],
+            );
+            persistedIds.push(id);
+          }
+
+          // Save Tile Library is authoritative: remove rows no longer present in payload.
+          if (persistedIds.length > 0) {
+            await pool.query('DELETE FROM game_tiles WHERE id <> ALL($1::text[])', [Array.from(new Set(persistedIds))]);
+          } else {
+            await pool.query('DELETE FROM game_tiles');
+          }
+
+          // Backfill any remaining NULL tileset rows after replacement.
+          if (fallbackTilesetUrl && fallbackTilePixelWidth && fallbackTilePixelHeight) {
+            await pool.query(
+              `
+                UPDATE game_tiles
+                SET tileset_url = $1, tile_pixel_width = $2, tile_pixel_height = $3, updated_at = NOW()
+                WHERE tileset_url IS NULL
+              `,
+              [fallbackTilesetUrl, fallbackTilePixelWidth, fallbackTilePixelHeight],
+            );
+          }
+          await pool.query('COMMIT');
+        } catch (error) {
+          await pool.query('ROLLBACK');
+          throw error;
+        }
 
         let fileResult: ReturnType<typeof saveTileDatabaseToProject> | null = null;
         try {
@@ -1904,32 +4759,23 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
           fileResult = null;
         }
 
-        await pool.query(
-          `
-            INSERT INTO tile_libraries (owner_user_id, saved_tiles, tileset_config, updated_at)
-            VALUES ($1, $2::jsonb, $3::jsonb, NOW())
-            ON CONFLICT (owner_user_id)
-            DO UPDATE SET saved_tiles = EXCLUDED.saved_tiles, tileset_config = EXCLUDED.tileset_config, updated_at = NOW()
-          `,
-          [auth.user.id, JSON.stringify(parsedTiles), JSON.stringify(tilesetConfig)],
-        );
-
         sendJson(res, 200, {
           ok: true,
-          customTilesFilePath: fileResult?.customTilesFilePath ?? 'database:tile_libraries',
+          customTilesFilePath: fileResult?.customTilesFilePath ?? 'database:game_tiles',
           customTileCodes: Object.keys(buildCustomTileDefinitions(parsedTiles)),
         });
         return;
       }
 
       if (url === '/api/admin/npc/list' && req.method === 'GET') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
+        await ensureGlobalCatalogBaseline();
         const result = await pool.query(
-          'SELECT sprite_library, character_library FROM npc_libraries WHERE owner_user_id = $1',
-          [auth.user.id],
+          'SELECT sprite_library, character_library FROM game_npc_libraries WHERE catalog_key = $1',
+          [GLOBAL_CATALOG_KEY],
         );
         sendJson(res, 200, {
           ok: true,
@@ -1940,42 +4786,44 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       }
 
       if (url === '/api/admin/npc/save' && req.method === 'POST') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
+        await ensureGlobalCatalogBaseline();
         const body = (await readJsonBody(req)) as SaveNpcLibraryRequestPayload;
         const spriteLibrary = Array.isArray(body.npcSpriteLibrary) ? body.npcSpriteLibrary : [];
         const characterLibrary = Array.isArray(body.npcCharacterLibrary) ? body.npcCharacterLibrary : [];
 
         await pool.query(
           `
-            INSERT INTO npc_libraries (owner_user_id, sprite_library, character_library, updated_at)
+            INSERT INTO game_npc_libraries (catalog_key, sprite_library, character_library, updated_at)
             VALUES ($1, $2::jsonb, $3::jsonb, NOW())
-            ON CONFLICT (owner_user_id)
+            ON CONFLICT (catalog_key)
             DO UPDATE SET sprite_library = EXCLUDED.sprite_library, character_library = EXCLUDED.character_library, updated_at = NOW()
           `,
-          [auth.user.id, JSON.stringify(spriteLibrary), JSON.stringify(characterLibrary)],
+          [GLOBAL_CATALOG_KEY, JSON.stringify(spriteLibrary), JSON.stringify(characterLibrary)],
         );
         sendJson(res, 200, { ok: true });
         return;
       }
 
       if (url === '/api/admin/player-sprite/get' && req.method === 'GET') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
+        await ensureGlobalCatalogBaseline();
         const result = await pool.query(
-          'SELECT sprite_config FROM player_sprite_configs WHERE owner_user_id = $1',
-          [auth.user.id],
+          'SELECT sprite_config FROM game_player_sprite_configs WHERE catalog_key = $1',
+          [GLOBAL_CATALOG_KEY],
         );
         sendJson(res, 200, { ok: true, playerSprite: sanitizeLoadedPlayerSpriteConfig(result.rows[0]?.sprite_config) });
         return;
       }
 
       if (url === '/api/admin/spritesheets/list' && req.method === 'GET') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth) {
           return;
         }
@@ -2004,52 +4852,256 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       }
 
       if (url === '/api/admin/player-sprite/save' && req.method === 'POST') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
+        await ensureGlobalCatalogBaseline();
         const rawBody = (await readJsonBody(req)) as SavePlayerSpriteRequestPayload;
         const result = savePlayerSpriteToProject(rawBody);
         await pool.query(
           `
-            INSERT INTO player_sprite_configs (owner_user_id, sprite_config, updated_at)
+            INSERT INTO game_player_sprite_configs (catalog_key, sprite_config, updated_at)
             VALUES ($1, $2::jsonb, NOW())
-            ON CONFLICT (owner_user_id)
+            ON CONFLICT (catalog_key)
             DO UPDATE SET sprite_config = EXCLUDED.sprite_config, updated_at = NOW()
           `,
-          [auth.user.id, JSON.stringify(result.spriteConfig)],
+          [GLOBAL_CATALOG_KEY, JSON.stringify(result.spriteConfig)],
         );
         sendJson(res, 200, { ok: true, filePath: result.filePath });
         return;
       }
 
       if (url === '/api/admin/critters/list' && req.method === 'GET') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
-        const result = await pool.query('SELECT critters FROM critter_libraries WHERE owner_user_id = $1', [auth.user.id]);
-        sendJson(res, 200, { ok: true, critters: result.rows[0]?.critters ?? [] });
+        await ensureGlobalCatalogBaseline();
+        const critters = await readGlobalCritterCatalog();
+        sendJson(res, 200, { ok: true, critters });
         return;
       }
 
       if (url === '/api/admin/critters/save' && req.method === 'POST') {
-        const auth = await requireAuth(req, res);
+        const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
           return;
         }
+        await ensureGlobalCatalogBaseline();
         const body = (await readJsonBody(req)) as { critters?: unknown };
-        const critters = Array.isArray(body.critters) ? body.critters : [];
-        await pool.query(
-          `
-            INSERT INTO critter_libraries (owner_user_id, critters, updated_at)
-            VALUES ($1, $2::jsonb, NOW())
-            ON CONFLICT (owner_user_id)
-            DO UPDATE SET critters = EXCLUDED.critters, updated_at = NOW()
-          `,
-          [auth.user.id, JSON.stringify(critters)],
-        );
+        const critters = parseCritterLibrary(body.critters, { strictUnique: true, strictUniqueNames: true });
+        await writeGlobalCritterCatalog(critters);
         sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (url === '/api/admin/encounters/list' && req.method === 'GET') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+
+        let encounterTables = await readGlobalEncounterCatalog();
+        const critters = await readGlobalCritterCatalog();
+
+        if (encounterTables.length === 0 && critters.length > 0) {
+          encounterTables = createStarterEncounterTables(critters);
+          await writeGlobalEncounterCatalog(encounterTables);
+        }
+
+        sendJson(res, 200, { ok: true, encounterTables });
+        return;
+      }
+
+      if (url === '/api/admin/encounters/save' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+
+        const body = (await readJsonBody(req)) as SaveEncounterLibraryRequestPayload;
+        const encounterTables = parseEncounterLibrary(body.encounterTables, {
+          strictUnique: true,
+          strictEntries: true,
+          strictWeights: true,
+        });
+        await writeGlobalEncounterCatalog(encounterTables);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (url === '/api/admin/items/list' && req.method === 'GET') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const items = await readGlobalItemCatalog();
+        sendJson(res, 200, { ok: true, items });
+        return;
+      }
+
+      if (url === '/api/admin/items/save' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const body = (await readJsonBody(req)) as SaveItemsRequestPayload;
+        const items = parseItemCatalog(body.items, { strictUnique: true });
+        await writeGlobalItemCatalog(items);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (url === '/api/admin/shops/list' && req.method === 'GET') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const shops = await readGlobalShopCatalog();
+        sendJson(res, 200, { ok: true, shops });
+        return;
+      }
+
+      if (url === '/api/admin/shops/save' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const body = (await readJsonBody(req)) as SaveShopsRequestPayload;
+        const shops = parseShopCatalog(body.shops, { strictUnique: true, strictEntryUnique: true });
+        await writeGlobalShopCatalog(shops);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (url === '/api/admin/skills/list' && req.method === 'GET') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const [critterSkills, skillEffects] = await Promise.all([readGlobalSkillCatalog(), readGlobalSkillEffectsCatalog()]);
+        sendJson(res, 200, { ok: true, critterSkills, skillEffects });
+        return;
+      }
+
+      if (url === '/api/admin/skills/save' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const body = (await readJsonBody(req)) as SaveSkillsRequestPayload;
+        const raw = Array.isArray(body.critterSkills) ? body.critterSkills : [];
+        const skills = raw.filter((s): s is Record<string, unknown> => s != null && typeof s === 'object');
+        await writeGlobalSkillCatalog(skills);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (url === '/api/admin/skill-effects/list' && req.method === 'GET') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const skillEffects = await readGlobalSkillEffectsCatalog();
+        sendJson(res, 200, { ok: true, skillEffects });
+        return;
+      }
+
+      if (url === '/api/admin/skill-effects/save' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const body = (await readJsonBody(req)) as SaveSkillEffectsRequestPayload;
+        const raw = Array.isArray(body.skillEffects) ? body.skillEffects : [];
+        const effects = raw.filter((e): e is Record<string, unknown> => e != null && typeof e === 'object');
+        await writeGlobalSkillEffectsCatalog(effects);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (url === '/api/admin/equipment-effects/list' && req.method === 'GET') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const equipmentEffects = await readGlobalEquipmentEffectsCatalog();
+        sendJson(res, 200, { ok: true, equipmentEffects });
+        return;
+      }
+
+      if (url === '/api/admin/equipment-effects/save' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const body = (await readJsonBody(req)) as SaveEquipmentEffectsRequestPayload;
+        const raw = Array.isArray(body.equipmentEffects) ? body.equipmentEffects : [];
+        const effects = raw.filter((entry): entry is Record<string, unknown> => entry != null && typeof entry === 'object');
+        await writeGlobalEquipmentEffectsCatalog(effects);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (url === '/api/admin/element-chart/get' && req.method === 'GET') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const elementChart = await readElementChart();
+        sendJson(res, 200, { ok: true, elementChart });
+        return;
+      }
+
+      if (url === '/api/admin/element-chart/save' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const body = (await readJsonBody(req)) as SaveElementChartRequestPayload;
+        const raw = Array.isArray(body.elementChart) ? body.elementChart : [];
+        const elementChart = raw.filter((e): e is Record<string, unknown> => e != null && typeof e === 'object');
+        await writeElementChart(elementChart);
+        sendJson(res, 200, { ok: true, elementChart });
+        return;
+      }
+
+      if (url === '/api/admin/flags/list' && req.method === 'GET') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const flags = await readFlagCatalog();
+        sendJson(res, 200, { ok: true, flags });
+        return;
+      }
+
+      if (url === '/api/admin/flags/save' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const body = (await readJsonBody(req)) as SaveFlagsRequestPayload;
+        const flags = parseFlagCatalogPayload(body.flags);
+        await writeFlagCatalog(flags);
+        sendJson(res, 200, { ok: true, flags: await readFlagCatalog() });
         return;
       }
 
