@@ -24,7 +24,7 @@ import {
   type CritterLevelMissionRequirement,
   type PlayerCritterProgress,
 } from '@/game/critters/types';
-import { areEquippedSkillSlotsEqual, equipSkillInUniqueSlot } from '@/game/critters/equippedSkills';
+import { areEquippedSkillSlotsEqual, autoEquipSkillsInOpenSlots, equipSkillInUniqueSlot } from '@/game/critters/equippedSkills';
 import {
   canEquipAtSlot,
   removeEquipmentAtSlot,
@@ -34,6 +34,7 @@ import {
 } from '@/game/critters/equipmentSlots';
 import { sanitizeEncounterTableLibrary } from '@/game/encounters/schema';
 import type {
+  EncounterCritterDropDefinition,
   EncounterTableCritterEntry,
   EncounterTableDefinition,
   EncounterTableEntry,
@@ -67,7 +68,7 @@ import type {
   WorldMap,
 } from '@/game/world/types';
 import { readStoredWorldContent } from '@/game/content/worldContentStore';
-import type { SkillDefinition, SkillEffectDefinition, ElementChart } from '@/game/skills/types';
+import type { ElementChart, SkillDefinition, SkillEffectDefinition, SkillHealMode } from '@/game/skills/types';
 import { DEFAULT_TACKLE_SKILL } from '@/game/skills/types';
 import {
   buildDefaultElementChart,
@@ -252,6 +253,7 @@ interface BattleSourceState {
   label: string;
   groupId?: string;
   npcId?: string;
+  wildEncounterDrops?: EncounterCritterDropDefinition[];
 }
 
 interface PendingNpcInteractBattleDefeat {
@@ -388,9 +390,10 @@ export interface RuntimeBattleSnapshot {
     skillId: string;
     name: string;
     element: string;
-    type: string;
+    type: SkillDefinition['type'];
     damage?: number;
-    healPercent?: number;
+    healMode?: SkillHealMode;
+    healValue?: number;
     effectDescriptions?: string;
     effectIconUrls?: string[];
   } | null>;
@@ -480,6 +483,33 @@ export interface RuntimeSnapshot {
     totalCount: number;
     unlockedSquadSlots: number;
     maxSquadSlots: number;
+    recentTrackedMissions: Array<{
+      id: string;
+      critterId: number;
+      critterName: string;
+      level: number;
+      type: string;
+      targetValue: number;
+      currentValue: number;
+      completed: boolean;
+      updatedAt: string;
+      ascendsFromCritterId?: number;
+      ascendsFromCritterName?: string;
+      knockoutElements?: string[];
+      knockoutCritterIds?: number[];
+      knockoutCritterNames?: string[];
+      requiredEquippedItemCount?: number;
+      requiredEquippedItemIds?: string[];
+      requiredEquippedItemNames?: string[];
+      requiredPaymentItemId?: string;
+      requiredPaymentItemName?: string;
+      requiredPaymentOwnedQuantity?: number;
+      requiredPaymentAffordable?: boolean;
+      requiredHealingItemIds?: string[];
+      requiredHealingItemNames?: string[];
+      storyFlagId?: string;
+      label?: string;
+    }>;
     lockedKnockoutTracker: {
       selectedCritterId: number | null;
       selectedCritterName: string | null;
@@ -496,6 +526,10 @@ export interface RuntimeSnapshot {
         requiredEquippedItemCount?: number;
         requiredEquippedItemIds?: string[];
         requiredEquippedItemNames?: string[];
+        requiredPaymentItemId?: string;
+        requiredPaymentItemName?: string;
+        requiredPaymentOwnedQuantity?: number;
+        requiredPaymentAffordable?: boolean;
         requiredHealingItemIds?: string[];
         requiredHealingItemNames?: string[];
       }>;
@@ -571,9 +605,10 @@ export interface RuntimeSnapshot {
         skillId: string;
         name: string;
         element: string;
-        type: string;
+        type: SkillDefinition['type'];
         damage?: number;
-        healPercent?: number;
+        healMode?: SkillHealMode;
+        healValue?: number;
         effectDescriptions?: string;
         effectIconUrls?: string[];
       } | null>;
@@ -598,6 +633,10 @@ export interface RuntimeSnapshot {
           requiredEquippedItemCount?: number;
           requiredEquippedItemIds?: string[];
           requiredEquippedItemNames?: string[];
+          requiredPaymentItemId?: string;
+          requiredPaymentItemName?: string;
+          requiredPaymentOwnedQuantity?: number;
+          requiredPaymentAffordable?: boolean;
           requiredHealingItemIds?: string[];
           requiredHealingItemNames?: string[];
           storyFlagId?: string;
@@ -624,6 +663,10 @@ export interface RuntimeSnapshot {
           requiredEquippedItemCount?: number;
           requiredEquippedItemIds?: string[];
           requiredEquippedItemNames?: string[];
+          requiredPaymentItemId?: string;
+          requiredPaymentItemName?: string;
+          requiredPaymentOwnedQuantity?: number;
+          requiredPaymentAffordable?: boolean;
           requiredHealingItemIds?: string[];
           requiredHealingItemNames?: string[];
           storyFlagId?: string;
@@ -1799,10 +1842,8 @@ export class GameRuntime {
     progress.currentHp = nextMaxHp;
     progress.unlockedAbilityIds = derived.unlockedAbilityIds;
     const newSkillIds = levelRow.skillUnlockIds ?? [];
-    const hasNoEquippedSkills = progress.equippedSkillIds.every((id) => id === null);
-    if (hasNoEquippedSkills && newSkillIds.length > 0) {
-      const next = [...progress.equippedSkillIds] as typeof progress.equippedSkillIds;
-      next[0] = newSkillIds[0];
+    if (newSkillIds.length > 0) {
+      const next = autoEquipSkillsInOpenSlots(progress.equippedSkillIds, newSkillIds);
       progress.equippedSkillIds = next;
     }
     const autoAssignedToSquad = currentLevel === 0 && this.tryAutoAssignFirstUnlockedCritter(critter.id);
@@ -1826,6 +1867,73 @@ export class GameRuntime {
       this.markProgressDirty();
     }
 
+    return true;
+  }
+
+  public payCritterMission(critterId: number, missionId: string): boolean {
+    const safeMissionId = missionId.trim();
+    if (!safeMissionId) {
+      return false;
+    }
+
+    const critter = this.critterLookup[critterId];
+    if (!critter) {
+      return false;
+    }
+    const progress = this.playerCritterProgress.collection.find((entry) => entry.critterId === critterId);
+    if (!progress) {
+      return false;
+    }
+
+    const currentLevel = progress.unlocked ? Math.max(1, progress.level) : 0;
+    const targetLevel = currentLevel + 1;
+    const levelRow = critter.levels.find((entry) => entry.level === targetLevel);
+    if (!levelRow) {
+      return false;
+    }
+    if (this.hasPendingStoryFlagMission(levelRow.missions, levelRow.level, progress.missionProgress)) {
+      this.showMessage('Finish the required story mission first.', 2200);
+      return false;
+    }
+
+    const mission = levelRow.missions.find((entry) => entry.id === safeMissionId);
+    if (!mission || mission.type !== 'pay_item') {
+      return false;
+    }
+
+    const key = missionProgressKey(levelRow.level, mission.id);
+    if ((progress.missionProgress[key] ?? 0) >= mission.targetValue) {
+      return false;
+    }
+
+    const paymentItemId = mission.requiredPaymentItemId?.trim() ?? '';
+    if (!paymentItemId) {
+      this.showMessage('This mission is missing a payment item.', 2200);
+      return false;
+    }
+    const paymentItem = this.itemById[paymentItemId];
+    if (!paymentItem || !paymentItem.isActive || paymentItem.category === 'tool') {
+      this.showMessage('This mission requires an unavailable payment item.', 2200);
+      return false;
+    }
+
+    const paymentAmount = Math.max(1, Math.floor(mission.targetValue));
+    const ownedQuantity = getItemInventoryQuantity(this.playerItemInventory, paymentItem.id);
+    if (ownedQuantity < paymentAmount) {
+      this.showMessage(`Need ${paymentAmount}x ${paymentItem.name}.`, 2200);
+      return false;
+    }
+
+    this.playerItemInventory = setItemInventoryQuantity(
+      this.playerItemInventory,
+      this.itemDatabase,
+      paymentItem.id,
+      ownedQuantity - paymentAmount,
+    );
+    progress.missionProgress[key] = paymentAmount;
+    progress.lastProgressAt = new Date().toISOString();
+    this.markProgressDirty();
+    this.showMessage(`Paid ${paymentAmount}x ${paymentItem.name} for ${critter.name}.`, 2200);
     return true;
   }
 
@@ -4700,6 +4808,33 @@ export class GameRuntime {
     return lines;
   }
 
+  private resolveWildEncounterDropRewards(
+    drops: EncounterCritterDropDefinition[],
+  ): NpcItemRewardDefinition[] {
+    const merged = new Map<string, number>();
+    for (const drop of drops) {
+      const item = this.itemById[drop.itemId];
+      if (!item || !item.isActive) {
+        continue;
+      }
+      const dropChance = clamp(drop.dropChance, 0, 1);
+      if (dropChance <= 0 || Math.random() >= dropChance) {
+        continue;
+      }
+      const minAmount = clamp(Math.floor(drop.minAmount), 1, 9999);
+      const maxAmount = clamp(Math.floor(drop.maxAmount), 1, 9999);
+      const quantity = randomInt(Math.min(minAmount, maxAmount), Math.max(minAmount, maxAmount));
+      if (quantity <= 0) {
+        continue;
+      }
+      merged.set(item.id, (merged.get(item.id) ?? 0) + quantity);
+    }
+    return [...merged.entries()].map(([itemId, quantity]) => ({
+      itemId,
+      quantity,
+    }));
+  }
+
   private startWildBattle(
     mapId: string,
     groupId: string,
@@ -4731,6 +4866,7 @@ export class GameRuntime {
         mapId,
         groupId,
         label: `Wild ${critter.name}`,
+        wildEncounterDrops: encounterEntry?.drops?.map((drop) => ({ ...drop })) ?? [],
       },
       playerTeam,
       [opponent],
@@ -5209,9 +5345,7 @@ export class GameRuntime {
     const defenderActiveIndex = attackingTeam === 'player' ? battle.opponentActiveIndex : battle.playerActiveIndex;
 
     if (skill.type === 'support') {
-      const healPercent = (skill.healPercent ?? 0) + (skill.element === attacker.element && (skill.healPercent ?? 0) > 0 ? 0.03 : 0);
-      const healAmount = Math.floor(attacker.maxHp * healPercent);
-      const actualHeal = Math.min(healAmount, Math.max(0, attacker.maxHp - attacker.currentHp));
+      const actualHeal = resolveSkillHealAmount(skill, attacker);
       if (actualHeal > 0) {
         attacker.currentHp = Math.min(attacker.maxHp, attacker.currentHp + actualHeal);
       }
@@ -5253,6 +5387,11 @@ export class GameRuntime {
       1,
       Math.floor(baseForCrit * typeMult * stab * critMult * guardMult * variance),
     );
+    const damageDealt = Math.min(damage, Math.max(0, defender.currentHp));
+    const actualHeal = resolveSkillHealAmount(skill, attacker, damageDealt);
+    if (actualHeal > 0) {
+      attacker.currentHp = Math.min(attacker.maxHp, attacker.currentHp + actualHeal);
+    }
 
     this.applySkillEffectsToAttacker(attacker, skill);
 
@@ -5281,6 +5420,9 @@ export class GameRuntime {
       skill.skill_name,
     );
     let message = `${attackPrefix} dealt ${damage} damage.${critSuffix}${typeEffectSuffix}${guardSuffix}`.trim();
+    if (actualHeal > 0) {
+      message = `${message} ${attacker.name} restored ${actualHeal} HP.`.trim();
+    }
     if (defender.fainted) {
       const knockoutSuffix = this.buildKnockoutMessage(battle, applyDamageDefender, defenderActiveIndex ?? -1);
       message = `${message} ${knockoutSuffix}`.trim();
@@ -5597,6 +5739,18 @@ export class GameRuntime {
       this.markProgressDirty();
       this.handleJacobBattleComplete();
     }
+    if (result === 'won' && battle.source.type === 'wild') {
+      const rewards = this.resolveWildEncounterDropRewards(battle.source.wildEncounterDrops ?? []);
+      if (rewards.length > 0) {
+        this.pendingBattleRewardDialogue = {
+          speaker: 'Battle',
+          lines: this.buildRewardDialogueLines(rewards, {
+            intro: 'The wild critter dropped some items.',
+          }),
+          rewards,
+        };
+      }
+    }
     if (this.syncPlayerBattleHealthToProgress(battle)) {
       this.markProgressDirty();
     }
@@ -5665,7 +5819,8 @@ export class GameRuntime {
         element: skill.element,
         type: skill.type,
         ...(skill.type === 'damage' && skill.damage != null && { damage: skill.damage }),
-        ...(skill.type === 'support' && skill.healPercent != null && { healPercent: skill.healPercent }),
+        ...(skill.healMode && { healMode: skill.healMode }),
+        ...(typeof skill.healValue === 'number' && { healValue: skill.healValue }),
         ...(effectDescriptions && { effectDescriptions }),
         ...(effectIconUrls.length > 0 && { effectIconUrls }),
       };
@@ -6867,6 +7022,10 @@ export class GameRuntime {
     }
   }
 
+  private makeTrackedCritterMissionId(critterId: number, level: number, missionId: string): string {
+    return `critter-${critterId}-level-${level}-mission-${missionId}`;
+  }
+
   private syncKnockoutChallengeProgress(
     critterId: number,
     level: number,
@@ -6874,7 +7033,7 @@ export class GameRuntime {
     currentValue: number,
     updatedAt: string,
   ): boolean {
-    const missionId = `critter-${critterId}-level-${level}-mission-${mission.id}`;
+    const missionId = this.makeTrackedCritterMissionId(critterId, level, mission.id);
     const target = Math.max(1, mission.targetValue);
     const progressValue = Math.max(0, Math.min(target, currentValue));
     const completed = progressValue >= target;
@@ -7040,7 +7199,8 @@ export class GameRuntime {
         element: skill.element,
         type: skill.type,
         ...(skill.type === 'damage' && skill.damage != null && { damage: skill.damage }),
-        ...(skill.type === 'support' && skill.healPercent != null && { healPercent: skill.healPercent }),
+        ...(skill.healMode && { healMode: skill.healMode }),
+        ...(typeof skill.healValue === 'number' && { healValue: skill.healValue }),
         ...(effectDescriptions && { effectDescriptions }),
         ...(effectIconUrls.length > 0 && { effectIconUrls }),
       };
@@ -7262,6 +7422,16 @@ export class GameRuntime {
           const requiredEquippedItemNames = requiredEquippedItemIds.map(
             (itemId) => this.itemById[itemId]?.name ?? itemId,
           );
+          const requiredPaymentItemId =
+            mission.type === 'pay_item' && typeof mission.requiredPaymentItemId === 'string'
+              ? mission.requiredPaymentItemId
+              : undefined;
+          const requiredPaymentItemName = requiredPaymentItemId
+            ? this.itemById[requiredPaymentItemId]?.name ?? requiredPaymentItemId
+            : undefined;
+          const requiredPaymentOwnedQuantity = requiredPaymentItemId
+            ? getItemInventoryQuantity(this.playerItemInventory, requiredPaymentItemId)
+            : undefined;
           const requiredHealingItemIds =
             mission.type === 'heal_critter' && Array.isArray(mission.requiredHealingItemIds)
               ? mission.requiredHealingItemIds
@@ -7284,6 +7454,13 @@ export class GameRuntime {
               mission.type === 'opposing_knockouts_with_item' ? this.getRequiredEquippedItemCount(mission) : undefined,
             requiredEquippedItemIds,
             requiredEquippedItemNames,
+            requiredPaymentItemId,
+            requiredPaymentItemName,
+            requiredPaymentOwnedQuantity,
+            requiredPaymentAffordable:
+              typeof requiredPaymentOwnedQuantity === 'number'
+                ? requiredPaymentOwnedQuantity >= mission.targetValue
+                : undefined,
             requiredHealingItemIds,
             requiredHealingItemNames,
             storyFlagId: mission.storyFlagId,
@@ -7383,6 +7560,84 @@ export class GameRuntime {
       selectedLockedKnockoutTargetEntry?.activeRequirement?.missions
         .filter((mission) => isKnockoutMissionType(mission.type))
         .map((mission) => ({ ...mission })) ?? [];
+    const excludedTrackedMissionIds = new Set<string>(
+      selectedLockedKnockoutTargetEntry?.activeRequirement?.missions
+        .filter((mission) => isKnockoutMissionType(mission.type))
+        .map((mission) =>
+          this.makeTrackedCritterMissionId(
+            selectedLockedKnockoutTargetEntry.critterId,
+            selectedLockedKnockoutTargetEntry.activeRequirement?.level ?? 1,
+            mission.id,
+          ),
+        ) ?? [],
+    );
+    const recentTrackedMissions = collection
+      .flatMap((entry) => {
+        const activeRequirement = entry.activeRequirement;
+        if (!entry.unlocked || !activeRequirement) {
+          return [];
+        }
+        return activeRequirement.missions.flatMap((mission) => {
+          const trackedMissionId = this.makeTrackedCritterMissionId(entry.critterId, activeRequirement.level, mission.id);
+          if (excludedTrackedMissionIds.has(trackedMissionId)) {
+            return [];
+          }
+          const tracked = this.sideStoryMissions[trackedMissionId];
+          if (!tracked) {
+            return [];
+          }
+          const targetValue = Math.max(1, mission.targetValue);
+          const currentValue = Math.max(0, Math.min(targetValue, tracked.progress));
+          if (currentValue >= targetValue) {
+            return [];
+          }
+          return [
+            {
+              id: trackedMissionId,
+              critterId: entry.critterId,
+              critterName: entry.name,
+              level: activeRequirement.level,
+              type: mission.type,
+              targetValue,
+              currentValue,
+              completed: false,
+              updatedAt: tracked.updatedAt,
+              ascendsFromCritterId: mission.ascendsFromCritterId,
+              ascendsFromCritterName: mission.ascendsFromCritterName,
+              knockoutElements: mission.knockoutElements ? [...mission.knockoutElements] : undefined,
+              knockoutCritterIds: mission.knockoutCritterIds ? [...mission.knockoutCritterIds] : undefined,
+              knockoutCritterNames: mission.knockoutCritterNames ? [...mission.knockoutCritterNames] : undefined,
+              requiredEquippedItemCount: mission.requiredEquippedItemCount,
+              requiredEquippedItemIds: mission.requiredEquippedItemIds ? [...mission.requiredEquippedItemIds] : undefined,
+              requiredEquippedItemNames: mission.requiredEquippedItemNames
+                ? [...mission.requiredEquippedItemNames]
+                : undefined,
+              requiredPaymentItemId: mission.requiredPaymentItemId,
+              requiredPaymentItemName: mission.requiredPaymentItemName,
+              requiredPaymentOwnedQuantity: mission.requiredPaymentOwnedQuantity,
+              requiredPaymentAffordable: mission.requiredPaymentAffordable,
+              requiredHealingItemIds: mission.requiredHealingItemIds ? [...mission.requiredHealingItemIds] : undefined,
+              requiredHealingItemNames: mission.requiredHealingItemNames
+                ? [...mission.requiredHealingItemNames]
+                : undefined,
+              storyFlagId: mission.storyFlagId,
+              label: mission.label,
+            },
+          ];
+        });
+      })
+      .sort((left, right) => {
+        const leftTime = Date.parse(left.updatedAt);
+        const rightTime = Date.parse(right.updatedAt);
+        if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+          return rightTime - leftTime;
+        }
+        if (left.currentValue !== right.currentValue) {
+          return right.currentValue - left.currentValue;
+        }
+        return left.id.localeCompare(right.id);
+      })
+      .slice(0, 3);
 
     const squadSlots = this.playerCritterProgress.squad.map((critterId, index) => {
       const unlocked = index < this.playerCritterProgress.unlockedSquadSlots;
@@ -7427,6 +7682,7 @@ export class GameRuntime {
       totalCount: this.critterDatabase.length,
       unlockedSquadSlots: this.playerCritterProgress.unlockedSquadSlots,
       maxSquadSlots: MAX_SQUAD_SLOTS,
+      recentTrackedMissions,
       lockedKnockoutTracker: {
         selectedCritterId: selectedLockedKnockoutTargetEntry?.critterId ?? null,
         selectedCritterName: selectedLockedKnockoutTargetEntry?.name ?? null,
@@ -8908,6 +9164,38 @@ function lerp(start: number, end: number, t: number): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function resolveSkillHealAmount(
+  skill: Pick<SkillDefinition, 'element' | 'healMode' | 'healValue'>,
+  attacker: Pick<BattleCritterState, 'currentHp' | 'element' | 'maxHp'>,
+  damageDealt = 0,
+): number {
+  if (
+    !skill.healMode ||
+    skill.healMode === 'none' ||
+    typeof skill.healValue !== 'number' ||
+    !Number.isFinite(skill.healValue)
+  ) {
+    return 0;
+  }
+  const missingHp = Math.max(0, attacker.maxHp - attacker.currentHp);
+  if (missingHp <= 0) {
+    return 0;
+  }
+
+  let requestedHeal = 0;
+  if (skill.healMode === 'flat') {
+    requestedHeal = Math.max(0, Math.floor(skill.healValue));
+  } else if (skill.healMode === 'percent_max_hp') {
+    const normalizedPercent = Math.max(0, skill.healValue);
+    const sameElementBonus = skill.element === attacker.element && normalizedPercent > 0 ? 0.03 : 0;
+    requestedHeal = Math.floor(attacker.maxHp * (normalizedPercent + sameElementBonus));
+  } else if (skill.healMode === 'percent_damage') {
+    requestedHeal = Math.floor(Math.max(0, damageDealt) * clamp(skill.healValue, 0, 1));
+  }
+
+  return Math.min(missingHp, Math.max(0, requestedHeal));
 }
 
 function sanitizeTileTransformValue(value: number): number {

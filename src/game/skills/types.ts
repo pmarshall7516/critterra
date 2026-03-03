@@ -6,6 +6,14 @@ export type SkillEffectType = (typeof SKILL_EFFECT_TYPES)[number];
 export const SKILL_TYPES = ['damage', 'support'] as const;
 export type SkillType = (typeof SKILL_TYPES)[number];
 
+export const DAMAGE_SKILL_HEAL_MODES = ['none', 'flat', 'percent_max_hp', 'percent_damage'] as const;
+export type DamageSkillHealMode = (typeof DAMAGE_SKILL_HEAL_MODES)[number];
+
+export const SUPPORT_SKILL_HEAL_MODES = ['flat', 'percent_max_hp'] as const;
+export type SupportSkillHealMode = (typeof SUPPORT_SKILL_HEAL_MODES)[number];
+
+export type SkillHealMode = DamageSkillHealMode;
+
 export interface SkillEffectDefinition {
   effect_id: string;
   effect_name: string;
@@ -23,10 +31,53 @@ export interface SkillDefinition {
   type: SkillType;
   /** Present when type === 'damage'. Integer power (e.g. 10, 20, 40). */
   damage?: number;
-  /** Present when type === 'support'. 0–1, fraction of user's max HP healed. */
-  healPercent?: number;
+  /** Optional heal behavior. Damage skills may omit this when no healing is attached. */
+  healMode?: SkillHealMode;
+  /** Flat HP for `flat`, otherwise 0–1 for percentage-based modes. */
+  healValue?: number;
   /** Optional effect IDs from skill-effects table. */
   effectIds?: string[];
+}
+
+export function getSkillHealDisplayNumber(
+  healMode: SkillHealMode | undefined,
+  healValue: number | undefined,
+): number | null {
+  if (!healMode || healMode === 'none' || typeof healValue !== 'number' || !Number.isFinite(healValue)) {
+    return null;
+  }
+  if (healMode === 'flat') {
+    return Math.max(0, Math.floor(healValue));
+  }
+  return Math.max(0, Math.round(healValue * 100));
+}
+
+export function describeSkillHealForTooltip(
+  healMode: SkillHealMode | undefined,
+  healValue: number | undefined,
+): string | null {
+  const displayValue = getSkillHealDisplayNumber(healMode, healValue);
+  if (displayValue == null || !healMode || healMode === 'none') {
+    return null;
+  }
+  if (healMode === 'flat') {
+    return `${displayValue} HP`;
+  }
+  if (healMode === 'percent_damage') {
+    return `${displayValue}% of damage dealt`;
+  }
+  return `${displayValue}% max HP`;
+}
+
+export function getSkillValueDisplayNumber(
+  skill: Pick<SkillDefinition, 'type' | 'damage' | 'healMode' | 'healValue'>,
+): number | null {
+  if (skill.type === 'damage') {
+    return typeof skill.damage === 'number' && Number.isFinite(skill.damage)
+      ? Math.max(1, Math.floor(skill.damage))
+      : null;
+  }
+  return getSkillHealDisplayNumber(skill.healMode, skill.healValue);
 }
 
 export interface ElementChartEntry {

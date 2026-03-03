@@ -10,6 +10,7 @@ export type CritterAbilityKind = (typeof CRITTER_ABILITY_KINDS)[number];
 export const CRITTER_MISSION_TYPES = [
   'opposing_knockouts',
   'opposing_knockouts_with_item',
+  'pay_item',
   'use_guard',
   'swap_in',
   'heal_critter',
@@ -53,6 +54,7 @@ export interface CritterLevelMissionRequirement {
   knockoutCritterIds?: number[];
   requiredEquippedItemCount?: number;
   requiredEquippedItemIds?: string[];
+  requiredPaymentItemId?: string;
   requiredHealingItemIds?: string[];
   storyFlagId?: string;
   label?: string;

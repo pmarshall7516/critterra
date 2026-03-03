@@ -314,6 +314,7 @@ export function SkillEffectsTool() {
               </button>
             </div>
             <label>
+              Search Icons
               <input
                 type="text"
                 placeholder="Search by name or path"
@@ -332,7 +333,7 @@ export function SkillEffectsTool() {
                 </button>
               </div>
             ) : null}
-            <div className="spritesheet-browser" style={{ maxHeight: 200, overflowY: 'auto', marginTop: '0.35rem' }}>
+            <div className="spritesheet-browser">
               {filteredIconEntries.map((entry) => (
                 <div
                   key={entry.path}

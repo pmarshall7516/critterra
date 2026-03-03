@@ -1485,6 +1485,10 @@ button.secondary:hover:not(:disabled) {
   padding-right: 0.22rem;
 }
 
+.collection-grid.squad-grid > .collection-card {
+  min-height: var(--squad-uniform-card-height, clamp(30rem, 72cqw, 42rem));
+}
+
 .squad-picker-modal {
   position: absolute;
   inset: 0;
@@ -2304,12 +2308,21 @@ button.secondary:hover:not(:disabled) {
 .collection-card__tracker-actions {
   margin-top: 0.3rem;
   display: flex;
+  flex-wrap: wrap;
   gap: 0.25rem;
 }
 
 .collection-card__tracker-actions button {
   font-size: 0.58rem;
   padding: 0.16rem 0.35rem;
+  border-radius: 999px;
+}
+
+.collection-card__mission-action {
+  flex-shrink: 0;
+  font-size: 0.56rem;
+  line-height: 1.05;
+  padding: 0.14rem 0.32rem;
   border-radius: 999px;
 }
 
@@ -2328,6 +2341,12 @@ button.secondary:hover:not(:disabled) {
   font-size: clamp(0.65rem, 3.35cqw, 0.86rem);
   line-height: 1.08;
   padding: clamp(0.04rem, 0.2cqw, 0.09rem) clamp(0.12rem, 0.55cqw, 0.2rem);
+}
+
+.collection-grid .collection-card__mission-action {
+  font-size: clamp(0.62rem, 3.1cqw, 0.8rem);
+  line-height: 1.08;
+  padding: clamp(0.03rem, 0.16cqw, 0.08rem) clamp(0.1rem, 0.45cqw, 0.18rem);
 }
 
 .collection-card__abilities li span:first-child,
@@ -3783,6 +3802,78 @@ button.secondary:hover:not(:disabled) {
   border-radius: 7px;
 }
 
+.encounter-entry-card__drops {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 0.35rem;
+  padding-top: 0.18rem;
+  border-top: 1px solid rgba(101, 192, 255, 0.18);
+}
+
+.encounter-entry-card__drops-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.encounter-entry-card__drops-title {
+  margin: 0;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: #d9edff;
+}
+
+.encounter-entry-card__drops-note {
+  margin: 0.1rem 0 0;
+}
+
+.encounter-entry-card__drop-add {
+  width: auto !important;
+  min-width: 0;
+  padding: 0.3rem 0.46rem;
+  font-size: 0.7rem;
+  border-radius: 7px;
+}
+
+.encounter-drop-list {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.encounter-drop-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2.3fr) repeat(3, minmax(0, 1fr)) auto;
+  gap: 0.3rem;
+  align-items: end;
+  padding: 0.35rem;
+  border-radius: 7px;
+  background: rgba(7, 15, 29, 0.4);
+  border: 1px solid rgba(101, 192, 255, 0.14);
+}
+
+.encounter-drop-row label {
+  font-size: 0.68rem;
+  color: #a9c7e3;
+  gap: 0.16rem;
+}
+
+.encounter-drop-row input,
+.encounter-drop-row select {
+  margin: 0;
+  padding: 0.28rem 0.35rem;
+  font-size: 0.72rem;
+  border-radius: 6px;
+}
+
+.encounter-drop-row__remove {
+  width: auto !important;
+  min-width: 0;
+  padding: 0.28rem 0.46rem;
+  font-size: 0.68rem;
+  border-radius: 7px;
+}
+
 .encounter-search-field {
   margin-top: 0.5rem;
 }
@@ -3934,6 +4025,11 @@ button.secondary:hover:not(:disabled) {
   flex-direction: column;
   gap: 0.35rem;
   margin-top: 0.35rem;
+  max-height: min(40vh, 320px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 0.2rem;
+  scrollbar-gutter: stable;
 }
 
 .spritesheet-browser__row {
@@ -4409,6 +4505,23 @@ button.secondary:hover:not(:disabled) {
 
   .encounter-entry-card__remove {
     justify-self: stretch;
+  }
+
+  .encounter-entry-card__drops-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .encounter-entry-card__drop-add {
+    width: 100% !important;
+  }
+
+  .encounter-drop-row {
+    grid-template-columns: 1fr;
+  }
+
+  .encounter-drop-row__remove {
+    width: 100% !important;
   }
 
   .encounter-candidate-grid {

@@ -427,4 +427,77 @@ describe('GameRuntime mission action tracking', () => {
     expect(runtime.useBackpackItemOnSquadSlot('field-bandage', 0)).toBe(true);
     expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'heal-1')).toBe(0);
   });
+
+  it('surfaces the three most recently tracked active missions in the critter summary', () => {
+    const critters = [1, 2, 3, 4].map((id) =>
+      createCritter({
+        id,
+        name: `Tracker ${id}`,
+        levels: [
+          {
+            level: 1,
+            missions: [],
+            requiredMissionCount: 0,
+            unlockEquipSlots: 1,
+            statDelta: { ...EMPTY_STATS },
+            abilityUnlockIds: [],
+            skillUnlockIds: [],
+          },
+          {
+            level: 2,
+            missions: [{ id: 'ko-1', type: 'opposing_knockouts', targetValue: 5 }],
+            requiredMissionCount: 1,
+            unlockEquipSlots: 0,
+            statDelta: { ...EMPTY_STATS },
+            abilityUnlockIds: [],
+            skillUnlockIds: [],
+          },
+        ],
+      }),
+    );
+    const runtime = createRuntimeHarness({
+      critters,
+      collection: critters.map((critter) => createCollectionEntry(critter, { level: 1 })),
+    });
+    runtime.ensureLockedKnockoutTargetSelectionValid = vi.fn(() => false);
+    runtime.getEligibleLockedKnockoutTargetCritterIds = vi.fn(() => []);
+    runtime.resolveEquippedSkillSlotsForSnapshot = vi.fn(() => [null, null, null, null]);
+    runtime.getCompletedMissionCount = vi.fn(() => 0);
+    runtime.sideStoryMissions = {
+      'critter-1-level-2-mission-ko-1': {
+        progress: 1,
+        target: 5,
+        completed: false,
+        updatedAt: '2026-03-03T08:00:00.000Z',
+      },
+      'critter-2-level-2-mission-ko-1': {
+        progress: 2,
+        target: 5,
+        completed: false,
+        updatedAt: '2026-03-03T11:00:00.000Z',
+      },
+      'critter-3-level-2-mission-ko-1': {
+        progress: 3,
+        target: 5,
+        completed: false,
+        updatedAt: '2026-03-03T07:30:00.000Z',
+      },
+      'critter-4-level-2-mission-ko-1': {
+        progress: 4,
+        target: 5,
+        completed: false,
+        updatedAt: '2026-03-03T09:15:00.000Z',
+      },
+    };
+
+    const summary = runtime.getCritterSummary();
+
+    expect(summary.recentTrackedMissions).toHaveLength(3);
+    expect(summary.recentTrackedMissions.map((mission: any) => mission.critterId)).toEqual([2, 4, 1]);
+    expect(summary.recentTrackedMissions[0]).toMatchObject({
+      critterName: 'Tracker 2',
+      currentValue: 2,
+      targetValue: 5,
+    });
+  });
 });

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { sanitizeCritterDatabase, sanitizeCritterDefinition } from '@/game/critters/schema';
 import { sanitizeItemCatalog } from '@/game/items/schema';
+import { sanitizeSkillLibrary } from '@/game/skills/schema';
 import {
   CRITTER_ABILITY_KINDS,
   CRITTER_ELEMENTS,
@@ -11,6 +12,7 @@ import {
   type CritterMissionType,
 } from '@/game/critters/types';
 import type { GameItemDefinition } from '@/game/items/types';
+import { getSkillValueDisplayNumber, type SkillHealMode } from '@/game/skills/types';
 import { apiFetchJson } from '@/shared/apiClient';
 import { loadAdminFlags, type AdminFlagEntry } from '@/admin/flagsApi';
 
@@ -57,18 +59,14 @@ interface SkillOption {
   name: string;
   type: 'damage' | 'support';
   damage?: number;
-  healPercent?: number;
+  healMode?: SkillHealMode;
+  healValue?: number;
 }
 
 function formatSkillOptionLabel(opt: SkillOption): string {
   const letter = opt.type === 'damage' ? 'D' : 'S';
-  const value =
-    opt.type === 'damage'
-      ? opt.damage ?? '?'
-      : opt.healPercent != null
-        ? Math.round(opt.healPercent * 100)
-        : '?';
-  return `${opt.name} - ${letter} - ${value}`;
+  const value = getSkillValueDisplayNumber(opt);
+  return value != null ? `${opt.name} - ${letter} - ${value}` : `${opt.name} - ${letter}`;
 }
 
 interface MissionDraft {
@@ -83,6 +81,7 @@ interface MissionDraft {
   knockoutCritterIds: string[];
   requiredEquippedItemCount: string;
   requiredEquippedItemIds: string[];
+  requiredPaymentItemId: string;
   requiredHealingItemIds: string[];
 }
 
@@ -208,6 +207,21 @@ export function CritterTool() {
         }),
     [itemCatalog],
   );
+  const payMissionItemOptions = useMemo(
+    () =>
+      [...itemCatalog]
+        .filter((item) =>
+          item.category === 'material' ||
+          item.category === 'healing' ||
+          item.category === 'equipment' ||
+          item.category === 'other',
+        )
+        .sort((left, right) => {
+          const byName = left.name.localeCompare(right.name, undefined, { sensitivity: 'base' });
+          return byName !== 0 ? byName : left.id.localeCompare(right.id, undefined, { sensitivity: 'base' });
+        }),
+    [itemCatalog],
+  );
 
   const loadCritters = async () => {
     setIsLoading(true);
@@ -294,18 +308,14 @@ export function CritterTool() {
       if (!result.ok) {
         throw new Error(result.error ?? result.data?.error ?? 'Unable to load skills.');
       }
-      const rawSkills = result.data?.critterSkills;
-      const skills = Array.isArray(rawSkills) ? rawSkills : [];
-      const list: SkillOption[] = skills
-        .map((s: { skill_id?: string; skill_name?: string; type?: string; damage?: number; healPercent?: number }) => {
-          const id = typeof s?.skill_id === 'string' ? s.skill_id : '';
-          const name = typeof s?.skill_name === 'string' ? s.skill_name : String(s?.skill_id ?? '');
-          const type: 'damage' | 'support' = s?.type === 'support' ? 'support' : 'damage';
-          const damage = type === 'damage' && typeof s?.damage === 'number' ? s.damage : undefined;
-          const healPercent = type === 'support' && typeof s?.healPercent === 'number' ? s.healPercent : undefined;
-          return { id, name, type, damage, healPercent };
-        })
-        .filter((x) => x.id.length > 0);
+      const list: SkillOption[] = sanitizeSkillLibrary(result.data?.critterSkills).map((skill) => ({
+        id: skill.skill_id,
+        name: skill.skill_name,
+        type: skill.type,
+        damage: skill.damage,
+        healMode: skill.healMode,
+        healValue: skill.healValue,
+      }));
       setSkillList(list);
     } catch {
       setSkillList([]);
@@ -1077,6 +1087,7 @@ export function CritterTool() {
                             knockoutCritterIds: [],
                             requiredEquippedItemCount: '1',
                             requiredEquippedItemIds: [],
+                            requiredPaymentItemId: '',
                             requiredHealingItemIds: [],
                           },
                         ],
@@ -1137,6 +1148,8 @@ export function CritterTool() {
                                 nextType === 'opposing_knockouts_with_item' ? entry.requiredEquippedItemCount : '1',
                               requiredEquippedItemIds:
                                 nextType === 'opposing_knockouts_with_item' ? entry.requiredEquippedItemIds : [],
+                              requiredPaymentItemId:
+                                nextType === 'pay_item' ? entry.requiredPaymentItemId : '',
                               requiredHealingItemIds:
                                 nextType === 'heal_critter' ? entry.requiredHealingItemIds : [],
                             }));
@@ -1150,7 +1163,7 @@ export function CritterTool() {
                         </select>
                       </label>
                       <label>
-                        {mission.type === 'ascension' ? 'Level' : 'Amount'}
+                        {mission.type === 'ascension' ? 'Level' : mission.type === 'pay_item' ? 'Pay Amount' : 'Amount'}
                         <input
                           type="number"
                           min={1}
@@ -1201,6 +1214,28 @@ export function CritterTool() {
                               }))
                             }
                           />
+                        </label>
+                      )}
+
+                      {mission.type === 'pay_item' && (
+                        <label className="critter-mission-row__wide">
+                          Pay Item
+                          <select
+                            value={mission.requiredPaymentItemId}
+                            onChange={(event) =>
+                              updateMissionRow(levelIndex, missionIndex, (entry) => ({
+                                ...entry,
+                                requiredPaymentItemId: event.target.value,
+                              }))
+                            }
+                          >
+                            <option value="">Select item</option>
+                            {payMissionItemOptions.map((item) => (
+                              <option key={`mission-pay-item-${item.id}`} value={item.id}>
+                                {item.name} ({item.id})
+                              </option>
+                            ))}
+                          </select>
                         </label>
                       )}
 
@@ -1526,6 +1561,10 @@ function critterToDraft(critter: CritterDefinition): CritterDraft {
           mission.type === 'opposing_knockouts_with_item' && Array.isArray(mission.requiredEquippedItemIds)
             ? mission.requiredEquippedItemIds
             : [],
+        requiredPaymentItemId:
+          mission.type === 'pay_item' && typeof mission.requiredPaymentItemId === 'string'
+            ? mission.requiredPaymentItemId
+            : '',
         requiredHealingItemIds:
           mission.type === 'heal_critter' && Array.isArray(mission.requiredHealingItemIds)
             ? mission.requiredHealingItemIds
@@ -1585,6 +1624,7 @@ function draftToRaw(draft: CritterDraft): unknown {
         const requiredEquippedItemIds = mission.requiredEquippedItemIds.filter(
           (entry, index, values) => entry.trim().length > 0 && values.indexOf(entry) === index,
         );
+        const requiredPaymentItemId = mission.requiredPaymentItemId.trim();
         const requiredHealingItemIds = mission.requiredHealingItemIds.filter(
           (entry, index, values) => entry.trim().length > 0 && values.indexOf(entry) === index,
         );
@@ -1612,6 +1652,9 @@ function draftToRaw(draft: CritterDraft): unknown {
                 requiredEquippedItemCount,
                 ...(requiredEquippedItemIds.length > 0 ? { requiredEquippedItemIds } : {}),
               }
+            : {}),
+          ...(mission.type === 'pay_item' && requiredPaymentItemId
+            ? { requiredPaymentItemId }
             : {}),
           ...(mission.type === 'heal_critter' && requiredHealingItemIds.length > 0
             ? { requiredHealingItemIds }
@@ -1643,6 +1686,9 @@ function getMissionTypeLabel(missionType: CritterMissionType): string {
   if (missionType === 'opposing_knockouts_with_item') {
     return 'Knock-out with Item';
   }
+  if (missionType === 'pay_item') {
+    return 'Pay';
+  }
   if (missionType === 'use_guard') {
     return 'Use Guard';
   }
@@ -1667,6 +1713,9 @@ function toMissionTypeValue(value: string): CritterMissionType {
   }
   if (value === 'use_guard') {
     return 'use_guard';
+  }
+  if (value === 'pay_item') {
+    return 'pay_item';
   }
   if (value === 'swap_in') {
     return 'swap_in';
@@ -1730,6 +1779,17 @@ function validateDraftBeforeApply(
       )
       .map((entry) => entry.id),
   );
+  const knownPayItemIds = new Set<string>(
+    itemCatalog
+      .filter(
+        (entry) =>
+          entry.category === 'material' ||
+          entry.category === 'healing' ||
+          entry.category === 'equipment' ||
+          entry.category === 'other',
+      )
+      .map((entry) => entry.id),
+  );
   if (Number.isFinite(draftCritterId)) {
     knownCritterIds.add(draftCritterId);
   }
@@ -1779,6 +1839,15 @@ function validateDraftBeforeApply(
           if (!knownHealingItemIds.has(itemId)) {
             return `Level ${levelIndex + 1} mission ${missionIndex + 1} includes unknown healing item "${itemId}".`;
           }
+        }
+      }
+
+      if (mission.type === 'pay_item') {
+        if (!mission.requiredPaymentItemId.trim()) {
+          return `Level ${levelIndex + 1} mission ${missionIndex + 1} needs a Pay Item selection.`;
+        }
+        if (!knownPayItemIds.has(mission.requiredPaymentItemId)) {
+          return `Level ${levelIndex + 1} mission ${missionIndex + 1} includes unsupported pay item "${mission.requiredPaymentItemId}".`;
         }
       }
 

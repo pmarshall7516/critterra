@@ -24,6 +24,24 @@ export function equipSkillInUniqueSlot(
   return next;
 }
 
+export function autoEquipSkillsInOpenSlots(
+  equippedSkillIds: EquippedSkillSlots,
+  skillIds: string[],
+): EquippedSkillSlots {
+  let next = [...equippedSkillIds] as EquippedSkillSlots;
+  for (const skillId of skillIds) {
+    if (!skillId || next.includes(skillId)) {
+      continue;
+    }
+    const openSlotIndex = next.findIndex((id) => id === null);
+    if (openSlotIndex < 0) {
+      break;
+    }
+    next = equipSkillInUniqueSlot(next, openSlotIndex, skillId);
+  }
+  return next;
+}
+
 export function areEquippedSkillSlotsEqual(
   left: EquippedSkillSlots,
   right: EquippedSkillSlots,

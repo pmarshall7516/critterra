@@ -3,18 +3,28 @@ import {
   type CritterElement,
 } from '@/game/critters/types';
 import type {
+  DamageSkillHealMode,
   ElementChart,
   ElementChartEntry,
   SkillDefinition,
   SkillEffectDefinition,
   SkillEffectType,
+  SkillHealMode,
   SkillType,
+  SupportSkillHealMode,
 } from '@/game/skills/types';
-import { SKILL_EFFECT_TYPES, SKILL_TYPES } from '@/game/skills/types';
+import {
+  DAMAGE_SKILL_HEAL_MODES,
+  SKILL_EFFECT_TYPES,
+  SKILL_TYPES,
+  SUPPORT_SKILL_HEAL_MODES,
+} from '@/game/skills/types';
 
 const ELEMENT_SET = new Set<CritterElement>(CRITTER_ELEMENTS);
 const EFFECT_TYPE_SET = new Set<SkillEffectType>(SKILL_EFFECT_TYPES);
 const SKILL_TYPE_SET = new Set<SkillType>(SKILL_TYPES);
+const DAMAGE_SKILL_HEAL_MODE_SET = new Set<DamageSkillHealMode>(DAMAGE_SKILL_HEAL_MODES);
+const SUPPORT_SKILL_HEAL_MODE_SET = new Set<SupportSkillHealMode>(SUPPORT_SKILL_HEAL_MODES);
 
 function clampInt(value: unknown, min: number, max: number, fallback: number): number {
   const parsed = typeof value === 'number' && Number.isFinite(value)
@@ -45,6 +55,73 @@ function sanitizeSlug(value: unknown, fallback: string): string {
     return fallback;
   }
   return value.trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-').replace(/-+/g, '-') || fallback;
+}
+
+function hasProvidedNumberLikeValue(value: unknown): boolean {
+  if (typeof value === 'number') {
+    return Number.isFinite(value);
+  }
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function sanitizeSkillHealValue(
+  record: Record<string, unknown>,
+  healMode: Exclude<SkillHealMode, 'none'>,
+  fallbackValue: unknown,
+): number {
+  const rawValue =
+    record.healValue ??
+    record.heal_value ??
+    record.healAmount ??
+    record.heal_amount;
+  if (healMode === 'flat') {
+    return clampInt(
+      hasProvidedNumberLikeValue(rawValue) ? rawValue : fallbackValue,
+      0,
+      9999,
+      0,
+    );
+  }
+  return clampFloat(
+    hasProvidedNumberLikeValue(rawValue) ? rawValue : fallbackValue,
+    0,
+    1,
+    0,
+  );
+}
+
+function resolveSkillHealConfig(
+  record: Record<string, unknown>,
+  type: SkillType,
+): { healMode?: SkillHealMode; healValue?: number } {
+  const healModeRaw = typeof record.healMode === 'string'
+    ? (record.healMode as string).trim().toLowerCase()
+    : typeof record.heal_mode === 'string'
+      ? (record.heal_mode as string).trim().toLowerCase()
+      : '';
+  const legacyHealPercentRaw = record.healPercent ?? record.heal_percent;
+  const hasLegacyHealPercent = hasProvidedNumberLikeValue(legacyHealPercentRaw);
+
+  if (type === 'support') {
+    const healMode: SupportSkillHealMode = SUPPORT_SKILL_HEAL_MODE_SET.has(healModeRaw as SupportSkillHealMode)
+      ? (healModeRaw as SupportSkillHealMode)
+      : hasLegacyHealPercent
+        ? 'percent_max_hp'
+        : 'flat';
+    const healValue = sanitizeSkillHealValue(record, healMode, legacyHealPercentRaw);
+    return { healMode, healValue };
+  }
+
+  const healMode: DamageSkillHealMode = DAMAGE_SKILL_HEAL_MODE_SET.has(healModeRaw as DamageSkillHealMode)
+    ? (healModeRaw as DamageSkillHealMode)
+    : hasLegacyHealPercent
+      ? 'percent_max_hp'
+      : 'none';
+  if (healMode === 'none') {
+    return {};
+  }
+  const healValue = sanitizeSkillHealValue(record, healMode, legacyHealPercentRaw);
+  return { healMode, healValue };
 }
 
 export function sanitizeSkillEffectDefinition(raw: unknown, fallbackIndex = 0): SkillEffectDefinition | null {
@@ -148,10 +225,7 @@ export function sanitizeSkillDefinition(
     type === 'damage'
       ? clampInt(record.damage, 1, 9999, 10)
       : undefined;
-  const healPercent =
-    type === 'support'
-      ? clampFloat(record.healPercent ?? record.heal_percent, 0, 1, 0)
-      : undefined;
+  const { healMode, healValue } = resolveSkillHealConfig(record, type);
 
   let effectIds: string[] | undefined;
   if (Array.isArray(record.effectIds)) {
@@ -179,7 +253,8 @@ export function sanitizeSkillDefinition(
     element,
     type,
     ...(type === 'damage' && { damage }),
-    ...(type === 'support' && { healPercent }),
+    ...(healMode && { healMode }),
+    ...(typeof healValue === 'number' && { healValue }),
     ...(effectIds && effectIds.length > 0 && { effectIds }),
   };
 }

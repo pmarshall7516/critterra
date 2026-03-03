@@ -1,11 +1,19 @@
 import type { Vector2 } from '@/shared/types';
 
+export interface EncounterCritterDropDefinition {
+  itemId: string;
+  minAmount: number;
+  maxAmount: number;
+  dropChance: number;
+}
+
 export interface EncounterTableCritterEntry {
   kind: 'critter';
   critterId: number;
   weight: number;
   minLevel?: number | null;
   maxLevel?: number | null;
+  drops?: EncounterCritterDropDefinition[];
 }
 
 export interface EncounterTableItemEntry {

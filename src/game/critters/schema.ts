@@ -536,8 +536,12 @@ function sanitizeLevelMission(raw: unknown, index: number, level: number): Critt
   const record = raw as Record<string, unknown>;
   const id = sanitizeSlug(record.id, `level-${level}-mission-${index + 1}`);
   const typeRaw = typeof record.type === 'string' ? record.type.trim().toLowerCase() : 'opposing_knockouts';
-  const type = MISSION_TYPE_SET.has(typeRaw as CritterMissionType)
-    ? (typeRaw as CritterMissionType)
+  const normalizedTypeRaw =
+    typeRaw === 'pay' || typeRaw === 'pay-item' || typeRaw === 'payitem'
+      ? 'pay_item'
+      : typeRaw;
+  const type = MISSION_TYPE_SET.has(normalizedTypeRaw as CritterMissionType)
+    ? (normalizedTypeRaw as CritterMissionType)
     : 'opposing_knockouts';
   const targetValue = clampInt(record.targetValue, 1, 999999, 1);
   const ascendsFromCritterId =
@@ -566,6 +570,12 @@ function sanitizeLevelMission(raw: unknown, index: number, level: number): Critt
     type === 'opposing_knockouts_with_item'
       ? sanitizeStringArray(record.requiredEquippedItemIds, 60)
       : [];
+  const requiredPaymentItemId =
+    type === 'pay_item'
+      ? typeof record.requiredPaymentItemId === 'string'
+        ? record.requiredPaymentItemId.trim()
+        : ''
+      : undefined;
   const requiredHealingItemIds =
     type === 'heal_critter'
       ? sanitizeStringArray(record.requiredHealingItemIds, 60)
@@ -584,6 +594,7 @@ function sanitizeLevelMission(raw: unknown, index: number, level: number): Critt
     knockoutCritterIds,
     requiredEquippedItemCount,
     requiredEquippedItemIds,
+    requiredPaymentItemId,
     requiredHealingItemIds,
     storyFlagId,
     label,

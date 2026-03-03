@@ -1108,6 +1108,7 @@ const CRITTER_ABILITY_KIND_OPTIONS = new Set(['passive', 'active']);
 const CRITTER_MISSION_TYPE_OPTIONS = new Set([
   'opposing_knockouts',
   'opposing_knockouts_with_item',
+  'pay_item',
   'use_guard',
   'swap_in',
   'heal_critter',
@@ -1336,7 +1337,13 @@ function parseCritterLevelMissions(raw: unknown, level: number): Array<Record<st
     }
     seenIds.add(id);
     const missionTypeRaw = typeof record.type === 'string' ? record.type.trim().toLowerCase() : 'opposing_knockouts';
-    const type = CRITTER_MISSION_TYPE_OPTIONS.has(missionTypeRaw) ? missionTypeRaw : 'opposing_knockouts';
+    const normalizedMissionTypeRaw =
+      missionTypeRaw === 'pay' || missionTypeRaw === 'pay-item' || missionTypeRaw === 'payitem'
+        ? 'pay_item'
+        : missionTypeRaw;
+    const type = CRITTER_MISSION_TYPE_OPTIONS.has(normalizedMissionTypeRaw)
+      ? normalizedMissionTypeRaw
+      : 'opposing_knockouts';
     const mission: Record<string, unknown> = {
       id,
       type,
@@ -1400,6 +1407,13 @@ function parseCritterLevelMissions(raw: unknown, level: number): Array<Record<st
         : [];
       if (requiredHealingItemIds.length > 0) {
         mission.requiredHealingItemIds = requiredHealingItemIds;
+      }
+    }
+    if (type === 'pay_item') {
+      const requiredPaymentItemId =
+        typeof record.requiredPaymentItemId === 'string' ? record.requiredPaymentItemId.trim() : '';
+      if (requiredPaymentItemId) {
+        mission.requiredPaymentItemId = requiredPaymentItemId;
       }
     }
     parsed.push(mission);
@@ -1567,15 +1581,45 @@ function parseEncounterEntries(
       continue;
     }
     const [minLevel, maxLevel] = parseEncounterLevelRange(record.minLevel, record.maxLevel);
+    const drops = parseEncounterCritterDrops(record.drops);
     parsed.push({
       kind: 'critter',
       critterId,
       weight: normalizedWeight,
       minLevel,
       maxLevel,
+      ...(drops.length > 0 ? { drops } : {}),
     });
   }
 
+  return parsed;
+}
+
+function parseEncounterCritterDrops(raw: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const parsed: Array<Record<string, unknown>> = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const itemId = sanitizeItemIdentifier(record.itemId);
+    if (!itemId) {
+      continue;
+    }
+    const [minAmount, maxAmount] = parseEncounterDropAmountRange(
+      record.minAmount ?? record.minQty ?? record.minQuantity,
+      record.maxAmount ?? record.maxQty ?? record.maxQuantity,
+    );
+    parsed.push({
+      itemId,
+      minAmount,
+      maxAmount,
+      dropChance: parseEncounterDropChance(record.dropChance ?? record.chance ?? record.percent),
+    });
+  }
   return parsed;
 }
 
@@ -1609,6 +1653,29 @@ function parseEncounterAmountValue(raw: unknown): number | null {
     return null;
   }
   return critterClampInt(raw, 1, 9999, 1);
+}
+
+function parseEncounterDropAmountRange(minRaw: unknown, maxRaw: unknown): [number, number] {
+  const minAmount = parseEncounterDropAmountValue(minRaw);
+  const maxAmount = parseEncounterDropAmountValue(maxRaw);
+  if (minAmount > maxAmount) {
+    return [maxAmount, minAmount];
+  }
+  return [minAmount, maxAmount];
+}
+
+function parseEncounterDropAmountValue(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return 1;
+  }
+  return critterClampInt(raw, 1, 9999, 1);
+}
+
+function parseEncounterDropChance(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return 0;
+  }
+  return Math.round(Math.max(0, Math.min(1, raw)) * 1000000) / 1000000;
 }
 
 function sanitizeItemIdentifier(raw: unknown): string {

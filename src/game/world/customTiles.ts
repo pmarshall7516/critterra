@@ -7,9 +7,9 @@ export interface CustomTilesetConfig {
 }
 
 export const CUSTOM_TILESET_CONFIG: CustomTilesetConfig | null = {
-  url: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-  tileWidth: 16,
-  tileHeight: 16
+  url: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+  tileWidth: 112,
+  tileHeight: 96
 };
 
 export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
@@ -1014,6 +1014,19 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilePixelWidth: 16,
     tilePixelHeight: 16
   },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#3b9a9b',
+    accentColor: '#6491c4',
+    height: 0,
+    atlasIndex: 544,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
   '': {
     code: '',
     label: 'grass_path_bottom ',
@@ -1049,6 +1062,97 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     height: 0,
     atlasIndex: 1,
     ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#3b939b',
+    accentColor: '#648ac4',
+    height: 0,
+    atlasIndex: 545,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#3b929b',
+    accentColor: '#6489c4',
+    height: 0,
+    atlasIndex: 546,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#3b909b',
+    accentColor: '#6487c4',
+    height: 0,
+    atlasIndex: 547,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#3b8e9b',
+    accentColor: '#6485c4',
+    height: 0,
+    atlasIndex: 548,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#3b8d9b',
+    accentColor: '#6484c4',
+    height: 0,
+    atlasIndex: 549,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#3b8b9b',
+    accentColor: '#6482c4',
+    height: 0,
+    atlasIndex: 596,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#3b8a9b',
+    accentColor: '#6481c4',
+    height: 0,
+    atlasIndex: 597,
+    ySortWithActors: true,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
     tilePixelWidth: 16,
     tilePixelHeight: 16
@@ -3809,6 +3913,188 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilePixelWidth: 16,
     tilePixelHeight: 16
   },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#9b823b',
+    accentColor: '#acc464',
+    height: 0,
+    atlasIndex: 598,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#9b833b',
+    accentColor: '#aac464',
+    height: 0,
+    atlasIndex: 599,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#9b853b',
+    accentColor: '#a9c464',
+    height: 0,
+    atlasIndex: 600,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#9b863b',
+    accentColor: '#a7c464',
+    height: 0,
+    atlasIndex: 601,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#9b883b',
+    accentColor: '#a6c464',
+    height: 0,
+    atlasIndex: 648,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#9b8a3b',
+    accentColor: '#a4c464',
+    height: 0,
+    atlasIndex: 649,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#9b8b3b',
+    accentColor: '#a2c464',
+    height: 0,
+    atlasIndex: 650,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#9b8d3b',
+    accentColor: '#a1c464',
+    height: 0,
+    atlasIndex: 651,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#9b8e3b',
+    accentColor: '#9fc464',
+    height: 0,
+    atlasIndex: 652,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#9b903b',
+    accentColor: '#9ec464',
+    height: 0,
+    atlasIndex: 653,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#9b923b',
+    accentColor: '#9cc464',
+    height: 0,
+    atlasIndex: 700,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#9b933b',
+    accentColor: '#9ac464',
+    height: 0,
+    atlasIndex: 701,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#9b953b',
+    accentColor: '#99c464',
+    height: 0,
+    atlasIndex: 702,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
+  '': {
+    code: '',
+    label: 'hospital ',
+    walkable: true,
+    color: '#9b963b',
+    accentColor: '#97c464',
+    height: 0,
+    atlasIndex: 703,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
+  },
   '': {
     code: '',
     label: 'water4 ',
@@ -3822,207 +4108,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilePixelWidth: 16,
     tilePixelHeight: 16
   },
-  '': {
-    code: '',
-    label: 'hospital ',
+  '': {
+    code: '',
+    label: 'hospital ',
     walkable: true,
-    color: '#869b3b',
-    accentColor: '#7dc464',
-    height: 0,
-    atlasIndex: 597,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16
-  },
-  '': {
-    code: '',
-    label: 'hospital ',
-    walkable: true,
-    color: '#859b3b',
-    accentColor: '#7cc464',
-    height: 0,
-    atlasIndex: 598,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16
-  },
-  '': {
-    code: '',
-    label: 'hospital ',
-    walkable: true,
-    color: '#839b3b',
-    accentColor: '#7ac464',
-    height: 0,
-    atlasIndex: 599,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16
-  },
-  '': {
-    code: '',
-    label: 'hospital ',
-    walkable: true,
-    color: '#829b3b',
-    accentColor: '#79c464',
-    height: 0,
-    atlasIndex: 600,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16
-  },
-  '': {
-    code: '',
-    label: 'hospital ',
-    walkable: true,
-    color: '#809b3b',
-    accentColor: '#77c464',
-    height: 0,
-    atlasIndex: 601,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16
-  },
-  '': {
-    code: '',
-    label: 'hospital ',
-    walkable: true,
-    color: '#7e9b3b',
-    accentColor: '#75c464',
-    height: 0,
-    atlasIndex: 648,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16
-  },
-  '': {
-    code: '',
-    label: 'hospital ',
-    walkable: true,
-    color: '#7d9b3b',
-    accentColor: '#74c464',
-    height: 0,
-    atlasIndex: 649,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16
-  },
-  '': {
-    code: '',
-    label: 'hospital ',
-    walkable: true,
-    color: '#7b9b3b',
-    accentColor: '#72c464',
-    height: 0,
-    atlasIndex: 650,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16
-  },
-  '': {
-    code: '',
-    label: 'hospital ',
-    walkable: true,
-    color: '#7a9b3b',
-    accentColor: '#71c464',
-    height: 0,
-    atlasIndex: 651,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16
-  },
-  '': {
-    code: '',
-    label: 'hospital ',
-    walkable: true,
-    color: '#789b3b',
-    accentColor: '#6fc464',
-    height: 0,
-    atlasIndex: 652,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16
-  },
-  '': {
-    code: '',
-    label: 'hospital ',
-    walkable: true,
-    color: '#769b3b',
-    accentColor: '#6dc464',
-    height: 0,
-    atlasIndex: 653,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16
-  },
-  '': {
-    code: '',
-    label: 'hospital ',
-    walkable: true,
-    color: '#759b3b',
-    accentColor: '#6cc464',
-    height: 0,
-    atlasIndex: 700,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16
-  },
-  '': {
-    code: '',
-    label: 'hospital ',
-    walkable: true,
-    color: '#739b3b',
-    accentColor: '#6ac464',
-    height: 0,
-    atlasIndex: 701,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16
-  },
-  '': {
-    code: '',
-    label: 'hospital ',
-    walkable: true,
-    color: '#729b3b',
-    accentColor: '#69c464',
-    height: 0,
-    atlasIndex: 702,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16
-  },
-  '': {
-    code: '',
-    label: 'hospital ',
-    walkable: true,
-    color: '#709b3b',
-    accentColor: '#67c464',
-    height: 0,
-    atlasIndex: 703,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16
-  },
-  '': {
-    code: '',
-    label: 'hospital ',
-    walkable: true,
-    color: '#6e9b3b',
-    accentColor: '#65c464',
+    color: '#9b9a3b',
+    accentColor: '#94c464',
     height: 0,
     atlasIndex: 704,
     ySortWithActors: true,
@@ -4030,12 +4121,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilePixelWidth: 16,
     tilePixelHeight: 16
   },
-  '': {
-    code: '',
-    label: 'hospital ',
+  '': {
+    code: '',
+    label: 'hospital ',
     walkable: true,
-    color: '#6d9b3b',
-    accentColor: '#64c464',
+    color: '#9b9b3b',
+    accentColor: '#92c464',
     height: 0,
     atlasIndex: 705,
     ySortWithActors: true,
@@ -4043,12 +4134,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilePixelWidth: 16,
     tilePixelHeight: 16
   },
-  '': {
-    code: '',
-    label: 'hospital ',
+  '': {
+    code: '',
+    label: 'hospital ',
     walkable: true,
-    color: '#6b9b3b',
-    accentColor: '#64c465',
+    color: '#9a9b3b',
+    accentColor: '#91c464',
     height: 0,
     atlasIndex: 752,
     ySortWithActors: true,
@@ -4056,12 +4147,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilePixelWidth: 16,
     tilePixelHeight: 16
   },
-  '': {
-    code: '',
-    label: 'hospital ',
+  '': {
+    code: '',
+    label: 'hospital ',
     walkable: true,
-    color: '#699b3b',
-    accentColor: '#64c467',
+    color: '#989b3b',
+    accentColor: '#8fc464',
     height: 0,
     atlasIndex: 753,
     ySortWithActors: true,
@@ -4069,12 +4160,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilePixelWidth: 16,
     tilePixelHeight: 16
   },
-  '': {
-    code: '',
-    label: 'hospital ',
+  '': {
+    code: '',
+    label: 'hospital ',
     walkable: true,
-    color: '#689b3b',
-    accentColor: '#64c469',
+    color: '#969b3b',
+    accentColor: '#8dc464',
     height: 0,
     atlasIndex: 754,
     ySortWithActors: true,
@@ -4082,12 +4173,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilePixelWidth: 16,
     tilePixelHeight: 16
   },
-  '': {
-    code: '',
-    label: 'hospital ',
+  '': {
+    code: '',
+    label: 'hospital ',
     walkable: true,
-    color: '#669b3b',
-    accentColor: '#64c46a',
+    color: '#959b3b',
+    accentColor: '#8cc464',
     height: 0,
     atlasIndex: 755,
     ySortWithActors: true,
@@ -4095,12 +4186,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilePixelWidth: 16,
     tilePixelHeight: 16
   },
-  '': {
-    code: '',
-    label: 'hospital ',
+  '': {
+    code: '',
+    label: 'hospital ',
     walkable: true,
-    color: '#659b3b',
-    accentColor: '#64c46c',
+    color: '#939b3b',
+    accentColor: '#8ac464',
     height: 0,
     atlasIndex: 756,
     ySortWithActors: true,
@@ -4108,12 +4199,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilePixelWidth: 16,
     tilePixelHeight: 16
   },
-  '': {
-    code: '',
-    label: 'hospital ',
+  '': {
+    code: '',
+    label: 'hospital ',
     walkable: true,
-    color: '#639b3b',
-    accentColor: '#64c46d',
+    color: '#929b3b',
+    accentColor: '#89c464',
     height: 0,
     atlasIndex: 757,
     ySortWithActors: true,
@@ -4121,12 +4212,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilePixelWidth: 16,
     tilePixelHeight: 16
   },
-  '': {
-    code: '',
-    label: 'hospital ',
+  '': {
+    code: '',
+    label: 'hospital ',
     walkable: true,
-    color: '#619b3b',
-    accentColor: '#64c46f',
+    color: '#909b3b',
+    accentColor: '#87c464',
     height: 0,
     atlasIndex: 804,
     ySortWithActors: true,
@@ -4134,12 +4225,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilePixelWidth: 16,
     tilePixelHeight: 16
   },
-  '': {
-    code: '',
-    label: 'hospital ',
+  '': {
+    code: '',
+    label: 'hospital ',
     walkable: true,
-    color: '#609b3b',
-    accentColor: '#64c471',
+    color: '#8e9b3b',
+    accentColor: '#85c464',
     height: 0,
     atlasIndex: 805,
     ySortWithActors: true,
@@ -4147,12 +4238,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilePixelWidth: 16,
     tilePixelHeight: 16
   },
-  '': {
-    code: '',
-    label: 'hospital ',
+  '': {
+    code: '',
+    label: 'hospital ',
     walkable: true,
-    color: '#5e9b3b',
-    accentColor: '#64c472',
+    color: '#8d9b3b',
+    accentColor: '#84c464',
     height: 0,
     atlasIndex: 806,
     ySortWithActors: true,
@@ -4160,12 +4251,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilePixelWidth: 16,
     tilePixelHeight: 16
   },
-  '': {
-    code: '',
-    label: 'hospital ',
+  '': {
+    code: '',
+    label: 'hospital ',
     walkable: true,
-    color: '#5d9b3b',
-    accentColor: '#64c474',
+    color: '#8b9b3b',
+    accentColor: '#82c464',
     height: 0,
     atlasIndex: 807,
     ySortWithActors: true,
@@ -4173,12 +4264,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilePixelWidth: 16,
     tilePixelHeight: 16
   },
-  '': {
-    code: '',
-    label: 'hospital ',
+  '': {
+    code: '',
+    label: 'hospital ',
     walkable: true,
-    color: '#5b9b3b',
-    accentColor: '#64c475',
+    color: '#8a9b3b',
+    accentColor: '#81c464',
     height: 0,
     atlasIndex: 808,
     ySortWithActors: true,
@@ -4186,12 +4277,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilePixelWidth: 16,
     tilePixelHeight: 16
   },
-  '': {
-    code: '',
-    label: 'hospital ',
+  '': {
+    code: '',
+    label: 'hospital ',
     walkable: true,
-    color: '#599b3b',
-    accentColor: '#64c477',
+    color: '#889b3b',
+    accentColor: '#7fc464',
     height: 0,
     atlasIndex: 809,
     ySortWithActors: true,
@@ -4977,44 +5068,6 @@ export interface SavedPaintTileDatabaseEntry {
 
 export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
   {
-    id: 'sand-1',
-    name: 'sand',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 1,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'snow-1',
-    name: 'snow',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 2,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
     id: 'lodge-teal-1',
     name: 'lodge-teal',
     primaryCode: '',
@@ -5295,134 +5348,6 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
         atlasIndex: 666,
         dx: 0,
         dy: 0
-      }
-    ]
-  },
-  {
-    id: 'water1-1',
-    name: 'water1',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 7,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'healer-2',
-    name: 'healer',
-    primaryCode: '',
-    width: 4,
-    height: 4,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 192,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 0,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 1,
-        dx: 1,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 2,
-        dx: 2,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 3,
-        dx: 3,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 4,
-        dx: 0,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 5,
-        dx: 1,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 6,
-        dx: 2,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 7,
-        dx: 3,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 8,
-        dx: 0,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 9,
-        dx: 1,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 10,
-        dx: 2,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 11,
-        dx: 3,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 12,
-        dx: 0,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 13,
-        dx: 1,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 14,
-        dx: 2,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 15,
-        dx: 3,
-        dy: 3
       }
     ]
   },
@@ -5736,7 +5661,7 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
   {
     id: 'hospital-1',
     name: 'hospital',
-    primaryCode: '',
+    primaryCode: '',
     width: 6,
     height: 6,
     ySortWithActors: true,
@@ -5745,220 +5670,386 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     tilePixelHeight: 16,
     cells: [
       {
-        code: '',
+        code: '',
         atlasIndex: 544,
         dx: 0,
         dy: 0
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 545,
         dx: 1,
         dy: 0
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 546,
         dx: 2,
         dy: 0
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 547,
         dx: 3,
         dy: 0
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 548,
         dx: 4,
         dy: 0
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 549,
         dx: 5,
         dy: 0
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 596,
         dx: 0,
         dy: 1
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 597,
         dx: 1,
         dy: 1
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 598,
         dx: 2,
         dy: 1
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 599,
         dx: 3,
         dy: 1
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 600,
         dx: 4,
         dy: 1
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 601,
         dx: 5,
         dy: 1
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 648,
         dx: 0,
         dy: 2
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 649,
         dx: 1,
         dy: 2
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 650,
         dx: 2,
         dy: 2
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 651,
         dx: 3,
         dy: 2
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 652,
         dx: 4,
         dy: 2
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 653,
         dx: 5,
         dy: 2
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 700,
         dx: 0,
         dy: 3
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 701,
         dx: 1,
         dy: 3
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 702,
         dx: 2,
         dy: 3
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 703,
         dx: 3,
         dy: 3
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 704,
         dx: 4,
         dy: 3
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 705,
         dx: 5,
         dy: 3
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 752,
         dx: 0,
         dy: 4
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 753,
         dx: 1,
         dy: 4
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 754,
         dx: 2,
         dy: 4
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 755,
         dx: 3,
         dy: 4
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 756,
         dx: 4,
         dy: 4
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 757,
         dx: 5,
         dy: 4
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 804,
         dx: 0,
         dy: 5
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 805,
         dx: 1,
         dy: 5
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 806,
         dx: 2,
         dy: 5
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 807,
         dx: 3,
         dy: 5
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 808,
         dx: 4,
         dy: 5
       },
       {
-        code: '',
+        code: '',
         atlasIndex: 809,
         dx: 5,
         dy: 5
+      }
+    ]
+  },
+  {
+    id: 'sand-1',
+    name: 'sand',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'snow-1',
+    name: 'snow',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 2,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'water1-1',
+    name: 'water1',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 7,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'healer-2',
+    name: 'healer',
+    primaryCode: '',
+    width: 4,
+    height: 4,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
+    tilePixelWidth: 160,
+    tilePixelHeight: 192,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 0,
+        dx: 0,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 1,
+        dx: 1,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 2,
+        dx: 2,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 3,
+        dx: 3,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 4,
+        dx: 0,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 5,
+        dx: 1,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 6,
+        dx: 2,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 7,
+        dx: 3,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 8,
+        dx: 0,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 9,
+        dx: 1,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 10,
+        dx: 2,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 11,
+        dx: 3,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 12,
+        dx: 0,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 13,
+        dx: 1,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 14,
+        dx: 2,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 15,
+        dx: 3,
+        dy: 3
       }
     ]
   },
@@ -6090,6 +6181,25 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
       {
         code: '',
         atlasIndex: 17,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'beach-water-top-right-1',
+    name: 'beach_water_top_right',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 684,
         dx: 0,
         dy: 0
       }
@@ -6246,25 +6356,6 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
       {
         code: '',
         atlasIndex: 997,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'beach-water-top-right-1',
-    name: 'beach_water_top_right',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 684,
         dx: 0,
         dy: 0
       }
@@ -6445,44 +6536,6 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
-    id: 'beach-water-bottom-1',
-    name: 'beach_water_bottom',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 787,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'back-wall-top-1',
-    name: 'back_wall_top',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 459,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
     id: 'blue-wall-window-1',
     name: 'blue_wall_window',
     primaryCode: '',
@@ -6596,6 +6649,44 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
       {
         code: '',
         atlasIndex: 788,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'beach-water-bottom-1',
+    name: 'beach_water_bottom',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 787,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'back-wall-top-1',
+    name: 'back_wall_top',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 459,
         dx: 0,
         dy: 0
       }
@@ -7025,25 +7116,6 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
       {
         code: '',
         atlasIndex: 1198,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'forest-tree-top-right-1',
-    name: 'Forest Tree Top Right',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 1146,
         dx: 0,
         dy: 0
       }
@@ -7521,27 +7593,21 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
-    id: 'palm-bush-1',
-    name: 'palm_bush',
-    primaryCode: '',
+    id: 'forest-tree-top-right-1',
+    name: 'Forest Tree Top Right',
+    primaryCode: '',
     width: 1,
-    height: 2,
+    height: 1,
     ySortWithActors: true,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
     tilePixelWidth: 16,
     tilePixelHeight: 16,
     cells: [
       {
-        code: '',
-        atlasIndex: 1048,
+        code: '',
+        atlasIndex: 1146,
         dx: 0,
         dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 1100,
-        dx: 0,
-        dy: 1
       }
     ]
   },
@@ -8015,6 +8081,31 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
+    id: 'palm-bush-1',
+    name: 'palm_bush',
+    primaryCode: '',
+    width: 1,
+    height: 2,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1048,
+        dx: 0,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 1100,
+        dx: 0,
+        dy: 1
+      }
+    ]
+  },
+  {
     id: 'houseplant-1',
     name: 'houseplant',
     primaryCode: '',
@@ -8072,6 +8163,82 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
       {
         code: '',
         atlasIndex: 408,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'wood-floor-back-1',
+    name: 'wood_floor_back',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 563,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'left-wall-back-1',
+    name: 'left_wall_back',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 562,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'wall-bottom-right-1',
+    name: 'wall_bottom_right',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 668,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'grass-path-top-left-1',
+    name: 'grass_path_top_left',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 52,
         dx: 0,
         dy: 0
       }
@@ -8324,82 +8491,6 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
         atlasIndex: 1253,
         dx: 1,
         dy: 2
-      }
-    ]
-  },
-  {
-    id: 'wood-floor-back-1',
-    name: 'wood_floor_back',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 563,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'left-wall-back-1',
-    name: 'left_wall_back',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 562,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'wall-bottom-right-1',
-    name: 'wall_bottom_right',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 668,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'grass-path-top-left-1',
-    name: 'grass_path_top_left',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 52,
-        dx: 0,
-        dy: 0
       }
     ]
   }

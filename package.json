@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "db:backfill-tiles": "node scripts/backfill-game-tiles-tileset.mjs"
+    "db:backfill-tiles": "node scripts/backfill-game-tiles-tileset.mjs",
+    "db:migrate-skill-heal-modes": "node scripts/migrate-skill-heal-modes.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
