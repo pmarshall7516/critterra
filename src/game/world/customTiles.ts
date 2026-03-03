@@ -639,16 +639,16 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'wall_bottom_left ',
     walkable: true,
     color: '#3b9b6e',
     accentColor: '#64bfc4',
     height: 0,
-    atlasIndex: 0,
+    atlasIndex: 666,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
@@ -1014,19 +1014,6 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilePixelWidth: 16,
     tilePixelHeight: 16
   },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#3b9a9b',
-    accentColor: '#6491c4',
-    height: 0,
-    atlasIndex: 0,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
   '': {
     code: '',
     label: 'grass_path_bottom ',
@@ -1065,97 +1052,6 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
     tilePixelWidth: 16,
     tilePixelHeight: 16
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#3b939b',
-    accentColor: '#648ac4',
-    height: 0,
-    atlasIndex: 1,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#3b929b',
-    accentColor: '#6489c4',
-    height: 0,
-    atlasIndex: 2,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#3b909b',
-    accentColor: '#6487c4',
-    height: 0,
-    atlasIndex: 3,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#3b8e9b',
-    accentColor: '#6485c4',
-    height: 0,
-    atlasIndex: 4,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#3b8d9b',
-    accentColor: '#6484c4',
-    height: 0,
-    atlasIndex: 5,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#3b8b9b',
-    accentColor: '#6482c4',
-    height: 0,
-    atlasIndex: 6,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#3b8a9b',
-    accentColor: '#6481c4',
-    height: 0,
-    atlasIndex: 7,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
   },
   '': {
     code: '',
@@ -2446,545 +2342,545 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#8d3b9b',
     accentColor: '#c464a1',
     height: 0,
-    atlasIndex: 1,
+    atlasIndex: 399,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#8e3b9b',
     accentColor: '#c4649f',
     height: 0,
-    atlasIndex: 2,
+    atlasIndex: 400,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#903b9b',
     accentColor: '#c4649e',
     height: 0,
-    atlasIndex: 3,
+    atlasIndex: 401,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#923b9b',
     accentColor: '#c4649c',
     height: 0,
-    atlasIndex: 4,
+    atlasIndex: 402,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#933b9b',
     accentColor: '#c4649a',
     height: 0,
-    atlasIndex: 5,
+    atlasIndex: 403,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#953b9b',
     accentColor: '#c46499',
     height: 0,
-    atlasIndex: 6,
+    atlasIndex: 404,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#963b9b',
     accentColor: '#c46497',
     height: 0,
-    atlasIndex: 7,
+    atlasIndex: 405,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#983b9b',
     accentColor: '#c46496',
     height: 0,
-    atlasIndex: 8,
+    atlasIndex: 451,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9a3b9b',
     accentColor: '#c46494',
     height: 0,
-    atlasIndex: 9,
+    atlasIndex: 452,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b9b',
     accentColor: '#c46492',
     height: 0,
-    atlasIndex: 10,
+    atlasIndex: 453,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b9a',
     accentColor: '#c46491',
     height: 0,
-    atlasIndex: 11,
+    atlasIndex: 454,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b98',
     accentColor: '#c4648f',
     height: 0,
-    atlasIndex: 12,
+    atlasIndex: 455,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b96',
     accentColor: '#c4648d',
     height: 0,
-    atlasIndex: 13,
+    atlasIndex: 456,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b95',
     accentColor: '#c4648c',
     height: 0,
-    atlasIndex: 14,
+    atlasIndex: 457,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b93',
     accentColor: '#c4648a',
     height: 0,
-    atlasIndex: 15,
+    atlasIndex: 503,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b92',
     accentColor: '#c46489',
     height: 0,
-    atlasIndex: 16,
+    atlasIndex: 504,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b90',
     accentColor: '#c46487',
     height: 0,
-    atlasIndex: 17,
+    atlasIndex: 505,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b8e',
     accentColor: '#c46485',
     height: 0,
-    atlasIndex: 18,
+    atlasIndex: 506,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b8d',
     accentColor: '#c46484',
     height: 0,
-    atlasIndex: 19,
+    atlasIndex: 507,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b8b',
     accentColor: '#c46482',
     height: 0,
-    atlasIndex: 20,
+    atlasIndex: 508,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b8a',
     accentColor: '#c46481',
     height: 0,
-    atlasIndex: 21,
+    atlasIndex: 509,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b88',
     accentColor: '#c4647f',
     height: 0,
-    atlasIndex: 22,
+    atlasIndex: 555,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b86',
     accentColor: '#c4647d',
     height: 0,
-    atlasIndex: 23,
+    atlasIndex: 556,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b85',
     accentColor: '#c4647c',
     height: 0,
-    atlasIndex: 24,
+    atlasIndex: 557,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b83',
     accentColor: '#c4647a',
     height: 0,
-    atlasIndex: 25,
+    atlasIndex: 558,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b82',
     accentColor: '#c46479',
     height: 0,
-    atlasIndex: 26,
+    atlasIndex: 559,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b80',
     accentColor: '#c46477',
     height: 0,
-    atlasIndex: 27,
+    atlasIndex: 560,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b7e',
     accentColor: '#c46475',
     height: 0,
-    atlasIndex: 28,
+    atlasIndex: 561,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b7d',
     accentColor: '#c46474',
     height: 0,
-    atlasIndex: 29,
+    atlasIndex: 607,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b7b',
     accentColor: '#c46472',
     height: 0,
-    atlasIndex: 30,
+    atlasIndex: 608,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b7a',
     accentColor: '#c46471',
     height: 0,
-    atlasIndex: 31,
+    atlasIndex: 609,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b78',
     accentColor: '#c4646f',
     height: 0,
-    atlasIndex: 32,
+    atlasIndex: 610,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b76',
     accentColor: '#c4646d',
     height: 0,
-    atlasIndex: 33,
+    atlasIndex: 611,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b75',
     accentColor: '#c4646c',
     height: 0,
-    atlasIndex: 34,
+    atlasIndex: 612,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b73',
     accentColor: '#c4646a',
     height: 0,
-    atlasIndex: 35,
+    atlasIndex: 613,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b72',
     accentColor: '#c46469',
     height: 0,
-    atlasIndex: 36,
+    atlasIndex: 659,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b70',
     accentColor: '#c46467',
     height: 0,
-    atlasIndex: 37,
+    atlasIndex: 660,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b6e',
     accentColor: '#c46465',
     height: 0,
-    atlasIndex: 38,
+    atlasIndex: 661,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b6d',
     accentColor: '#c46464',
     height: 0,
-    atlasIndex: 39,
+    atlasIndex: 662,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b6b',
     accentColor: '#c46564',
     height: 0,
-    atlasIndex: 40,
+    atlasIndex: 663,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'lodge-2 ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b69',
     accentColor: '#c46764',
     height: 0,
-    atlasIndex: 41,
+    atlasIndex: 664,
     ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16
   },
   '': {
     code: '',
-    label: 'wall_bottom_left ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b68',
     accentColor: '#c46964',
     height: 0,
-    atlasIndex: 666,
+    atlasIndex: 665,
     ySortWithActors: true,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
     tilePixelWidth: 16,
@@ -2992,12 +2888,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
   },
   '': {
     code: '',
-    label: 'hospital ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b66',
     accentColor: '#c46a64',
     height: 0,
-    atlasIndex: 544,
+    atlasIndex: 711,
     ySortWithActors: true,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
     tilePixelWidth: 16,
@@ -3005,12 +2901,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
   },
   '': {
     code: '',
-    label: 'hospital ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b65',
     accentColor: '#c46c64',
     height: 0,
-    atlasIndex: 545,
+    atlasIndex: 712,
     ySortWithActors: true,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
     tilePixelWidth: 16,
@@ -3018,12 +2914,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
   },
   '': {
     code: '',
-    label: 'hospital ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b63',
     accentColor: '#c46d64',
     height: 0,
-    atlasIndex: 546,
+    atlasIndex: 713,
     ySortWithActors: true,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
     tilePixelWidth: 16,
@@ -3031,12 +2927,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
   },
   '': {
     code: '',
-    label: 'hospital ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b61',
     accentColor: '#c46f64',
     height: 0,
-    atlasIndex: 547,
+    atlasIndex: 714,
     ySortWithActors: true,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
     tilePixelWidth: 16,
@@ -3044,12 +2940,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
   },
   '': {
     code: '',
-    label: 'hospital ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b60',
     accentColor: '#c47164',
     height: 0,
-    atlasIndex: 548,
+    atlasIndex: 715,
     ySortWithActors: true,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
     tilePixelWidth: 16,
@@ -3057,12 +2953,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
   },
   '': {
     code: '',
-    label: 'hospital ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b5e',
     accentColor: '#c47264',
     height: 0,
-    atlasIndex: 549,
+    atlasIndex: 716,
     ySortWithActors: true,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
     tilePixelWidth: 16,
@@ -3070,12 +2966,12 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
   },
   '': {
     code: '',
-    label: 'hospital ',
+    label: 'large_purple_house ',
     walkable: true,
     color: '#9b3b5d',
     accentColor: '#c47464',
     height: 0,
-    atlasIndex: 596,
+    atlasIndex: 717,
     ySortWithActors: true,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
     tilePixelWidth: 16,
@@ -3913,188 +3809,6 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilePixelWidth: 16,
     tilePixelHeight: 16
   },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#9b823b',
-    accentColor: '#acc464',
-    height: 0,
-    atlasIndex: 8,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#9b833b',
-    accentColor: '#aac464',
-    height: 0,
-    atlasIndex: 9,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#9b853b',
-    accentColor: '#a9c464',
-    height: 0,
-    atlasIndex: 10,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#9b863b',
-    accentColor: '#a7c464',
-    height: 0,
-    atlasIndex: 11,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#9b883b',
-    accentColor: '#a6c464',
-    height: 0,
-    atlasIndex: 12,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#9b8a3b',
-    accentColor: '#a4c464',
-    height: 0,
-    atlasIndex: 13,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#9b8b3b',
-    accentColor: '#a2c464',
-    height: 0,
-    atlasIndex: 14,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#9b8d3b',
-    accentColor: '#a1c464',
-    height: 0,
-    atlasIndex: 15,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#9b8e3b',
-    accentColor: '#9fc464',
-    height: 0,
-    atlasIndex: 16,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#9b903b',
-    accentColor: '#9ec464',
-    height: 0,
-    atlasIndex: 17,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#9b923b',
-    accentColor: '#9cc464',
-    height: 0,
-    atlasIndex: 18,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#9b933b',
-    accentColor: '#9ac464',
-    height: 0,
-    atlasIndex: 19,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#9b953b',
-    accentColor: '#99c464',
-    height: 0,
-    atlasIndex: 20,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#9b963b',
-    accentColor: '#97c464',
-    height: 0,
-    atlasIndex: 21,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
   '': {
     code: '',
     label: 'water4 ',
@@ -4107,188 +3821,6 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
     tilePixelWidth: 16,
     tilePixelHeight: 16
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#9b9a3b',
-    accentColor: '#94c464',
-    height: 0,
-    atlasIndex: 22,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#9b9b3b',
-    accentColor: '#92c464',
-    height: 0,
-    atlasIndex: 23,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#9a9b3b',
-    accentColor: '#91c464',
-    height: 0,
-    atlasIndex: 24,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#989b3b',
-    accentColor: '#8fc464',
-    height: 0,
-    atlasIndex: 25,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#969b3b',
-    accentColor: '#8dc464',
-    height: 0,
-    atlasIndex: 26,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#959b3b',
-    accentColor: '#8cc464',
-    height: 0,
-    atlasIndex: 27,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#939b3b',
-    accentColor: '#8ac464',
-    height: 0,
-    atlasIndex: 28,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#929b3b',
-    accentColor: '#89c464',
-    height: 0,
-    atlasIndex: 29,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#909b3b',
-    accentColor: '#87c464',
-    height: 0,
-    atlasIndex: 30,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#8e9b3b',
-    accentColor: '#85c464',
-    height: 0,
-    atlasIndex: 31,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#8d9b3b',
-    accentColor: '#84c464',
-    height: 0,
-    atlasIndex: 32,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#8b9b3b',
-    accentColor: '#82c464',
-    height: 0,
-    atlasIndex: 33,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#8a9b3b',
-    accentColor: '#81c464',
-    height: 0,
-    atlasIndex: 34,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
-  },
-  '': {
-    code: '',
-    label: 'lodge ',
-    walkable: true,
-    color: '#889b3b',
-    accentColor: '#7fc464',
-    height: 0,
-    atlasIndex: 35,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112
   },
   '': {
     code: '',
@@ -4667,213 +4199,759 @@ export const CUSTOM_TILE_DEFINITIONS: Record<string, TileDefinition> = {
     tilePixelWidth: 16,
     tilePixelHeight: 16
   },
-  '': {
-    code: '',
-    label: 'healer ',
+  '': {
+    code: '',
+    label: 'healer ',
     walkable: true,
-    color: '#3e9b3b',
-    accentColor: '#64c492',
+    color: '#589b3b',
+    accentColor: '#64c479',
     height: 0,
     atlasIndex: 0,
     ySortWithActors: false,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
     tilePixelWidth: 160,
-    tilePixelHeight: 160
+    tilePixelHeight: 192
   },
-  '': {
-    code: '',
-    label: 'healer ',
+  '': {
+    code: '',
+    label: 'healer ',
     walkable: true,
-    color: '#3d9b3b',
-    accentColor: '#64c494',
+    color: '#569b3b',
+    accentColor: '#64c47a',
     height: 0,
     atlasIndex: 1,
     ySortWithActors: false,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
     tilePixelWidth: 160,
-    tilePixelHeight: 160
+    tilePixelHeight: 192
   },
-  '': {
-    code: '',
-    label: 'healer ',
+  '': {
+    code: '',
+    label: 'healer ',
     walkable: true,
-    color: '#3b9b3b',
-    accentColor: '#64c496',
+    color: '#559b3b',
+    accentColor: '#64c47c',
     height: 0,
     atlasIndex: 2,
     ySortWithActors: false,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
     tilePixelWidth: 160,
-    tilePixelHeight: 160
+    tilePixelHeight: 192
   },
-  '': {
-    code: '',
-    label: 'healer ',
+  '': {
+    code: '',
+    label: 'healer ',
     walkable: true,
-    color: '#3b9b3d',
-    accentColor: '#64c497',
+    color: '#539b3b',
+    accentColor: '#64c47d',
     height: 0,
     atlasIndex: 3,
     ySortWithActors: false,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
     tilePixelWidth: 160,
-    tilePixelHeight: 160
+    tilePixelHeight: 192
   },
-  '': {
-    code: '',
-    label: 'healer ',
+  '': {
+    code: '',
+    label: 'healer ',
     walkable: true,
-    color: '#3b9b3e',
-    accentColor: '#64c499',
+    color: '#519b3b',
+    accentColor: '#64c47f',
     height: 0,
     atlasIndex: 4,
     ySortWithActors: false,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
     tilePixelWidth: 160,
-    tilePixelHeight: 160
+    tilePixelHeight: 192
   },
-  '': {
-    code: '',
-    label: 'healer ',
+  '': {
+    code: '',
+    label: 'healer ',
     walkable: true,
-    color: '#3b9b40',
-    accentColor: '#64c49a',
+    color: '#509b3b',
+    accentColor: '#64c481',
     height: 0,
     atlasIndex: 5,
     ySortWithActors: false,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
     tilePixelWidth: 160,
-    tilePixelHeight: 160
+    tilePixelHeight: 192
   },
-  '': {
-    code: '',
-    label: 'healer ',
+  '': {
+    code: '',
+    label: 'healer ',
     walkable: true,
-    color: '#3b9b41',
-    accentColor: '#64c49c',
+    color: '#4e9b3b',
+    accentColor: '#64c482',
     height: 0,
     atlasIndex: 6,
     ySortWithActors: false,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
     tilePixelWidth: 160,
-    tilePixelHeight: 160
+    tilePixelHeight: 192
   },
-  '': {
-    code: '',
-    label: 'healer ',
+  '': {
+    code: '',
+    label: 'healer ',
     walkable: true,
-    color: '#3b9b43',
-    accentColor: '#64c49e',
+    color: '#4d9b3b',
+    accentColor: '#64c484',
     height: 0,
     atlasIndex: 7,
     ySortWithActors: false,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
     tilePixelWidth: 160,
-    tilePixelHeight: 160
+    tilePixelHeight: 192
   },
-  '': {
-    code: '',
-    label: 'healer ',
+  '': {
+    code: '',
+    label: 'healer ',
     walkable: true,
-    color: '#3b9b45',
-    accentColor: '#64c49f',
+    color: '#4b9b3b',
+    accentColor: '#64c485',
     height: 0,
     atlasIndex: 8,
     ySortWithActors: false,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
     tilePixelWidth: 160,
-    tilePixelHeight: 160
+    tilePixelHeight: 192
   },
-  '': {
-    code: '',
-    label: 'healer ',
+  '': {
+    code: '',
+    label: 'healer ',
     walkable: true,
-    color: '#3b9b46',
-    accentColor: '#64c4a1',
+    color: '#499b3b',
+    accentColor: '#64c487',
     height: 0,
     atlasIndex: 9,
     ySortWithActors: false,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
     tilePixelWidth: 160,
-    tilePixelHeight: 160
+    tilePixelHeight: 192
   },
-  '': {
-    code: '',
-    label: 'healer ',
+  '': {
+    code: '',
+    label: 'healer ',
     walkable: true,
-    color: '#3b9b48',
-    accentColor: '#64c4a2',
+    color: '#489b3b',
+    accentColor: '#64c489',
     height: 0,
     atlasIndex: 10,
     ySortWithActors: false,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
     tilePixelWidth: 160,
-    tilePixelHeight: 160
+    tilePixelHeight: 192
   },
-  '': {
-    code: '',
-    label: 'healer ',
+  '': {
+    code: '',
+    label: 'healer ',
     walkable: true,
-    color: '#3b9b49',
-    accentColor: '#64c4a4',
+    color: '#469b3b',
+    accentColor: '#64c48a',
     height: 0,
     atlasIndex: 11,
     ySortWithActors: false,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
     tilePixelWidth: 160,
-    tilePixelHeight: 160
+    tilePixelHeight: 192
   },
-  '': {
-    code: '',
-    label: 'healer ',
+  '': {
+    code: '',
+    label: 'healer ',
     walkable: true,
-    color: '#3b9b4b',
-    accentColor: '#64c4a6',
+    color: '#459b3b',
+    accentColor: '#64c48c',
     height: 0,
     atlasIndex: 12,
     ySortWithActors: false,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
     tilePixelWidth: 160,
-    tilePixelHeight: 160
+    tilePixelHeight: 192
   },
-  '': {
-    code: '',
-    label: 'healer ',
+  '': {
+    code: '',
+    label: 'healer ',
     walkable: true,
-    color: '#3b9b4d',
-    accentColor: '#64c4a7',
+    color: '#439b3b',
+    accentColor: '#64c48d',
     height: 0,
     atlasIndex: 13,
     ySortWithActors: false,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
     tilePixelWidth: 160,
-    tilePixelHeight: 160
+    tilePixelHeight: 192
   },
-  '': {
-    code: '',
-    label: 'healer ',
+  '': {
+    code: '',
+    label: 'healer ',
     walkable: true,
-    color: '#3b9b4e',
-    accentColor: '#64c4a9',
+    color: '#419b3b',
+    accentColor: '#64c48f',
     height: 0,
     atlasIndex: 14,
     ySortWithActors: false,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
     tilePixelWidth: 160,
-    tilePixelHeight: 160
+    tilePixelHeight: 192
   },
-  '': {
-    code: '',
-    label: 'healer ',
+  '': {
+    code: '',
+    label: 'healer ',
     walkable: true,
-    color: '#3b9b50',
-    accentColor: '#64c4aa',
+    color: '#409b3b',
+    accentColor: '#64c491',
     height: 0,
     atlasIndex: 15,
     ySortWithActors: false,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
     tilePixelWidth: 160,
-    tilePixelHeight: 160
+    tilePixelHeight: 192
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3e9b3b',
+    accentColor: '#64c492',
+    height: 0,
+    atlasIndex: 0,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3d9b3b',
+    accentColor: '#64c494',
+    height: 0,
+    atlasIndex: 1,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b3b',
+    accentColor: '#64c496',
+    height: 0,
+    atlasIndex: 2,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b3d',
+    accentColor: '#64c497',
+    height: 0,
+    atlasIndex: 3,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b3e',
+    accentColor: '#64c499',
+    height: 0,
+    atlasIndex: 4,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b40',
+    accentColor: '#64c49a',
+    height: 0,
+    atlasIndex: 5,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b41',
+    accentColor: '#64c49c',
+    height: 0,
+    atlasIndex: 6,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b43',
+    accentColor: '#64c49e',
+    height: 0,
+    atlasIndex: 7,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b45',
+    accentColor: '#64c49f',
+    height: 0,
+    atlasIndex: 8,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b46',
+    accentColor: '#64c4a1',
+    height: 0,
+    atlasIndex: 9,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b48',
+    accentColor: '#64c4a2',
+    height: 0,
+    atlasIndex: 10,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b49',
+    accentColor: '#64c4a4',
+    height: 0,
+    atlasIndex: 11,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b4b',
+    accentColor: '#64c4a6',
+    height: 0,
+    atlasIndex: 12,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b4d',
+    accentColor: '#64c4a7',
+    height: 0,
+    atlasIndex: 13,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b4e',
+    accentColor: '#64c4a9',
+    height: 0,
+    atlasIndex: 14,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b50',
+    accentColor: '#64c4aa',
+    height: 0,
+    atlasIndex: 15,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b51',
+    accentColor: '#64c4ac',
+    height: 0,
+    atlasIndex: 16,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b53',
+    accentColor: '#64c4ae',
+    height: 0,
+    atlasIndex: 17,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b55',
+    accentColor: '#64c4af',
+    height: 0,
+    atlasIndex: 18,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b56',
+    accentColor: '#64c4b1',
+    height: 0,
+    atlasIndex: 19,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b58',
+    accentColor: '#64c4b2',
+    height: 0,
+    atlasIndex: 20,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b59',
+    accentColor: '#64c4b4',
+    height: 0,
+    atlasIndex: 21,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b5b',
+    accentColor: '#64c4b6',
+    height: 0,
+    atlasIndex: 22,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b5d',
+    accentColor: '#64c4b7',
+    height: 0,
+    atlasIndex: 23,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b5e',
+    accentColor: '#64c4b9',
+    height: 0,
+    atlasIndex: 24,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b60',
+    accentColor: '#64c4ba',
+    height: 0,
+    atlasIndex: 25,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b61',
+    accentColor: '#64c4bc',
+    height: 0,
+    atlasIndex: 26,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b63',
+    accentColor: '#64c4be',
+    height: 0,
+    atlasIndex: 27,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b65',
+    accentColor: '#64c4bf',
+    height: 0,
+    atlasIndex: 28,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b66',
+    accentColor: '#64c4c1',
+    height: 0,
+    atlasIndex: 29,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b68',
+    accentColor: '#64c4c2',
+    height: 0,
+    atlasIndex: 30,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b69',
+    accentColor: '#64c4c4',
+    height: 0,
+    atlasIndex: 31,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b6b',
+    accentColor: '#64c2c4',
+    height: 0,
+    atlasIndex: 32,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b6d',
+    accentColor: '#64c1c4',
+    height: 0,
+    atlasIndex: 33,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b6e',
+    accentColor: '#64bfc4',
+    height: 0,
+    atlasIndex: 34,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b70',
+    accentColor: '#64bec4',
+    height: 0,
+    atlasIndex: 35,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b72',
+    accentColor: '#64bcc4',
+    height: 0,
+    atlasIndex: 36,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b73',
+    accentColor: '#64bac4',
+    height: 0,
+    atlasIndex: 37,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b75',
+    accentColor: '#64b9c4',
+    height: 0,
+    atlasIndex: 38,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b76',
+    accentColor: '#64b7c4',
+    height: 0,
+    atlasIndex: 39,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b78',
+    accentColor: '#64b6c4',
+    height: 0,
+    atlasIndex: 40,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
+  },
+  '': {
+    code: '',
+    label: 'lodge-teal ',
+    walkable: true,
+    color: '#3b9b7a',
+    accentColor: '#64b4c4',
+    height: 0,
+    atlasIndex: 41,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96
   }
 };
 
@@ -4898,539 +4976,6 @@ export interface SavedPaintTileDatabaseEntry {
 }
 
 export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
-  {
-    id: 'blue-wall-window-1',
-    name: 'blue_wall_window',
-    primaryCode: '',
-    width: 2,
-    height: 2,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 722,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 723,
-        dx: 1,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 774,
-        dx: 0,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 775,
-        dx: 1,
-        dy: 1
-      }
-    ]
-  },
-  {
-    id: 'small-teal-fern-1',
-    name: 'small_teal_fern',
-    primaryCode: '',
-    width: 1,
-    height: 2,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 1147,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 1199,
-        dx: 0,
-        dy: 1
-      }
-    ]
-  },
-  {
-    id: 'beach-water-right-1',
-    name: 'beach_water_right',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 736,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'beach-water-bottom-right-1',
-    name: 'beach_water_bottom_right',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 788,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'wood-floor-1',
-    name: 'wood_floor',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 615,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'back-wall-top-1',
-    name: 'back_wall_top',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 459,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'tall-grass-1',
-    name: 'tall_grass',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 3,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'rock3-1',
-    name: 'rock3',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 15,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'rock4-1',
-    name: 'rock4',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 17,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'grass-blue-flowers-1',
-    name: 'grass_blue_flowers',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 998,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'small-fern-1',
-    name: 'small_fern',
-    primaryCode: '',
-    width: 1,
-    height: 2,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 1144,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 1196,
-        dx: 0,
-        dy: 1
-      }
-    ]
-  },
-  {
-    id: 'large-teal-fern-1',
-    name: 'large_teal_fern',
-    primaryCode: '',
-    width: 2,
-    height: 3,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 990,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 991,
-        dx: 1,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 1042,
-        dx: 0,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 1043,
-        dx: 1,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 1094,
-        dx: 0,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 1095,
-        dx: 1,
-        dy: 2
-      }
-    ]
-  },
-  {
-    id: 'water1-1',
-    name: 'water1',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 7,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'water3-1',
-    name: 'water3',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 9,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'ice-1',
-    name: 'ice',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 11,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'rock1-1',
-    name: 'rock1',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 12,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'rock2-1',
-    name: 'rock2',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 13,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'grass-red-flowers-1',
-    name: 'grass_red_flowers',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 997,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'beach-water-top-right-1',
-    name: 'beach_water_top_right',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 684,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'beach-water-bottom-1',
-    name: 'beach_water_bottom',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 787,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'forest-tree-middle-1',
-    name: 'Forest Tree Middle',
-    primaryCode: '',
-    width: 2,
-    height: 1,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 1197,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 1198,
-        dx: 1,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'palm-tree1-1',
-    name: 'palm_tree1',
-    primaryCode: '',
-    width: 2,
-    height: 3,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 994,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 995,
-        dx: 1,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 1046,
-        dx: 0,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 1047,
-        dx: 1,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 1098,
-        dx: 0,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 1099,
-        dx: 1,
-        dy: 2
-      }
-    ]
-  },
-  {
-    id: 'grass-1',
-    name: 'grass',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 0,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
   {
     id: 'sand-1',
     name: 'sand',
@@ -5466,6 +5011,725 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
         atlasIndex: 2,
         dx: 0,
         dy: 0
+      }
+    ]
+  },
+  {
+    id: 'lodge-teal-1',
+    name: 'lodge-teal',
+    primaryCode: '',
+    width: 6,
+    height: 7,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
+    tilePixelWidth: 112,
+    tilePixelHeight: 96,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 0,
+        dx: 0,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 1,
+        dx: 1,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 2,
+        dx: 2,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 3,
+        dx: 3,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 4,
+        dx: 4,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 5,
+        dx: 5,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 6,
+        dx: 0,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 7,
+        dx: 1,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 8,
+        dx: 2,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 9,
+        dx: 3,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 10,
+        dx: 4,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 11,
+        dx: 5,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 12,
+        dx: 0,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 13,
+        dx: 1,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 14,
+        dx: 2,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 15,
+        dx: 3,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 16,
+        dx: 4,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 17,
+        dx: 5,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 18,
+        dx: 0,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 19,
+        dx: 1,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 20,
+        dx: 2,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 21,
+        dx: 3,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 22,
+        dx: 4,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 23,
+        dx: 5,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 24,
+        dx: 0,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 25,
+        dx: 1,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 26,
+        dx: 2,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 27,
+        dx: 3,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 28,
+        dx: 4,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 29,
+        dx: 5,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 30,
+        dx: 0,
+        dy: 5
+      },
+      {
+        code: '',
+        atlasIndex: 31,
+        dx: 1,
+        dy: 5
+      },
+      {
+        code: '',
+        atlasIndex: 32,
+        dx: 2,
+        dy: 5
+      },
+      {
+        code: '',
+        atlasIndex: 33,
+        dx: 3,
+        dy: 5
+      },
+      {
+        code: '',
+        atlasIndex: 34,
+        dx: 4,
+        dy: 5
+      },
+      {
+        code: '',
+        atlasIndex: 35,
+        dx: 5,
+        dy: 5
+      },
+      {
+        code: '',
+        atlasIndex: 36,
+        dx: 0,
+        dy: 6
+      },
+      {
+        code: '',
+        atlasIndex: 37,
+        dx: 1,
+        dy: 6
+      },
+      {
+        code: '',
+        atlasIndex: 38,
+        dx: 2,
+        dy: 6
+      },
+      {
+        code: '',
+        atlasIndex: 39,
+        dx: 3,
+        dy: 6
+      },
+      {
+        code: '',
+        atlasIndex: 40,
+        dx: 4,
+        dy: 6
+      },
+      {
+        code: '',
+        atlasIndex: 41,
+        dx: 5,
+        dy: 6
+      }
+    ]
+  },
+  {
+    id: 'wall-bottom-left-1',
+    name: 'wall_bottom_left',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 666,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'water1-1',
+    name: 'water1',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 7,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'healer-2',
+    name: 'healer',
+    primaryCode: '',
+    width: 4,
+    height: 4,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
+    tilePixelWidth: 160,
+    tilePixelHeight: 192,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 0,
+        dx: 0,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 1,
+        dx: 1,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 2,
+        dx: 2,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 3,
+        dx: 3,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 4,
+        dx: 0,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 5,
+        dx: 1,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 6,
+        dx: 2,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 7,
+        dx: 3,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 8,
+        dx: 0,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 9,
+        dx: 1,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 10,
+        dx: 2,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 11,
+        dx: 3,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 12,
+        dx: 0,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 13,
+        dx: 1,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 14,
+        dx: 2,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 15,
+        dx: 3,
+        dy: 3
+      }
+    ]
+  },
+  {
+    id: 'large-purple-house-1',
+    name: 'large_purple_house',
+    primaryCode: '',
+    width: 7,
+    height: 7,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 399,
+        dx: 0,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 400,
+        dx: 1,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 401,
+        dx: 2,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 402,
+        dx: 3,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 403,
+        dx: 4,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 404,
+        dx: 5,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 405,
+        dx: 6,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 451,
+        dx: 0,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 452,
+        dx: 1,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 453,
+        dx: 2,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 454,
+        dx: 3,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 455,
+        dx: 4,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 456,
+        dx: 5,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 457,
+        dx: 6,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 503,
+        dx: 0,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 504,
+        dx: 1,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 505,
+        dx: 2,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 506,
+        dx: 3,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 507,
+        dx: 4,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 508,
+        dx: 5,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 509,
+        dx: 6,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 555,
+        dx: 0,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 556,
+        dx: 1,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 557,
+        dx: 2,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 558,
+        dx: 3,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 559,
+        dx: 4,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 560,
+        dx: 5,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 561,
+        dx: 6,
+        dy: 3
+      },
+      {
+        code: '',
+        atlasIndex: 607,
+        dx: 0,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 608,
+        dx: 1,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 609,
+        dx: 2,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 610,
+        dx: 3,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 611,
+        dx: 4,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 612,
+        dx: 5,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 613,
+        dx: 6,
+        dy: 4
+      },
+      {
+        code: '',
+        atlasIndex: 659,
+        dx: 0,
+        dy: 5
+      },
+      {
+        code: '',
+        atlasIndex: 660,
+        dx: 1,
+        dy: 5
+      },
+      {
+        code: '',
+        atlasIndex: 661,
+        dx: 2,
+        dy: 5
+      },
+      {
+        code: '',
+        atlasIndex: 662,
+        dx: 3,
+        dy: 5
+      },
+      {
+        code: '',
+        atlasIndex: 663,
+        dx: 4,
+        dy: 5
+      },
+      {
+        code: '',
+        atlasIndex: 664,
+        dx: 5,
+        dy: 5
+      },
+      {
+        code: '',
+        atlasIndex: 665,
+        dx: 6,
+        dy: 5
+      },
+      {
+        code: '',
+        atlasIndex: 711,
+        dx: 0,
+        dy: 6
+      },
+      {
+        code: '',
+        atlasIndex: 712,
+        dx: 1,
+        dy: 6
+      },
+      {
+        code: '',
+        atlasIndex: 713,
+        dx: 2,
+        dy: 6
+      },
+      {
+        code: '',
+        atlasIndex: 714,
+        dx: 3,
+        dy: 6
+      },
+      {
+        code: '',
+        atlasIndex: 715,
+        dx: 4,
+        dy: 6
+      },
+      {
+        code: '',
+        atlasIndex: 716,
+        dx: 5,
+        dy: 6
+      },
+      {
+        code: '',
+        atlasIndex: 717,
+        dx: 6,
+        dy: 6
       }
     ]
   },
@@ -5699,111 +5963,310 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
-    id: 'healer-1',
-    name: 'healer',
-    primaryCode: '',
-    width: 4,
-    height: 4,
+    id: 'grass-1',
+    name: 'grass',
+    primaryCode: '',
+    width: 1,
+    height: 1,
     ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/heal.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 160,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
     cells: [
       {
-        code: '',
+        code: '',
         atlasIndex: 0,
         dx: 0,
         dy: 0
-      },
+      }
+    ]
+  },
+  {
+    id: 'water3-1',
+    name: 'water3',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
       {
-        code: '',
-        atlasIndex: 1,
-        dx: 1,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 2,
-        dx: 2,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 3,
-        dx: 3,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 4,
-        dx: 0,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 5,
-        dx: 1,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 6,
-        dx: 2,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 7,
-        dx: 3,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 8,
-        dx: 0,
-        dy: 2
-      },
-      {
-        code: '',
+        code: '',
         atlasIndex: 9,
-        dx: 1,
-        dy: 2
-      },
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'ice-1',
+    name: 'ice',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
       {
-        code: '',
-        atlasIndex: 10,
-        dx: 2,
-        dy: 2
-      },
-      {
-        code: '',
+        code: '',
         atlasIndex: 11,
-        dx: 3,
-        dy: 2
-      },
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'rock1-1',
+    name: 'rock1',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
       {
-        code: '',
+        code: '',
         atlasIndex: 12,
         dx: 0,
-        dy: 3
-      },
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'rock2-1',
+    name: 'rock2',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
       {
-        code: '',
+        code: '',
         atlasIndex: 13,
-        dx: 1,
-        dy: 3
-      },
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'rock3-1',
+    name: 'rock3',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
       {
-        code: '',
-        atlasIndex: 14,
-        dx: 2,
-        dy: 3
-      },
-      {
-        code: '',
+        code: '',
         atlasIndex: 15,
-        dx: 3,
-        dy: 3
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'rock4-1',
+    name: 'rock4',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 17,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'grass-blue-flowers-1',
+    name: 'grass_blue_flowers',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 998,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'wood-floor-1',
+    name: 'wood_floor',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 615,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'small-fern-1',
+    name: 'small_fern',
+    primaryCode: '',
+    width: 1,
+    height: 2,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1144,
+        dx: 0,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 1196,
+        dx: 0,
+        dy: 1
+      }
+    ]
+  },
+  {
+    id: 'large-teal-fern-1',
+    name: 'large_teal_fern',
+    primaryCode: '',
+    width: 2,
+    height: 3,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 990,
+        dx: 0,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 991,
+        dx: 1,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 1042,
+        dx: 0,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 1043,
+        dx: 1,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 1094,
+        dx: 0,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 1095,
+        dx: 1,
+        dy: 2
+      }
+    ]
+  },
+  {
+    id: 'small-teal-fern-1',
+    name: 'small_teal_fern',
+    primaryCode: '',
+    width: 1,
+    height: 2,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1147,
+        dx: 0,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 1199,
+        dx: 0,
+        dy: 1
+      }
+    ]
+  },
+  {
+    id: 'grass-red-flowers-1',
+    name: 'grass_red_flowers',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 997,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'beach-water-top-right-1',
+    name: 'beach_water_top_right',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 684,
+        dx: 0,
+        dy: 0
       }
     ]
   },
@@ -5933,10 +6396,153 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
-    id: 'wall-bottom-left-1',
-    name: 'wall_bottom_left',
-    primaryCode: '',
+    id: 'palm-tree1-1',
+    name: 'palm_tree1',
+    primaryCode: '',
+    width: 2,
+    height: 3,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 994,
+        dx: 0,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 995,
+        dx: 1,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 1046,
+        dx: 0,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 1047,
+        dx: 1,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 1098,
+        dx: 0,
+        dy: 2
+      },
+      {
+        code: '',
+        atlasIndex: 1099,
+        dx: 1,
+        dy: 2
+      }
+    ]
+  },
+  {
+    id: 'beach-water-bottom-1',
+    name: 'beach_water_bottom',
+    primaryCode: '',
     width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 787,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'back-wall-top-1',
+    name: 'back_wall_top',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 459,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'blue-wall-window-1',
+    name: 'blue_wall_window',
+    primaryCode: '',
+    width: 2,
+    height: 2,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 722,
+        dx: 0,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 723,
+        dx: 1,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 774,
+        dx: 0,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 775,
+        dx: 1,
+        dy: 1
+      }
+    ]
+  },
+  {
+    id: 'tall-grass-1',
+    name: 'tall_grass',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 3,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-middle-1',
+    name: 'Forest Tree Middle',
+    primaryCode: '',
+    width: 2,
     height: 1,
     ySortWithActors: true,
     tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
@@ -5944,8 +6550,52 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     tilePixelHeight: 16,
     cells: [
       {
-        code: '',
-        atlasIndex: 666,
+        code: '',
+        atlasIndex: 1197,
+        dx: 0,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 1198,
+        dx: 1,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'beach-water-right-1',
+    name: 'beach_water_right',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 736,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'beach-water-bottom-right-1',
+    name: 'beach_water_bottom_right',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 788,
         dx: 0,
         dy: 0
       }
@@ -6066,235 +6716,6 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
-    id: 'lodge-1',
-    name: 'lodge',
-    primaryCode: '',
-    width: 6,
-    height: 6,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/throwaway.png',
-    tilePixelWidth: 112,
-    tilePixelHeight: 112,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 0,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 1,
-        dx: 1,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 2,
-        dx: 2,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 3,
-        dx: 3,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 4,
-        dx: 4,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 5,
-        dx: 5,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 6,
-        dx: 0,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 7,
-        dx: 1,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 8,
-        dx: 2,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 9,
-        dx: 3,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 10,
-        dx: 4,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 11,
-        dx: 5,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 12,
-        dx: 0,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 13,
-        dx: 1,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 14,
-        dx: 2,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 15,
-        dx: 3,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 16,
-        dx: 4,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 17,
-        dx: 5,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 18,
-        dx: 0,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 19,
-        dx: 1,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 20,
-        dx: 2,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 21,
-        dx: 3,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 22,
-        dx: 4,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 23,
-        dx: 5,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 24,
-        dx: 0,
-        dy: 4
-      },
-      {
-        code: '',
-        atlasIndex: 25,
-        dx: 1,
-        dy: 4
-      },
-      {
-        code: '',
-        atlasIndex: 26,
-        dx: 2,
-        dy: 4
-      },
-      {
-        code: '',
-        atlasIndex: 27,
-        dx: 3,
-        dy: 4
-      },
-      {
-        code: '',
-        atlasIndex: 28,
-        dx: 4,
-        dy: 4
-      },
-      {
-        code: '',
-        atlasIndex: 29,
-        dx: 5,
-        dy: 4
-      },
-      {
-        code: '',
-        atlasIndex: 30,
-        dx: 0,
-        dy: 5
-      },
-      {
-        code: '',
-        atlasIndex: 31,
-        dx: 1,
-        dy: 5
-      },
-      {
-        code: '',
-        atlasIndex: 32,
-        dx: 2,
-        dy: 5
-      },
-      {
-        code: '',
-        atlasIndex: 33,
-        dx: 3,
-        dy: 5
-      },
-      {
-        code: '',
-        atlasIndex: 34,
-        dx: 4,
-        dy: 5
-      },
-      {
-        code: '',
-        atlasIndex: 35,
-        dx: 5,
-        dy: 5
-      }
-    ]
-  },
-  {
     id: 'right-wall-1',
     name: 'right_wall',
     primaryCode: '',
@@ -6352,28 +6773,9 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
-    id: 'wall-top-1',
-    name: 'wall_top',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 407,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'water4-1',
-    name: 'water4',
-    primaryCode: '',
+    id: 'grass-path-top-right-1',
+    name: 'grass_path_top_right',
+    primaryCode: '',
     width: 1,
     height: 1,
     ySortWithActors: false,
@@ -6382,8 +6784,8 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     tilePixelHeight: 16,
     cells: [
       {
-        code: '',
-        atlasIndex: 10,
+        code: '',
+        atlasIndex: 54,
         dx: 0,
         dy: 0
       }
@@ -6403,6 +6805,25 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
       {
         code: '',
         atlasIndex: 158,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'grass-path-bottom-1',
+    name: 'grass_path_bottom',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 157,
         dx: 0,
         dy: 0
       }
@@ -6477,63 +6898,6 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
-    id: 'teal-tall-grass-1',
-    name: 'teal_tall_grass',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 5,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'grass-path-bottom-1',
-    name: 'grass_path_bottom',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 157,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'grass-path-top-right-1',
-    name: 'grass_path_top_right',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 54,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
     id: 'right-wall-back-1',
     name: 'right_wall_back',
     primaryCode: '',
@@ -6572,6 +6936,63 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
+    id: 'wall-top-1',
+    name: 'wall_top',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 407,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'teal-tall-grass-1',
+    name: 'teal_tall_grass',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 5,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'water4-1',
+    name: 'water4',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 10,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
     id: 'forest-tree-middle-left-1',
     name: 'Forest Tree Middle Left',
     primaryCode: '',
@@ -6604,50 +7025,6 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
       {
         code: '',
         atlasIndex: 1198,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'forest-tree-top-1',
-    name: 'Forest Tree Top',
-    primaryCode: '',
-    width: 2,
-    height: 1,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 1145,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 1146,
-        dx: 1,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'forest-tree-top-left-1',
-    name: 'Forest Tree Top Left',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 1145,
         dx: 0,
         dy: 0
       }
@@ -6711,44 +7088,6 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
-    id: 'sand-tall-grass-1',
-    name: 'sand_tall_grass',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 4,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'tall-grass2-1',
-    name: 'tall_grass2',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 6,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
     id: 'forest-tree-base-1',
     name: 'Forest Tree Base',
     primaryCode: '',
@@ -6769,6 +7108,25 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
         code: '',
         atlasIndex: 1250,
         dx: 1,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'path-1',
+    name: 'path',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1,
+        dx: 0,
         dy: 0
       }
     ]
@@ -7081,9 +7439,9 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
-    id: 'path-1',
-    name: 'path',
-    primaryCode: '',
+    id: 'sand-tall-grass-1',
+    name: 'sand_tall_grass',
+    primaryCode: '',
     width: 1,
     height: 1,
     ySortWithActors: false,
@@ -7092,8 +7450,171 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     tilePixelHeight: 16,
     cells: [
       {
-        code: '',
-        atlasIndex: 1,
+        code: '',
+        atlasIndex: 4,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'tall-grass2-1',
+    name: 'tall_grass2',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 6,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-top-1',
+    name: 'Forest Tree Top',
+    primaryCode: '',
+    width: 2,
+    height: 1,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1145,
+        dx: 0,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 1146,
+        dx: 1,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'forest-tree-top-left-1',
+    name: 'Forest Tree Top Left',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1145,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'palm-bush-1',
+    name: 'palm_bush',
+    primaryCode: '',
+    width: 1,
+    height: 2,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1048,
+        dx: 0,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 1100,
+        dx: 0,
+        dy: 1
+      }
+    ]
+  },
+  {
+    id: 'grass-3-red-flower-1',
+    name: 'grass_3_red_flower',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 1101,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'table-1',
+    name: 'table',
+    primaryCode: '',
+    width: 2,
+    height: 2,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 718,
+        dx: 0,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 719,
+        dx: 1,
+        dy: 0
+      },
+      {
+        code: '',
+        atlasIndex: 770,
+        dx: 0,
+        dy: 1
+      },
+      {
+        code: '',
+        atlasIndex: 771,
+        dx: 1,
+        dy: 1
+      }
+    ]
+  },
+  {
+    id: 'grass-path-right-1',
+    name: 'grass_path_right',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 106,
         dx: 0,
         dy: 0
       }
@@ -7278,62 +7799,6 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
         atlasIndex: 1074,
         dx: 4,
         dy: 4
-      }
-    ]
-  },
-  {
-    id: 'table-1',
-    name: 'table',
-    primaryCode: '',
-    width: 2,
-    height: 2,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 718,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 719,
-        dx: 1,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 770,
-        dx: 0,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 771,
-        dx: 1,
-        dy: 1
-      }
-    ]
-  },
-  {
-    id: 'grass-path-right-1',
-    name: 'grass_path_right',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 106,
-        dx: 0,
-        dy: 0
       }
     ]
   },
@@ -7550,50 +8015,6 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
-    id: 'palm-bush-1',
-    name: 'palm_bush',
-    primaryCode: '',
-    width: 1,
-    height: 2,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 1048,
-        dx: 0,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 1100,
-        dx: 0,
-        dy: 1
-      }
-    ]
-  },
-  {
-    id: 'grass-3-red-flower-1',
-    name: 'grass_3_red_flower',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 1101,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
     id: 'houseplant-1',
     name: 'houseplant',
     primaryCode: '',
@@ -7657,267 +8078,40 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
-    id: 'lodge-2-1',
-    name: 'lodge-2',
-    primaryCode: '',
-    width: 6,
-    height: 7,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/lodge-house2.png',
-    tilePixelWidth: 160,
-    tilePixelHeight: 96,
+    id: 'beach-water-top-1',
+    name: 'beach_water_top',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
     cells: [
       {
-        code: '',
-        atlasIndex: 0,
+        code: '',
+        atlasIndex: 683,
         dx: 0,
         dy: 0
-      },
+      }
+    ]
+  },
+  {
+    id: 'grass-path-top-1',
+    name: 'grass_path_top',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
       {
-        code: '',
-        atlasIndex: 1,
-        dx: 1,
+        code: '',
+        atlasIndex: 53,
+        dx: 0,
         dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 2,
-        dx: 2,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 3,
-        dx: 3,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 4,
-        dx: 4,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 5,
-        dx: 5,
-        dy: 0
-      },
-      {
-        code: '',
-        atlasIndex: 6,
-        dx: 0,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 7,
-        dx: 1,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 8,
-        dx: 2,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 9,
-        dx: 3,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 10,
-        dx: 4,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 11,
-        dx: 5,
-        dy: 1
-      },
-      {
-        code: '',
-        atlasIndex: 12,
-        dx: 0,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 13,
-        dx: 1,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 14,
-        dx: 2,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 15,
-        dx: 3,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 16,
-        dx: 4,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 17,
-        dx: 5,
-        dy: 2
-      },
-      {
-        code: '',
-        atlasIndex: 18,
-        dx: 0,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 19,
-        dx: 1,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 20,
-        dx: 2,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 21,
-        dx: 3,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 22,
-        dx: 4,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 23,
-        dx: 5,
-        dy: 3
-      },
-      {
-        code: '',
-        atlasIndex: 24,
-        dx: 0,
-        dy: 4
-      },
-      {
-        code: '',
-        atlasIndex: 25,
-        dx: 1,
-        dy: 4
-      },
-      {
-        code: '',
-        atlasIndex: 26,
-        dx: 2,
-        dy: 4
-      },
-      {
-        code: '',
-        atlasIndex: 27,
-        dx: 3,
-        dy: 4
-      },
-      {
-        code: '',
-        atlasIndex: 28,
-        dx: 4,
-        dy: 4
-      },
-      {
-        code: '',
-        atlasIndex: 29,
-        dx: 5,
-        dy: 4
-      },
-      {
-        code: '',
-        atlasIndex: 30,
-        dx: 0,
-        dy: 5
-      },
-      {
-        code: '',
-        atlasIndex: 31,
-        dx: 1,
-        dy: 5
-      },
-      {
-        code: '',
-        atlasIndex: 32,
-        dx: 2,
-        dy: 5
-      },
-      {
-        code: '',
-        atlasIndex: 33,
-        dx: 3,
-        dy: 5
-      },
-      {
-        code: '',
-        atlasIndex: 34,
-        dx: 4,
-        dy: 5
-      },
-      {
-        code: '',
-        atlasIndex: 35,
-        dx: 5,
-        dy: 5
-      },
-      {
-        code: '',
-        atlasIndex: 36,
-        dx: 0,
-        dy: 6
-      },
-      {
-        code: '',
-        atlasIndex: 37,
-        dx: 1,
-        dy: 6
-      },
-      {
-        code: '',
-        atlasIndex: 38,
-        dx: 2,
-        dy: 6
-      },
-      {
-        code: '',
-        atlasIndex: 39,
-        dx: 3,
-        dy: 6
-      },
-      {
-        code: '',
-        atlasIndex: 40,
-        dx: 4,
-        dy: 6
-      },
-      {
-        code: '',
-        atlasIndex: 41,
-        dx: 5,
-        dy: 6
       }
     ]
   },
@@ -8085,120 +8279,6 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
     ]
   },
   {
-    id: 'beach-water-top-1',
-    name: 'beach_water_top',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 683,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'wood-floor-back-1',
-    name: 'wood_floor_back',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 563,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'left-wall-back-1',
-    name: 'left_wall_back',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 562,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'grass-path-top-left-1',
-    name: 'grass_path_top_left',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 52,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'grass-path-top-1',
-    name: 'grass_path_top',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: false,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 53,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
-    id: 'wall-bottom-right-1',
-    name: 'wall_bottom_right',
-    primaryCode: '',
-    width: 1,
-    height: 1,
-    ySortWithActors: true,
-    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
-    tilePixelWidth: 16,
-    tilePixelHeight: 16,
-    cells: [
-      {
-        code: '',
-        atlasIndex: 668,
-        dx: 0,
-        dy: 0
-      }
-    ]
-  },
-  {
     id: 'large-teal-forest-tree-1',
     name: 'large_teal_forest_tree',
     primaryCode: '',
@@ -8244,6 +8324,82 @@ export const SAVED_PAINT_TILE_DATABASE: SavedPaintTileDatabaseEntry[] = [
         atlasIndex: 1253,
         dx: 1,
         dy: 2
+      }
+    ]
+  },
+  {
+    id: 'wood-floor-back-1',
+    name: 'wood_floor_back',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 563,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'left-wall-back-1',
+    name: 'left_wall_back',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 562,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'wall-bottom-right-1',
+    name: 'wall_bottom_right',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: true,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 668,
+        dx: 0,
+        dy: 0
+      }
+    ]
+  },
+  {
+    id: 'grass-path-top-left-1',
+    name: 'grass_path_top_left',
+    primaryCode: '',
+    width: 1,
+    height: 1,
+    ySortWithActors: false,
+    tilesetUrl: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/tilesets/tileset.png',
+    tilePixelWidth: 16,
+    tilePixelHeight: 16,
+    cells: [
+      {
+        code: '',
+        atlasIndex: 52,
+        dx: 0,
+        dy: 0
       }
     ]
   }

@@ -18,7 +18,7 @@ export const germaniaFishingLodgeMap = createMap({
         '',
         '',
         '',
-        ''
+        ''
       ],
       collisionEdges: [
         '20000000008',
@@ -56,31 +56,31 @@ export const germaniaFishingLodgeMap = createMap({
   warps: [
     {
       id: 'germania_fishing_lodge_warp_1',
-      from: {
-        x: 5,
-        y: 10
-      },
-      fromPositions: [
-        {
-          x: 5,
-          y: 10
-        }
-      ],
-      toMapId: 'germania',
       to: {
         x: 9,
         y: 9
       },
+      from: {
+        x: 5,
+        y: 10
+      },
+      label: 'To Germania',
+      toMapId: 'germania',
+      toFacing: 'down',
       toPositions: [
         {
           x: 9,
           y: 9
         }
       ],
-      requireInteract: false,
+      fromPositions: [
+        {
+          x: 5,
+          y: 10
+        }
+      ],
       requiredFacing: 'down',
-      label: 'To Germania',
-      toFacing: 'down'
+      requireInteract: false
     }
   ]
 });

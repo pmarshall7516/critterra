@@ -7,6 +7,7 @@ import {
   MAX_SQUAD_SLOTS,
   PLAYER_CRITTER_PROGRESS_VERSION,
   STARTING_UNLOCKED_SQUAD_SLOTS,
+  isKnockoutMissionType,
   type CritterAbilityDefinition,
   type CritterAbilityKind,
   type CritterDefinition,
@@ -544,18 +545,30 @@ function sanitizeLevelMission(raw: unknown, index: number, level: number): Critt
       ? clampInt(record.ascendsFromCritterId, 1, 999999, 1)
       : undefined;
   const knockoutElements =
-    type === 'opposing_knockouts'
+    isKnockoutMissionType(type)
       ? sanitizeStringArray(record.knockoutElements, CRITTER_ELEMENTS.length)
           .map((entry) => entry.toLowerCase())
           .filter((entry): entry is CritterElement => ELEMENT_SET.has(entry as CritterElement))
       : [];
   const knockoutCritterIds =
-    type === 'opposing_knockouts'
+    isKnockoutMissionType(type)
       ? [
           ...new Set(
             sanitizeNumberArray(record.knockoutCritterIds, 60).map((entry) => clampInt(entry, 1, 999999, 1)),
           ),
         ]
+      : [];
+  const requiredEquippedItemCount =
+    type === 'opposing_knockouts_with_item'
+      ? clampInt(record.requiredEquippedItemCount, 1, 8, 1)
+      : undefined;
+  const requiredEquippedItemIds =
+    type === 'opposing_knockouts_with_item'
+      ? sanitizeStringArray(record.requiredEquippedItemIds, 60)
+      : [];
+  const requiredHealingItemIds =
+    type === 'heal_critter'
+      ? sanitizeStringArray(record.requiredHealingItemIds, 60)
       : [];
   const storyFlagId = type === 'story_flag' ? sanitizeStoryFlagId(record.storyFlagId) : undefined;
   const label = type === 'story_flag' ? sanitizeMissionLabel(record.label) : undefined;
@@ -569,6 +582,9 @@ function sanitizeLevelMission(raw: unknown, index: number, level: number): Critt
     ascendsFromCritterId,
     knockoutElements: allowKnockoutElements ? knockoutElements : [],
     knockoutCritterIds,
+    requiredEquippedItemCount,
+    requiredEquippedItemIds,
+    requiredHealingItemIds,
     storyFlagId,
     label,
   };

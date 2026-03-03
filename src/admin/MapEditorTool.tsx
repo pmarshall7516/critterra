@@ -5,6 +5,7 @@ import {
   type NpcSpriteLibraryEntry,
 } from '@/game/world/npcCatalog';
 import { BLANK_TILE_CODE, TILE_DEFINITIONS } from '@/game/world/tiles';
+import { atlasIndexToColumnRow } from '@/game/world/atlasCoords';
 import { sanitizeCritterDatabase } from '@/game/critters/schema';
 import { getAdminDbValue, setAdminDbValue } from '@/admin/indexedDbStore';
 import { sanitizeEncounterTableLibrary } from '@/game/encounters/schema';
@@ -1859,14 +1860,12 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   };
 
   useEffect(() => {
-    if (section === 'full' || hasAutoLoadedLibrariesRef.current) {
+    if (hasAutoLoadedLibrariesRef.current) {
       return;
     }
-
-    if (isMapSection || isNpcsSection || isNpcCharactersSection) {
+    const needMapsOrTiles = isMapSection || isTilesSection || section === 'full';
+    if (needMapsOrTiles) {
       void loadSourceMapsFromDatabase();
-    }
-    if (isMapSection || isTilesSection || isNpcsSection) {
       void loadSavedPaintTilesFromDatabase();
     }
     if (isMapSection || isNpcsSection || isNpcSpritesSection || isNpcCharactersSection) {
@@ -4624,8 +4623,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     }
 
     const safeIndex = clampInt(atlasIndex, 0, Math.max(0, atlasCellCount - 1));
-    const column = safeIndex % atlasMeta.columns;
-    const row = Math.floor(safeIndex / atlasMeta.columns);
+    const { column, row } = atlasIndexToColumnRow(safeIndex, atlasMeta.columns);
 
     return {
       backgroundImage: `url(${tilesetUrl})`,
@@ -4648,8 +4646,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
         const rows = Math.floor(dims.height / th);
         if (columns > 0 && rows > 0) {
           const safeIndex = clampInt(cell.atlasIndex, 0, columns * rows - 1);
-          const column = safeIndex % columns;
-          const row = Math.floor(safeIndex / columns);
+          const { column, row } = atlasIndexToColumnRow(safeIndex, columns);
           return {
             backgroundImage: `url(${url})`,
             backgroundRepeat: 'no-repeat',
@@ -4741,8 +4738,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           0,
           Math.max(0, tileRenderSource.columns * tileRenderSource.rows - 1),
         );
-        const column = safeIndex % tileRenderSource.columns;
-        const row = Math.floor(safeIndex / tileRenderSource.columns);
+        const { column, row } = atlasIndexToColumnRow(safeIndex, tileRenderSource.columns);
         return withRotationAndMirror({
           ...fallback,
           backgroundImage: `url(${tileRenderSource.tilesetUrl})`,
@@ -9130,10 +9126,8 @@ function buildAtlasSelectionRect(
   const safeStart = clampInt(startIndex, 0, maxIndex);
   const safeEnd = clampInt(endIndex, 0, maxIndex);
 
-  const startCol = safeStart % columns;
-  const startRow = Math.floor(safeStart / columns);
-  const endCol = safeEnd % columns;
-  const endRow = Math.floor(safeEnd / columns);
+  const { column: startCol, row: startRow } = atlasIndexToColumnRow(safeStart, columns);
+  const { column: endCol, row: endRow } = atlasIndexToColumnRow(safeEnd, columns);
 
   const minCol = Math.min(startCol, endCol);
   const maxCol = Math.max(startCol, endCol);
@@ -9155,8 +9149,8 @@ function isAtlasCellInRect(rect: AtlasSelectionRect | null, atlasIndex: number, 
     return false;
   }
 
-  const col = atlasIndex % columns;
-  const row = Math.floor(atlasIndex / columns);
+  const col = atlasIndexToColumnRow(atlasIndex, columns).column;
+  const row = atlasIndexToColumnRow(atlasIndex, columns).row;
   return col >= rect.minCol && col <= rect.maxCol && row >= rect.minRow && row <= rect.maxRow;
 }
 

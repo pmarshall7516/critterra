@@ -16,7 +16,7 @@ export const germaniaShopMap = createMap({
         '',
         '',
         '',
-        ''
+        ''
       ],
       rotations: [
         '000000000',
@@ -61,31 +61,31 @@ export const germaniaShopMap = createMap({
   warps: [
     {
       id: 'germania_shop_warp_1',
-      from: {
-        x: 4,
-        y: 8
-      },
-      fromPositions: [
-        {
-          x: 4,
-          y: 8
-        }
-      ],
-      toMapId: 'germania',
       to: {
         x: 17,
         y: 17
       },
+      from: {
+        x: 4,
+        y: 8
+      },
+      label: 'To Germania',
+      toMapId: 'germania',
+      toFacing: 'down',
       toPositions: [
         {
           x: 17,
           y: 17
         }
       ],
-      requireInteract: false,
+      fromPositions: [
+        {
+          x: 4,
+          y: 8
+        }
+      ],
       requiredFacing: 'down',
-      label: 'To Germania',
-      toFacing: 'down'
+      requireInteract: false
     }
   ]
 });

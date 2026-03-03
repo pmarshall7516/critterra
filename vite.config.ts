@@ -1105,7 +1105,15 @@ function parseSavedPaintTiles(raw: unknown): SavedPaintTilePayload[] {
 const CRITTER_ELEMENT_OPTIONS = new Set(['bloom', 'ember', 'tide', 'gust', 'stone', 'spark', 'shade', 'normal']);
 const CRITTER_RARITY_OPTIONS = new Set(['common', 'uncommon', 'rare', 'legendary']);
 const CRITTER_ABILITY_KIND_OPTIONS = new Set(['passive', 'active']);
-const CRITTER_MISSION_TYPE_OPTIONS = new Set(['opposing_knockouts', 'ascension', 'story_flag']);
+const CRITTER_MISSION_TYPE_OPTIONS = new Set([
+  'opposing_knockouts',
+  'opposing_knockouts_with_item',
+  'use_guard',
+  'swap_in',
+  'heal_critter',
+  'ascension',
+  'story_flag',
+]);
 const BUDDO_NAME = 'buddo';
 const BUDDO_STORY_MISSION_ID = 'select-bloom-partner-critter';
 const BUDDO_STORY_FLAG_ID = 'selected-bloom-starter';
@@ -1349,7 +1357,7 @@ function parseCritterLevelMissions(raw: unknown, level: number): Array<Record<st
       }
       mission.targetValue = 1;
     }
-    if (type === 'opposing_knockouts') {
+    if (type === 'opposing_knockouts' || type === 'opposing_knockouts_with_item') {
       const knockoutElements = Array.isArray(record.knockoutElements)
         ? record.knockoutElements
             .filter((entry): entry is string => typeof entry === 'string')
@@ -1367,6 +1375,31 @@ function parseCritterLevelMissions(raw: unknown, level: number): Array<Record<st
         mission.knockoutCritterIds = knockoutCritterIds;
       } else if (knockoutElements.length > 0) {
         mission.knockoutElements = knockoutElements;
+      }
+      if (type === 'opposing_knockouts_with_item') {
+        mission.requiredEquippedItemCount = critterClampInt(record.requiredEquippedItemCount, 1, 8, 1);
+        const requiredEquippedItemIds = Array.isArray(record.requiredEquippedItemIds)
+          ? record.requiredEquippedItemIds
+              .filter((entry): entry is string => typeof entry === 'string')
+              .map((entry) => entry.trim())
+              .filter((entry, index, values) => entry.length > 0 && values.indexOf(entry) === index)
+              .slice(0, 60)
+          : [];
+        if (requiredEquippedItemIds.length > 0) {
+          mission.requiredEquippedItemIds = requiredEquippedItemIds;
+        }
+      }
+    }
+    if (type === 'heal_critter') {
+      const requiredHealingItemIds = Array.isArray(record.requiredHealingItemIds)
+        ? record.requiredHealingItemIds
+            .filter((entry): entry is string => typeof entry === 'string')
+            .map((entry) => entry.trim())
+            .filter((entry, index, values) => entry.length > 0 && values.indexOf(entry) === index)
+            .slice(0, 60)
+        : [];
+      if (requiredHealingItemIds.length > 0) {
+        mission.requiredHealingItemIds = requiredHealingItemIds;
       }
     }
     parsed.push(mission);
@@ -2549,10 +2582,20 @@ function buildCustomTileDefinitions(savedPaintTiles: SavedPaintTilePayload[]): R
     const tilePixelWidth = typeof tile.tilePixelWidth === 'number' && Number.isFinite(tile.tilePixelWidth) ? Math.max(1, Math.floor(tile.tilePixelWidth)) : undefined;
     const tilePixelHeight = typeof tile.tilePixelHeight === 'number' && Number.isFinite(tile.tilePixelHeight) ? Math.max(1, Math.floor(tile.tilePixelHeight)) : undefined;
     const cells = Array.isArray(tile.cells) ? tile.cells : [];
+    const hasPerTileTileset = Boolean(tilesetUrl && tilePixelWidth && tilePixelHeight);
+
     for (const cell of cells) {
       const code = typeof cell.code === 'string' ? cell.code.trim().slice(0, 1) : '';
       const atlasIndex = typeof cell.atlasIndex === 'number' ? Math.max(0, Math.floor(cell.atlasIndex)) : 0;
-      if (!code || BASE_TILE_CODES.has(code) || customEntries.has(code)) {
+      if (!code || BASE_TILE_CODES.has(code)) {
+        continue;
+      }
+      const existing = customEntries.get(code);
+      const existingHasTileset = Boolean(existing?.tilesetUrl && existing?.tilePixelWidth && existing?.tilePixelHeight);
+      if (existing && !hasPerTileTileset && existingHasTileset) {
+        continue;
+      }
+      if (existing && hasPerTileTileset === existingHasTileset) {
         continue;
       }
       customEntries.set(code, {

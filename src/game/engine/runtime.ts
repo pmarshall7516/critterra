@@ -15,6 +15,7 @@ import {
 } from '@/game/critters/schema';
 import {
   MAX_SQUAD_SLOTS,
+  isKnockoutMissionType,
   type CritterDefinition,
   type CritterElement,
   type CritterStats,
@@ -39,6 +40,7 @@ import type {
   EncounterTableItemEntry,
 } from '@/game/encounters/types';
 import { collisionEdgeMaskAt, createMap, isInsideMap, tileAt } from '@/game/world/mapBuilder';
+import { atlasIndexToColumnRow } from '@/game/world/atlasCoords';
 import { CUSTOM_TILESET_CONFIG, type CustomTilesetConfig } from '@/game/world/customTiles';
 import { PLAYER_SPRITE_CONFIG } from '@/game/world/playerSprite';
 import { BASE_TILE_DEFINITIONS, BLANK_TILE_CODE, FALLBACK_TILE_CODE, TILE_DEFINITIONS } from '@/game/world/tiles';
@@ -491,6 +493,11 @@ export interface RuntimeSnapshot {
         knockoutElements?: string[];
         knockoutCritterIds?: number[];
         knockoutCritterNames?: string[];
+        requiredEquippedItemCount?: number;
+        requiredEquippedItemIds?: string[];
+        requiredEquippedItemNames?: string[];
+        requiredHealingItemIds?: string[];
+        requiredHealingItemNames?: string[];
       }>;
     };
     squadSlots: Array<{
@@ -588,6 +595,11 @@ export interface RuntimeSnapshot {
           knockoutElements?: string[];
           knockoutCritterIds?: number[];
           knockoutCritterNames?: string[];
+          requiredEquippedItemCount?: number;
+          requiredEquippedItemIds?: string[];
+          requiredEquippedItemNames?: string[];
+          requiredHealingItemIds?: string[];
+          requiredHealingItemNames?: string[];
           storyFlagId?: string;
           label?: string;
         }>;
@@ -609,6 +621,11 @@ export interface RuntimeSnapshot {
           knockoutElements?: string[];
           knockoutCritterIds?: number[];
           knockoutCritterNames?: string[];
+          requiredEquippedItemCount?: number;
+          requiredEquippedItemIds?: string[];
+          requiredEquippedItemNames?: string[];
+          requiredHealingItemIds?: string[];
+          requiredHealingItemNames?: string[];
           storyFlagId?: string;
           label?: string;
         }>;
@@ -2138,11 +2155,17 @@ export class GameRuntime {
       battle.pendingForcedSwap = false;
       battle.phase = 'player-turn';
       battle.logLine = `${selected.name} stepped in after the knockout.`;
+      if (this.incrementSimpleCritterMissionProgress(selected.critterId, (mission) => mission.type === 'swap_in')) {
+        this.markProgressDirty();
+      }
       return true;
     }
 
     battle.phase = 'player-turn';
     battle.turnNumber += 1;
+    if (this.incrementSimpleCritterMissionProgress(selected.critterId, (mission) => mission.type === 'swap_in')) {
+      this.markProgressDirty();
+    }
     const previousName =
       previousIndex !== null && battle.playerTeam[previousIndex] ? battle.playerTeam[previousIndex].name : 'Critter';
     this.resolveOpponentCounterAfterSwap(battle, previousName, selected.name);
@@ -2907,8 +2930,7 @@ export class GameRuntime {
         ) {
           return false;
         }
-        const column = tile.atlasIndex % cached.columns;
-        const row = Math.floor(tile.atlasIndex / cached.columns);
+        const { column, row } = atlasIndexToColumnRow(tile.atlasIndex, cached.columns);
         const sourceX = column * cached.sourceCellWidth;
         const sourceY = row * cached.sourceCellHeight;
         ctx.imageSmoothingEnabled = false;
@@ -2967,8 +2989,7 @@ export class GameRuntime {
       return false;
     }
 
-    const column = tile.atlasIndex % this.tilesetColumns;
-    const row = Math.floor(tile.atlasIndex / this.tilesetColumns);
+    const { column, row } = atlasIndexToColumnRow(tile.atlasIndex, this.tilesetColumns);
     const sourceX = column * this.tilesetSourceCellWidth;
     const sourceY = row * this.tilesetSourceCellHeight;
 
@@ -4477,6 +4498,10 @@ export class GameRuntime {
     }
 
     progress.currentHp = currentHp + appliedHeal;
+    this.incrementSimpleCritterMissionProgress(
+      critterId,
+      (mission) => mission.type === 'heal_critter' && this.matchesHealCritterMissionItem(mission, item.id),
+    );
     this.markProgressDirty();
     const fallbackText = effect.curesStatus
       ? `${critter.name} recovered ${appliedHeal} HP and feels refreshed.`
@@ -5030,6 +5055,9 @@ export class GameRuntime {
       const guardSucceeded = Math.random() < guardSuccessChance;
       if (guardSucceeded) {
         player.consecutiveSuccessfulGuardCount += 1;
+        if (this.incrementSimpleCritterMissionProgress(player.critterId, (mission) => mission.type === 'use_guard')) {
+          this.markProgressDirty();
+        }
       } else {
         player.consecutiveSuccessfulGuardCount = 0;
       }
@@ -6676,7 +6704,7 @@ export class GameRuntime {
       return null;
     }
     const knockoutMissions = levelRow.missions.filter(
-      (entry): entry is CritterLevelMissionRequirement => entry.type === 'opposing_knockouts',
+      (entry): entry is CritterLevelMissionRequirement => isKnockoutMissionType(entry.type),
     );
     if (knockoutMissions.length === 0) {
       return null;
@@ -6711,6 +6739,47 @@ export class GameRuntime {
     return true;
   }
 
+  private incrementSimpleCritterMissionProgress(
+    critterId: number,
+    missionMatcher: (mission: CritterLevelMissionRequirement) => boolean,
+  ): boolean {
+    const critter = this.critterLookup[critterId];
+    const progress = this.playerCritterProgress.collection.find((entry) => entry.critterId === critterId);
+    if (!critter || !progress?.unlocked) {
+      return false;
+    }
+
+    const currentLevel = Math.max(1, progress.level);
+    const targetLevel = currentLevel + 1;
+    const levelRow = critter.levels.find((entry) => entry.level === targetLevel);
+    if (!levelRow) {
+      return false;
+    }
+    if (this.hasPendingStoryFlagMission(levelRow.missions, levelRow.level, progress.missionProgress)) {
+      return false;
+    }
+
+    let updated = false;
+    for (const mission of levelRow.missions) {
+      if (!missionMatcher(mission)) {
+        continue;
+      }
+      const key = missionProgressKey(levelRow.level, mission.id);
+      const currentValue = Math.max(0, progress.missionProgress[key] ?? 0);
+      const nextValue = Math.min(mission.targetValue, currentValue + 1);
+      if (nextValue <= currentValue) {
+        continue;
+      }
+      progress.missionProgress[key] = nextValue;
+      updated = true;
+    }
+
+    if (updated) {
+      progress.lastProgressAt = new Date().toISOString();
+    }
+    return updated;
+  }
+
   private recordOpposingKnockoutProgress(opposingCritterId: number, knockoutAttackerCritterId: number | null): void {
     const opposingCritter = this.critterLookup[opposingCritterId];
     if (!opposingCritter) {
@@ -6722,6 +6791,14 @@ export class GameRuntime {
 
     const nowIso = new Date().toISOString();
     let updatedAny = this.ensureLockedKnockoutTargetSelectionValid();
+    const knockoutAttackerProgress = this.playerCritterProgress.collection.find(
+      (entry) => entry.critterId === knockoutAttackerCritterId,
+    );
+    const knockoutAttackerCritter = this.critterLookup[knockoutAttackerCritterId];
+    const knockoutAttackerEquipmentAnchors =
+      knockoutAttackerProgress && knockoutAttackerCritter
+        ? this.resolveEquipmentStateForCritter(knockoutAttackerProgress, knockoutAttackerCritter, false).anchors
+        : [];
     // Attacker always gets credit. Optionally also credit one selected locked knockout target.
     const critterIdsToUpdate = new Set<number>([knockoutAttackerCritterId]);
     const selectedLockedTargetCritterId = this.playerCritterProgress.lockedKnockoutTargetCritterId;
@@ -6749,7 +6826,7 @@ export class GameRuntime {
 
       let updatedCritter = false;
       for (const mission of levelRow.missions) {
-        if (mission.type !== 'opposing_knockouts') {
+        if (!isKnockoutMissionType(mission.type)) {
           continue;
         }
         if (levelLockedByStoryFlag) {
@@ -6759,6 +6836,12 @@ export class GameRuntime {
           continue;
         }
         if (!this.matchesOpposingKnockoutMission(mission, opposingCritterId, opposingCritter.element)) {
+          continue;
+        }
+        if (
+          mission.type === 'opposing_knockouts_with_item' &&
+          !this.matchesKnockoutItemRequirement(mission, knockoutAttackerEquipmentAnchors)
+        ) {
           continue;
         }
         const key = missionProgressKey(levelRow.level, mission.id);
@@ -6830,6 +6913,52 @@ export class GameRuntime {
     }
 
     return true;
+  }
+
+  private getRequiredEquippedItemCount(mission: CritterLevelMissionRequirement): number {
+    if (mission.type !== 'opposing_knockouts_with_item') {
+      return 0;
+    }
+    const rawCount = mission.requiredEquippedItemCount;
+    if (typeof rawCount !== 'number' || !Number.isFinite(rawCount)) {
+      return 1;
+    }
+    return Math.max(1, Math.min(8, Math.floor(rawCount)));
+  }
+
+  private matchesKnockoutItemRequirement(
+    mission: CritterLevelMissionRequirement,
+    attackerEquipmentAnchors: EquippedEquipmentAnchor[],
+  ): boolean {
+    if (mission.type !== 'opposing_knockouts_with_item') {
+      return true;
+    }
+
+    const requiredCount = this.getRequiredEquippedItemCount(mission);
+    if (attackerEquipmentAnchors.length < requiredCount) {
+      return false;
+    }
+
+    const requiredItemIds = Array.isArray(mission.requiredEquippedItemIds) ? mission.requiredEquippedItemIds : [];
+    if (requiredItemIds.length === 0) {
+      return true;
+    }
+
+    return attackerEquipmentAnchors.some((anchor) => requiredItemIds.includes(anchor.itemId));
+  }
+
+  private matchesHealCritterMissionItem(
+    mission: CritterLevelMissionRequirement,
+    healingItemId: string,
+  ): boolean {
+    if (mission.type !== 'heal_critter') {
+      return false;
+    }
+    const requiredItemIds = Array.isArray(mission.requiredHealingItemIds) ? mission.requiredHealingItemIds : [];
+    if (requiredItemIds.length === 0) {
+      return true;
+    }
+    return requiredItemIds.includes(healingItemId);
   }
 
   private maybeShowCritterAdvanceNotice(): void {
@@ -7126,6 +7255,20 @@ export class GameRuntime {
           const knockoutCritterNames = knockoutCritterIds
             .map((critterId) => this.critterLookup[critterId]?.name ?? `#${critterId}`);
           const knockoutElements = Array.isArray(mission.knockoutElements) ? mission.knockoutElements : [];
+          const requiredEquippedItemIds =
+            mission.type === 'opposing_knockouts_with_item' && Array.isArray(mission.requiredEquippedItemIds)
+              ? mission.requiredEquippedItemIds
+              : [];
+          const requiredEquippedItemNames = requiredEquippedItemIds.map(
+            (itemId) => this.itemById[itemId]?.name ?? itemId,
+          );
+          const requiredHealingItemIds =
+            mission.type === 'heal_critter' && Array.isArray(mission.requiredHealingItemIds)
+              ? mission.requiredHealingItemIds
+              : [];
+          const requiredHealingItemNames = requiredHealingItemIds.map(
+            (itemId) => this.itemById[itemId]?.name ?? itemId,
+          );
           return {
             id: mission.id,
             type: mission.type,
@@ -7137,6 +7280,12 @@ export class GameRuntime {
             knockoutElements,
             knockoutCritterIds,
             knockoutCritterNames,
+            requiredEquippedItemCount:
+              mission.type === 'opposing_knockouts_with_item' ? this.getRequiredEquippedItemCount(mission) : undefined,
+            requiredEquippedItemIds,
+            requiredEquippedItemNames,
+            requiredHealingItemIds,
+            requiredHealingItemNames,
             storyFlagId: mission.storyFlagId,
             label: mission.label,
           };
@@ -7232,7 +7381,7 @@ export class GameRuntime {
         : collection.find((entry) => entry.critterId === selectedLockedKnockoutTargetCritterId) ?? null;
     const selectedLockedKnockoutMissionRows =
       selectedLockedKnockoutTargetEntry?.activeRequirement?.missions
-        .filter((mission) => mission.type === 'opposing_knockouts')
+        .filter((mission) => isKnockoutMissionType(mission.type))
         .map((mission) => ({ ...mission })) ?? [];
 
     const squadSlots = this.playerCritterProgress.squad.map((critterId, index) => {
@@ -8626,7 +8775,6 @@ function buildTileDefinitionsFromSavedPaintTiles(
   }
 
   const definitions: Record<string, TileDefinition> = {};
-  const seenCodes = new Set<string>();
 
   for (const tile of savedPaintTiles) {
     const tileName = typeof tile?.name === 'string' && tile.name.trim() ? tile.name.trim() : 'Custom Tile';
@@ -8635,15 +8783,25 @@ function buildTileDefinitionsFromSavedPaintTiles(
     const tilePixelWidth = typeof tile?.tilePixelWidth === 'number' && Number.isFinite(tile.tilePixelWidth) ? Math.max(1, Math.floor(tile.tilePixelWidth)) : undefined;
     const tilePixelHeight = typeof tile?.tilePixelHeight === 'number' && Number.isFinite(tile.tilePixelHeight) ? Math.max(1, Math.floor(tile.tilePixelHeight)) : undefined;
     const cells = Array.isArray(tile?.cells) ? tile.cells : [];
+    const hasPerTileTileset = Boolean(tilesetUrl && tilePixelWidth && tilePixelHeight);
+
     for (const cell of cells) {
       const code = typeof cell?.code === 'string' ? cell.code.trim().slice(0, 1) : '';
-      if (!code || code in BASE_TILE_DEFINITIONS || seenCodes.has(code)) {
+      if (!code || code in BASE_TILE_DEFINITIONS) {
         continue;
       }
       const atlasIndex =
         typeof cell?.atlasIndex === 'number' && Number.isFinite(cell.atlasIndex) ? Math.max(0, Math.floor(cell.atlasIndex)) : 0;
 
-      seenCodes.add(code);
+      const existing = definitions[code];
+      const existingHasTileset = Boolean(existing?.tilesetUrl && existing?.tilePixelWidth && existing?.tilePixelHeight);
+      if (existing && !hasPerTileTileset && existingHasTileset) {
+        continue;
+      }
+      if (existing && hasPerTileTileset === existingHasTileset) {
+        continue;
+      }
+
       definitions[code] = {
         code,
         label: `${tileName} ${code}`.slice(0, 60),

@@ -2698,9 +2698,36 @@ function formatMissionTypeLabel(mission: {
   knockoutElements?: string[];
   knockoutCritterIds?: number[];
   knockoutCritterNames?: string[];
+  requiredEquippedItemCount?: number;
+  requiredEquippedItemIds?: string[];
+  requiredEquippedItemNames?: string[];
+  requiredHealingItemIds?: string[];
+  requiredHealingItemNames?: string[];
   storyFlagId?: string;
   label?: string;
 }): string {
+  if (mission.type === 'opposing_knockouts_with_item') {
+    const knockoutCritterNames = Array.isArray(mission.knockoutCritterNames) ? mission.knockoutCritterNames : [];
+    const knockoutElements = Array.isArray(mission.knockoutElements) ? mission.knockoutElements : [];
+    const targetSuffix =
+      knockoutCritterNames.length > 0
+        ? ` vs ${knockoutCritterNames.join(', ')}`
+        : knockoutElements.length > 0
+          ? ` vs ${knockoutElements.map(capitalizeToken).join(', ')}`
+          : '';
+    const requiredEquippedItemCount =
+      typeof mission.requiredEquippedItemCount === 'number' && Number.isFinite(mission.requiredEquippedItemCount)
+        ? Math.max(1, Math.floor(mission.requiredEquippedItemCount))
+        : 1;
+    const requiredEquippedItemNames = Array.isArray(mission.requiredEquippedItemNames)
+      ? mission.requiredEquippedItemNames
+      : [];
+    const requirementLabel =
+      requiredEquippedItemNames.length > 0
+        ? `${requiredEquippedItemCount}+ equipped; ${requiredEquippedItemNames.join(', ')}`
+        : `${requiredEquippedItemCount}+ equipped`;
+    return `Knock-out with Item${targetSuffix} (${requirementLabel})`;
+  }
   if (mission.type === 'opposing_knockouts') {
     const knockoutCritterNames = Array.isArray(mission.knockoutCritterNames) ? mission.knockoutCritterNames : [];
     if (knockoutCritterNames.length > 0) {
@@ -2711,6 +2738,21 @@ function formatMissionTypeLabel(mission: {
       return `Opposing Knockouts (${knockoutElements.map(capitalizeToken).join(', ')})`;
     }
     return 'Opposing Knockouts';
+  }
+  if (mission.type === 'use_guard') {
+    return 'Use Guard';
+  }
+  if (mission.type === 'swap_in') {
+    return 'Swap In';
+  }
+  if (mission.type === 'heal_critter') {
+    const requiredHealingItemNames = Array.isArray(mission.requiredHealingItemNames)
+      ? mission.requiredHealingItemNames
+      : [];
+    if (requiredHealingItemNames.length > 0) {
+      return `Heal Critter (${requiredHealingItemNames.join(', ')})`;
+    }
+    return 'Heal Critter';
   }
   if (mission.type === 'ascension') {
     const sourceLabel = mission.ascendsFromCritterName

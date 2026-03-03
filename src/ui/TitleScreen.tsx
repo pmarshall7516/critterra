@@ -3,6 +3,7 @@ import { GAME_TITLE } from '@/shared/constants';
 
 interface TitleScreenProps {
   userEmail: string;
+  isAdmin: boolean;
   hasSave: boolean;
   onLogout: () => void;
   onContinue: () => void;
@@ -10,7 +11,7 @@ interface TitleScreenProps {
   onStartOver: (password: string) => Promise<void>;
 }
 
-export function TitleScreen({ userEmail, hasSave, onLogout, onContinue, onNewGame, onStartOver }: TitleScreenProps) {
+export function TitleScreen({ userEmail, isAdmin, hasSave, onLogout, onContinue, onNewGame, onStartOver }: TitleScreenProps) {
   const [showControls, setShowControls] = useState(false);
   const [showResetModal, setShowResetModal] = useState(false);
   const [resetPassword, setResetPassword] = useState('');
@@ -65,9 +66,11 @@ export function TitleScreen({ userEmail, hasSave, onLogout, onContinue, onNewGam
               Restart
             </button>
           )}
-          <button type="button" className="secondary" onClick={() => window.location.assign('/admin/maps')}>
-            Admin Tools
-          </button>
+          {isAdmin && (
+            <button type="button" className="secondary" onClick={() => window.location.assign('/admin/maps')}>
+              Admin Tools
+            </button>
+          )}
           <button type="button" className="secondary" onClick={onLogout}>
             Log Out
           </button>
