@@ -1,7 +1,7 @@
 import type { NpcSpriteConfig } from '@/game/world/types';
 
 export const PLAYER_SPRITE_CONFIG: NpcSpriteConfig = {
-  url: '/example_assets/character_npc_spritesheets/main_character_spritesheet.png',
+  url: 'https://sxwyfkeallkiwgxjuenw.supabase.co/storage/v1/object/public/character-spritesheets/main_character_spritesheet.png?v=1772645262891',
   frameWidth: 64,
   frameHeight: 64,
   atlasCellWidth: 64,
@@ -11,6 +11,48 @@ export const PLAYER_SPRITE_CONFIG: NpcSpriteConfig = {
   renderWidthTiles: 1,
   renderHeightTiles: 2,
   animationSets: {
+    fish: {
+      up: [
+        104,
+        105,
+        106,
+        107,
+        108,
+        109,
+        110,
+        111
+      ],
+      down: [
+        156,
+        157,
+        158,
+        159,
+        160,
+        161,
+        162,
+        163
+      ],
+      left: [
+        130,
+        131,
+        132,
+        133,
+        134,
+        135,
+        136,
+        137
+      ],
+      right: [
+        182,
+        183,
+        184,
+        185,
+        186,
+        187,
+        188,
+        189
+      ]
+    },
     idle: {
       up: [
         208

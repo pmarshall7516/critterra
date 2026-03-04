@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   getActionablePayMissions,
+  resolveFixedStepAdvance,
   resolveGameViewKeyIntent,
   resolvePinnedLockedKnockoutTrackerState,
   shouldShowLockedKnockoutTargetButton,
@@ -99,6 +100,43 @@ describe('resolveGameViewKeyIntent', () => {
       menuOpen: false,
     });
     expect(result).toBe('forward-to-runtime');
+  });
+});
+
+describe('resolveFixedStepAdvance', () => {
+  it('advances exactly one fixed step at 60 FPS', () => {
+    expect(
+      resolveFixedStepAdvance({
+        elapsedMs: 1000 / 60,
+        carryMs: 0,
+      }),
+    ).toMatchObject({
+      stepCount: 1,
+      carryMs: 0,
+    });
+  });
+
+  it('accumulates partial frame time until a fixed step is available', () => {
+    const first = resolveFixedStepAdvance({
+      elapsedMs: 8,
+      carryMs: 0,
+    });
+    expect(first.stepCount).toBe(0);
+    const second = resolveFixedStepAdvance({
+      elapsedMs: 9,
+      carryMs: first.carryMs,
+    });
+    expect(second.stepCount).toBe(1);
+    expect(second.carryMs).toBeLessThan(8);
+  });
+
+  it('caps long frames to a bounded catch-up window', () => {
+    const result = resolveFixedStepAdvance({
+      elapsedMs: 1000,
+      carryMs: 0,
+    });
+    expect(result.stepCount).toBe(4);
+    expect(result.carryMs).toBe(0);
   });
 });
 

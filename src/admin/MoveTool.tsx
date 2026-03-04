@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CRITTER_ELEMENTS } from '@/game/critters/types';
-import type { SkillDefinition, SkillHealMode } from '@/game/skills/types';
+import type { SkillDefinition, SkillHealMode, SkillPersistentHealMode } from '@/game/skills/types';
 import {
   DAMAGE_SKILL_HEAL_MODES,
   ELEMENT_SKILL_COLORS,
@@ -46,6 +46,111 @@ interface AdminSkillCellContentProps {
   skill: SkillDefinition;
   effectList: EffectOption[];
   iconsBucketRoot: string | null;
+}
+
+type SkillDraftHealMode = SkillHealMode | 'none';
+type SkillDraftPersistentHealMode = SkillPersistentHealMode | 'none';
+
+const DAMAGE_HEAL_MODE_OPTIONS: Array<{ value: SkillDraftHealMode; label: string }> = [
+  { value: 'none', label: 'None' },
+  { value: 'flat', label: 'Flat HP' },
+  { value: 'percent_max_hp', label: '% Max HP' },
+  { value: 'percent_damage', label: '% Damage Dealt' },
+];
+
+const SUPPORT_HEAL_MODE_OPTIONS: Array<{ value: SkillDraftHealMode; label: string }> = [
+  { value: 'none', label: 'None' },
+  { value: 'flat', label: 'Flat HP' },
+  { value: 'percent_max_hp', label: '% Max HP' },
+];
+
+const PERSISTENT_HEAL_MODE_OPTIONS: Array<{ value: SkillDraftPersistentHealMode; label: string }> = [
+  { value: 'none', label: 'None' },
+  { value: 'flat', label: 'Flat HP' },
+  { value: 'percent_max_hp', label: '% Max HP' },
+];
+
+function formatSkillValue(skill: Pick<SkillDefinition, 'type' | 'damage'>): string | null {
+  if (skill.type === 'damage' && skill.damage != null) {
+    return String(skill.damage);
+  }
+  return null;
+}
+
+function getDefaultHealValueForMode(mode: SkillDraftHealMode): string {
+  return mode === 'flat' ? '1' : '0';
+}
+
+function getHealValueLabel(mode: SkillDraftHealMode): string {
+  if (mode === 'flat') {
+    return 'Heal HP after use';
+  }
+  if (mode === 'percent_damage') {
+    return 'Heal % of damage dealt (0–1)';
+  }
+  if (mode === 'percent_max_hp') {
+    return 'Heal % of max HP after use (0–1)';
+  }
+  return 'Heal amount';
+}
+
+function getDefaultPersistentHealValueForMode(mode: SkillDraftPersistentHealMode): string {
+  return mode === 'flat' ? '1' : '0';
+}
+
+function getPersistentHealValueLabel(mode: SkillDraftPersistentHealMode): string {
+  if (mode === 'flat') {
+    return 'Heal HP each turn';
+  }
+  if (mode === 'percent_max_hp') {
+    return 'Heal % of max HP each turn (0–1)';
+  }
+  return 'Persistent heal amount';
+}
+
+function formatImmediateHealTooltip(skill: Pick<SkillDefinition, 'healMode' | 'healValue'>): string | null {
+  if (!skill.healMode || skill.healValue == null) {
+    return null;
+  }
+  if (skill.healMode === 'flat') {
+    return `Heals: ${Math.max(1, Math.floor(skill.healValue))} HP after use`;
+  }
+  if (skill.healMode === 'percent_damage') {
+    return `Heals: ${Math.round(skill.healValue * 100)}% of damage dealt`;
+  }
+  return `Heals: ${Math.round(skill.healValue * 100)}% HP after use`;
+}
+
+function formatPersistentHealTooltip(
+  skill: Pick<SkillDefinition, 'persistentHealMode' | 'persistentHealValue' | 'persistentHealDurationTurns'>,
+): string | null {
+  if (
+    !skill.persistentHealMode ||
+    skill.persistentHealValue == null ||
+    skill.persistentHealDurationTurns == null
+  ) {
+    return null;
+  }
+  if (skill.persistentHealMode === 'flat') {
+    return `End of turn: ${Math.max(1, Math.floor(skill.persistentHealValue))} HP for ${Math.max(1, Math.floor(skill.persistentHealDurationTurns))} turns`;
+  }
+  return `End of turn: ${Math.round(skill.persistentHealValue * 100)}% HP for ${Math.max(1, Math.floor(skill.persistentHealDurationTurns))} turns`;
+}
+
+function buildSkillTooltip(skill: SkillDefinition): string {
+  const lines = [skill.skill_name, `${skill.type === 'damage' ? 'Damage' : 'Support'} • ${skill.element}`];
+  if (skill.type === 'damage' && skill.damage != null) {
+    lines.push(`Power: ${skill.damage}`);
+  }
+  const immediateHealLine = formatImmediateHealTooltip(skill);
+  if (immediateHealLine) {
+    lines.push(immediateHealLine);
+  }
+  const persistentHealLine = formatPersistentHealTooltip(skill);
+  if (persistentHealLine) {
+    lines.push(persistentHealLine);
+  }
+  return lines.join('\n');
 }
 
 function AdminSkillCellContent({ skill, effectList, iconsBucketRoot }: AdminSkillCellContentProps) {
@@ -98,6 +203,9 @@ interface SkillDraft {
   damage: string;
   healMode: SkillHealMode;
   healValue: string;
+  persistentHealMode: SkillDraftPersistentHealMode;
+  persistentHealValue: string;
+  persistentHealDurationTurns: string;
   effectIds: string[];
 }
 
@@ -109,6 +217,9 @@ const emptyDraft: SkillDraft = {
   damage: '20',
   healMode: 'none',
   healValue: '0',
+  persistentHealMode: 'none',
+  persistentHealValue: '0',
+  persistentHealDurationTurns: '1',
   effectIds: [],
 };
 
@@ -155,6 +266,7 @@ function getHealValueLabel(type: SkillDraftType, healMode: SkillHealMode): strin
 
 function skillToDraft(skill: SkillDefinition, effectIds: string[]): SkillDraft {
   const healMode = normalizeDraftHealMode(skill.type, skill.healMode ?? (skill.type === 'support' ? 'flat' : 'none'));
+  const persistentHealMode = skill.persistentHealMode ?? 'none';
   return {
     skill_id: skill.skill_id,
     skill_name: skill.skill_name,
@@ -163,6 +275,13 @@ function skillToDraft(skill: SkillDefinition, effectIds: string[]): SkillDraft {
     damage: skill.type === 'damage' && skill.damage != null ? String(skill.damage) : '20',
     healMode,
     healValue: typeof skill.healValue === 'number' ? String(skill.healValue) : '0',
+    persistentHealMode,
+    persistentHealValue:
+      skill.persistentHealValue != null
+        ? String(skill.persistentHealValue)
+        : getDefaultPersistentHealValueForMode(persistentHealMode),
+    persistentHealDurationTurns:
+      skill.persistentHealDurationTurns != null ? String(skill.persistentHealDurationTurns) : '1',
     effectIds: skill.effectIds ?? effectIds.filter((id) => (skill.effectIds ?? []).includes(id)),
   };
 }
@@ -299,6 +418,9 @@ export function MoveTool() {
         damage: s.type === 'damage' ? s.damage : undefined,
         healMode: s.healMode,
         healValue: s.healMode ? s.healValue : undefined,
+        persistentHealMode: s.persistentHealMode,
+        persistentHealValue: s.persistentHealValue,
+        persistentHealDurationTurns: s.persistentHealDurationTurns,
         effectIds: s.effectIds?.length ? s.effectIds : undefined,
       }));
       const result = await apiFetchJson<SkillsSaveResponse>('/api/admin/skills/save', {
@@ -336,6 +458,18 @@ export function MoveTool() {
     }
     const damageNum = draft.type === 'damage' ? Math.max(1, parseInt(draft.damage, 10) || 20) : undefined;
     const healValue = parseDraftHealValue(activeHealMode, draft.healValue);
+    const resolvedPersistentHealMode: SkillPersistentHealMode | undefined =
+      draft.persistentHealMode === 'none' ? undefined : draft.persistentHealMode;
+    const persistentHealNum =
+      resolvedPersistentHealMode === 'flat'
+        ? Math.max(1, parseInt(draft.persistentHealValue, 10) || 1)
+        : resolvedPersistentHealMode
+          ? Math.max(0, Math.min(1, parseFloat(draft.persistentHealValue) || 0))
+          : undefined;
+    const persistentHealDurationTurns =
+      resolvedPersistentHealMode
+        ? Math.max(1, Math.min(999, parseInt(draft.persistentHealDurationTurns, 10) || 1))
+        : undefined;
     const newSkill: SkillDefinition = {
       skill_id: id,
       skill_name: name,
@@ -344,6 +478,9 @@ export function MoveTool() {
       ...(draft.type === 'damage' && { damage: damageNum }),
       ...(draft.type === 'support' && { healMode: activeHealMode, healValue }),
       ...(draft.type === 'damage' && activeHealMode !== 'none' && { healMode: activeHealMode, healValue }),
+      ...(resolvedPersistentHealMode && { persistentHealMode: resolvedPersistentHealMode }),
+      ...(persistentHealNum != null && { persistentHealValue: persistentHealNum }),
+      ...(persistentHealDurationTurns != null && { persistentHealDurationTurns }),
       ...(draft.effectIds.length > 0 && { effectIds: draft.effectIds }),
     };
     const existingIndex = skills.findIndex((s) => s.skill_id === id);
@@ -417,6 +554,7 @@ export function MoveTool() {
                   type="button"
                   className={`secondary admin-skill-list-item ${elementColor ? 'admin-skill-list-item--colored' : ''} ${selectedSkillId === skill.skill_id ? 'is-selected' : ''}`}
                   style={style}
+                  title={buildSkillTooltip(skill)}
                   onClick={() => {
                     setSelectedSkillId(skill.skill_id);
                     setDraft(skillToDraft(skill, effectIds));
@@ -516,6 +654,64 @@ export function MoveTool() {
                 step={usesPercentHealValue ? 0.01 : 1}
                 value={draft.healValue}
                 onChange={(e) => setDraft((d) => ({ ...d, healValue: e.target.value }))}
+              />
+            </label>
+          )}
+          <div className="admin-grid-2">
+            <label>
+              Persistent Heal Mode
+              <select
+                value={draft.persistentHealMode}
+                onChange={(e) =>
+                  setDraft((d) => {
+                    const nextMode = e.target.value as SkillDraftPersistentHealMode;
+                    return {
+                      ...d,
+                      persistentHealMode: nextMode,
+                      persistentHealValue:
+                        d.persistentHealMode === nextMode
+                          ? d.persistentHealValue
+                          : nextMode === 'none'
+                            ? '0'
+                            : getDefaultPersistentHealValueForMode(nextMode),
+                      persistentHealDurationTurns:
+                        d.persistentHealMode === nextMode
+                          ? d.persistentHealDurationTurns
+                          : nextMode === 'none'
+                            ? '1'
+                            : '1',
+                    };
+                  })}
+              >
+                {PERSISTENT_HEAL_MODE_OPTIONS.map((mode) => (
+                  <option key={mode.value} value={mode.value}>{mode.label}</option>
+                ))}
+              </select>
+            </label>
+            {draft.persistentHealMode !== 'none' && (
+              <label>
+                {getPersistentHealValueLabel(draft.persistentHealMode)}
+                <input
+                  type="number"
+                  min={draft.persistentHealMode === 'flat' ? 1 : 0}
+                  max={draft.persistentHealMode === 'flat' ? undefined : 1}
+                  step={draft.persistentHealMode === 'flat' ? 1 : 0.01}
+                  value={draft.persistentHealValue}
+                  onChange={(e) => setDraft((d) => ({ ...d, persistentHealValue: e.target.value }))}
+                />
+              </label>
+            )}
+          </div>
+          {draft.persistentHealMode !== 'none' && (
+            <label>
+              Persistent Duration (turns)
+              <input
+                type="number"
+                min={1}
+                max={999}
+                step={1}
+                value={draft.persistentHealDurationTurns}
+                onChange={(e) => setDraft((d) => ({ ...d, persistentHealDurationTurns: e.target.value }))}
               />
             </label>
           )}

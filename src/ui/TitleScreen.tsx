@@ -85,7 +85,10 @@ export function TitleScreen({ userEmail, isAdmin, hasSave, onLogout, onContinue,
               <strong>Move:</strong> Arrow Keys / WASD
             </p>
             <p>
-              <strong>Interact:</strong> Space
+              <strong>Interact / Use Tool:</strong> Space
+            </p>
+            <p>
+              <strong>Fishing / Tool Hotkey:</strong> F
             </p>
             <p>
               <strong>Menu:</strong> Esc / E

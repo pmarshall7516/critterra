@@ -34,6 +34,7 @@ const FIXED_STEP_MS = 1000 / 60;
 const TARGET_RENDER_STEP_MS = 1000 / 30;
 const MAX_FRAME_DELTA_MS = 250;
 const MAX_UPDATE_STEPS_PER_FRAME = 6;
+const MAX_AUTO_ADVANCE_CATCH_UP_STEPS = 4;
 
 type SideMenuView = 'root' | 'squad' | 'collection' | 'backpack';
 type CollectionSort = 'id' | 'name';
@@ -52,6 +53,19 @@ interface ResolveGameViewKeyIntentInput {
   battleActive: boolean;
   storyInputLocked: boolean;
   menuOpen: boolean;
+}
+
+interface ResolveFixedStepAdvanceInput {
+  elapsedMs: number;
+  carryMs: number;
+  fixedStepMs?: number;
+  maxCatchUpSteps?: number;
+}
+
+interface ResolveFixedStepAdvanceResult {
+  stepCount: number;
+  carryMs: number;
+  elapsedMs: number;
 }
 
 export function resolveGameViewKeyIntent(input: ResolveGameViewKeyIntentInput): GameViewKeyIntent {
@@ -73,6 +87,26 @@ export function resolveGameViewKeyIntent(input: ResolveGameViewKeyIntentInput): 
     return 'block-for-menu';
   }
   return 'forward-to-runtime';
+}
+
+export function resolveFixedStepAdvance(input: ResolveFixedStepAdvanceInput): ResolveFixedStepAdvanceResult {
+  const fixedStepMs = Number.isFinite(input.fixedStepMs) && input.fixedStepMs && input.fixedStepMs > 0
+    ? input.fixedStepMs
+    : FIXED_STEP_MS;
+  const maxCatchUpSteps =
+    Number.isFinite(input.maxCatchUpSteps) && input.maxCatchUpSteps && input.maxCatchUpSteps > 0
+      ? Math.floor(input.maxCatchUpSteps)
+      : MAX_AUTO_ADVANCE_CATCH_UP_STEPS;
+  const elapsedMs = Number.isFinite(input.elapsedMs) ? Math.max(0, input.elapsedMs) : 0;
+  const safeCarryMs = Number.isFinite(input.carryMs) ? Math.max(0, input.carryMs) : 0;
+  const cappedCarryMs = Math.min(safeCarryMs + elapsedMs, fixedStepMs * maxCatchUpSteps);
+  const stepCount = Math.min(maxCatchUpSteps, Math.floor((cappedCarryMs + 0.0001) / fixedStepMs));
+  const nextCarryMs = Math.max(0, cappedCarryMs - stepCount * fixedStepMs);
+  return {
+    stepCount,
+    carryMs: nextCarryMs,
+    elapsedMs,
+  };
 }
 
 export function shouldShowLockedKnockoutTargetButton(
@@ -262,6 +296,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     let updateAccumulator = 0;
     let renderAccumulator = 0;
     let snapshotTimer = 0;
+    let autoAdvanceCarryMs = 0;
 
     const frame = (currentTime: number) => {
       const delta = Math.min(MAX_FRAME_DELTA_MS, Math.max(0, currentTime - previousTime));
@@ -1643,6 +1678,9 @@ function buildSkillSlotTooltip(slot: {
   damage?: number;
   healMode?: SkillHealMode;
   healValue?: number;
+  persistentHealMode?: string;
+  persistentHealValue?: number;
+  persistentHealDurationTurns?: number;
   effectDescriptions?: string | null;
 }): string {
   const lines: string[] = [slot.name];
@@ -1655,6 +1693,21 @@ function buildSkillSlotTooltip(slot: {
   const healDescription = describeSkillHealForTooltip(slot.healMode, slot.healValue);
   if (healDescription) {
     lines.push(`Heals: ${healDescription}`);
+  }
+  if (
+    slot.persistentHealMode &&
+    slot.persistentHealValue != null &&
+    slot.persistentHealDurationTurns != null
+  ) {
+    if (slot.persistentHealMode === 'flat') {
+      lines.push(
+        `End of turn: ${Math.max(1, Math.floor(slot.persistentHealValue))} HP for ${Math.max(1, Math.floor(slot.persistentHealDurationTurns))} turns`,
+      );
+    } else {
+      lines.push(
+        `End of turn: ${Math.round(slot.persistentHealValue * 100)}% HP for ${Math.max(1, Math.floor(slot.persistentHealDurationTurns))} turns`,
+      );
+    }
   }
   if (slot.effectDescriptions && slot.effectDescriptions.trim()) {
     lines.push(`Effect: ${slot.effectDescriptions.trim()}`);
@@ -1684,10 +1737,23 @@ interface SkillCellContentProps {
     damage?: number;
     healMode?: SkillHealMode;
     healValue?: number;
+    persistentHealMode?: string;
+    persistentHealValue?: number;
+    persistentHealDurationTurns?: number;
     effectIconUrls?: string[];
   } | null;
   iconsBucketRoot: string | null;
   emptyLabel?: string;
+}
+
+function formatSkillCellValue(slot: {
+  type: string;
+  damage?: number;
+}): string | null {
+  if (slot.type === 'damage' && slot.damage != null) {
+    return String(slot.damage);
+  }
+  return null;
 }
 
 function SkillCellContent({ slot, iconsBucketRoot, emptyLabel = '—' }: SkillCellContentProps) {

@@ -12,7 +12,7 @@ import {
   type CritterMissionType,
 } from '@/game/critters/types';
 import type { GameItemDefinition } from '@/game/items/types';
-import { getSkillValueDisplayNumber, type SkillHealMode } from '@/game/skills/types';
+import { getSkillValueDisplayNumber, type SkillHealMode, type SkillPersistentHealMode } from '@/game/skills/types';
 import { apiFetchJson } from '@/shared/apiClient';
 import { loadAdminFlags, type AdminFlagEntry } from '@/admin/flagsApi';
 
@@ -61,12 +61,58 @@ interface SkillOption {
   damage?: number;
   healMode?: SkillHealMode;
   healValue?: number;
+  persistentHealMode?: SkillPersistentHealMode;
+  persistentHealValue?: number;
+  persistentHealDurationTurns?: number;
+}
+
+function formatImmediateSkillHealTooltip(opt: SkillOption): string | null {
+  if (!opt.healMode || opt.healValue == null) {
+    return null;
+  }
+  if (opt.healMode === 'flat') {
+    return `Heals: ${Math.max(1, Math.floor(opt.healValue))} HP after use`;
+  }
+  if (opt.healMode === 'percent_damage') {
+    return `Heals: ${Math.round(opt.healValue * 100)}% of damage dealt`;
+  }
+  return `Heals: ${Math.round(opt.healValue * 100)}% HP after use`;
+}
+
+function formatPersistentSkillHealTooltip(opt: SkillOption): string | null {
+  if (
+    !opt.persistentHealMode ||
+    opt.persistentHealValue == null ||
+    opt.persistentHealDurationTurns == null
+  ) {
+    return null;
+  }
+  if (opt.persistentHealMode === 'flat') {
+    return `End of turn: ${Math.max(1, Math.floor(opt.persistentHealValue))} HP for ${Math.max(1, Math.floor(opt.persistentHealDurationTurns))} turns`;
+  }
+  return `End of turn: ${Math.round(opt.persistentHealValue * 100)}% HP for ${Math.max(1, Math.floor(opt.persistentHealDurationTurns))} turns`;
 }
 
 function formatSkillOptionLabel(opt: SkillOption): string {
   const letter = opt.type === 'damage' ? 'D' : 'S';
   const value = getSkillValueDisplayNumber(opt);
   return value != null ? `${opt.name} - ${letter} - ${value}` : `${opt.name} - ${letter}`;
+}
+
+function buildSkillOptionTooltip(opt: SkillOption): string {
+  const lines = [opt.name, opt.type === 'damage' ? 'Damage' : 'Support'];
+  if (opt.type === 'damage' && opt.damage != null) {
+    lines.push(`Power: ${opt.damage}`);
+  }
+  const immediateHealLine = formatImmediateSkillHealTooltip(opt);
+  if (immediateHealLine) {
+    lines.push(immediateHealLine);
+  }
+  const persistentHealLine = formatPersistentSkillHealTooltip(opt);
+  if (persistentHealLine) {
+    lines.push(persistentHealLine);
+  }
+  return lines.join('\n');
 }
 
 interface MissionDraft {
@@ -308,14 +354,19 @@ export function CritterTool() {
       if (!result.ok) {
         throw new Error(result.error ?? result.data?.error ?? 'Unable to load skills.');
       }
-      const list: SkillOption[] = sanitizeSkillLibrary(result.data?.critterSkills).map((skill) => ({
-        id: skill.skill_id,
-        name: skill.skill_name,
-        type: skill.type,
-        damage: skill.damage,
-        healMode: skill.healMode,
-        healValue: skill.healValue,
-      }));
+      const list: SkillOption[] = sanitizeSkillLibrary(result.data?.critterSkills)
+        .map((skill) => ({
+          id: skill.skill_id,
+          name: skill.skill_name,
+          type: skill.type,
+          damage: skill.damage,
+          healMode: skill.healMode,
+          healValue: skill.healValue,
+          persistentHealMode: skill.persistentHealMode,
+          persistentHealValue: skill.persistentHealValue,
+          persistentHealDurationTurns: skill.persistentHealDurationTurns,
+        }))
+        .filter((x) => x.id.length > 0);
       setSkillList(list);
     } catch {
       setSkillList([]);
@@ -983,7 +1034,11 @@ export function CritterTool() {
                         {selectedIds.map((id) => {
                           const opt = skillList.find((s) => s.id === id);
                           return (
-                            <span key={id} className="admin-effect-picker__chip">
+                            <span
+                              key={id}
+                              className="admin-effect-picker__chip"
+                              title={opt ? buildSkillOptionTooltip(opt) : undefined}
+                            >
                               {opt ? formatSkillOptionLabel(opt) : id}
                               <button
                                 type="button"
@@ -1048,6 +1103,7 @@ export function CritterTool() {
                                   key={opt.id}
                                   type="button"
                                   className="admin-effect-picker__dropdown-item"
+                                  title={buildSkillOptionTooltip(opt)}
                                   onMouseDown={() => {
                                     const next = [...selectedIds, opt.id].join(', ');
                                     updateLevelRow(levelIndex, (entry) => ({ ...entry, skillUnlockIdsInput: next }));

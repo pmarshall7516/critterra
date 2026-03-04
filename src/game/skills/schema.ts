@@ -10,18 +10,23 @@ import type {
   SkillEffectDefinition,
   SkillEffectType,
   SkillHealMode,
+  SkillPersistentHealMode,
   SkillType,
   SupportSkillHealMode,
 } from '@/game/skills/types';
 import {
   DAMAGE_SKILL_HEAL_MODES,
   SKILL_EFFECT_TYPES,
+  SKILL_HEAL_MODES,
+  SKILL_PERSISTENT_HEAL_MODES,
   SKILL_TYPES,
   SUPPORT_SKILL_HEAL_MODES,
 } from '@/game/skills/types';
 
 const ELEMENT_SET = new Set<CritterElement>(CRITTER_ELEMENTS);
 const EFFECT_TYPE_SET = new Set<SkillEffectType>(SKILL_EFFECT_TYPES);
+const HEAL_MODE_SET = new Set<SkillHealMode>(SKILL_HEAL_MODES);
+const PERSISTENT_HEAL_MODE_SET = new Set<SkillPersistentHealMode>(SKILL_PERSISTENT_HEAL_MODES);
 const SKILL_TYPE_SET = new Set<SkillType>(SKILL_TYPES);
 const DAMAGE_SKILL_HEAL_MODE_SET = new Set<DamageSkillHealMode>(DAMAGE_SKILL_HEAL_MODES);
 const SUPPORT_SKILL_HEAL_MODE_SET = new Set<SupportSkillHealMode>(SUPPORT_SKILL_HEAL_MODES);
@@ -227,6 +232,49 @@ export function sanitizeSkillDefinition(
       : undefined;
   const { healMode, healValue } = resolveSkillHealConfig(record, type);
 
+  const rawPersistentHealMode = typeof record.persistentHealMode === 'string'
+    ? (record.persistentHealMode as string).trim().toLowerCase()
+    : typeof record.persistent_heal_mode === 'string'
+      ? (record.persistent_heal_mode as string).trim().toLowerCase()
+      : '';
+  const rawPersistentHealValue = record.persistentHealValue ?? record.persistent_heal_value;
+  const rawPersistentHealDuration = record.persistentHealDurationTurns ?? record.persistent_heal_duration_turns;
+  const persistentPercentFallbackCandidate =
+    typeof rawPersistentHealValue === 'number' && Number.isFinite(rawPersistentHealValue)
+      ? rawPersistentHealValue
+      : typeof rawPersistentHealValue === 'string'
+        ? parseFloat(rawPersistentHealValue)
+        : NaN;
+  let persistentHealMode: SkillPersistentHealMode | undefined;
+  if (PERSISTENT_HEAL_MODE_SET.has(rawPersistentHealMode as SkillPersistentHealMode)) {
+    persistentHealMode = rawPersistentHealMode as SkillPersistentHealMode;
+  } else if (
+    rawPersistentHealMode &&
+    !Number.isNaN(persistentPercentFallbackCandidate) &&
+    persistentPercentFallbackCandidate >= 0 &&
+    persistentPercentFallbackCandidate <= 1
+  ) {
+    persistentHealMode = 'percent_max_hp';
+  }
+  let persistentHealValue: number | undefined;
+  if (persistentHealMode === 'flat') {
+    persistentHealValue = clampInt(rawPersistentHealValue, 1, 9999, 1);
+  } else if (persistentHealMode === 'percent_max_hp') {
+    persistentHealValue = clampFloat(rawPersistentHealValue, 0, 1, 0);
+  }
+  const persistentHealDurationTurns =
+    persistentHealMode && rawPersistentHealDuration !== undefined
+      ? clampInt(rawPersistentHealDuration, 1, 999, 1)
+      : undefined;
+  if (
+    !persistentHealMode ||
+    persistentHealValue == null ||
+    persistentHealDurationTurns == null
+  ) {
+    persistentHealMode = undefined;
+    persistentHealValue = undefined;
+  }
+
   let effectIds: string[] | undefined;
   if (Array.isArray(record.effectIds)) {
     effectIds = (record.effectIds as unknown[])
@@ -255,6 +303,9 @@ export function sanitizeSkillDefinition(
     ...(type === 'damage' && { damage }),
     ...(healMode && { healMode }),
     ...(typeof healValue === 'number' && { healValue }),
+    ...(persistentHealMode && { persistentHealMode }),
+    ...(persistentHealValue != null && { persistentHealValue }),
+    ...(persistentHealDurationTurns != null && { persistentHealDurationTurns }),
     ...(effectIds && effectIds.length > 0 && { effectIds }),
   };
 }

@@ -14,6 +14,11 @@ export type SupportSkillHealMode = (typeof SUPPORT_SKILL_HEAL_MODES)[number];
 
 export type SkillHealMode = DamageSkillHealMode;
 
+export const SKILL_HEAL_MODES = ['flat', 'percent_max_hp', 'percent_damage'] as const;
+
+export const SKILL_PERSISTENT_HEAL_MODES = ['flat', 'percent_max_hp'] as const;
+export type SkillPersistentHealMode = (typeof SKILL_PERSISTENT_HEAL_MODES)[number];
+
 export interface SkillEffectDefinition {
   effect_id: string;
   effect_name: string;
@@ -35,6 +40,12 @@ export interface SkillDefinition {
   healMode?: SkillHealMode;
   /** Flat HP for `flat`, otherwise 0–1 for percentage-based modes. */
   healValue?: number;
+  /** Optional end-of-turn healing applied to the user for a fixed number of full turns. */
+  persistentHealMode?: SkillPersistentHealMode;
+  /** End-of-turn healing amount. `flat` uses integer HP, percent uses 0–1. */
+  persistentHealValue?: number;
+  /** Number of completed turns the persistent heal lasts, including the turn used. */
+  persistentHealDurationTurns?: number;
   /** Optional effect IDs from skill-effects table. */
   effectIds?: string[];
 }

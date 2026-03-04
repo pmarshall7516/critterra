@@ -137,6 +137,8 @@ interface FishingSessionState {
   waitRemainingMs: number;
   biteWindowRemainingMs: number;
   biteWindowDurationMs: number;
+  castAnimationElapsedMs: number;
+  castAnimationDurationMs: number;
 }
 
 interface RuntimeImageState {
@@ -260,6 +262,12 @@ interface BattleCritterState {
   activeEffectIds: string[];
   /** Passive equipment effect IDs active for this critter in battle. */
   equipmentEffectIds: string[];
+  /** Active Aqua Ring-style end-of-turn healing. Cleared on switch, KO, or battle end. */
+  persistentHeal: {
+    mode: 'flat' | 'percent_max_hp';
+    value: number;
+    remainingTurns: number;
+  } | null;
   consecutiveSuccessfulGuardCount: number;
   /** Player team only: skill ids for 4 slots. */
   equippedSkillIds?: BattleEquippedSkillSlots;
@@ -325,6 +333,7 @@ interface BattleRuntimeState {
   activeNarration: BattleNarrationEvent | null;
   activeAnimation: BattleAnimationState | null;
   pendingKnockoutResolution: BattlePendingKnockoutResolution | null;
+  pendingEndTurnResolution: boolean;
   nextAnimationToken: number;
 }
 
@@ -440,6 +449,9 @@ export interface RuntimeBattleSnapshot {
     damage?: number;
     healMode?: SkillHealMode;
     healValue?: number;
+    persistentHealMode?: string;
+    persistentHealValue?: number;
+    persistentHealDurationTurns?: number;
     effectDescriptions?: string;
     effectIconUrls?: string[];
   } | null>;
@@ -655,6 +667,9 @@ export interface RuntimeSnapshot {
         damage?: number;
         healMode?: SkillHealMode;
         healValue?: number;
+        persistentHealMode?: string;
+        persistentHealValue?: number;
+        persistentHealDurationTurns?: number;
         effectDescriptions?: string;
         effectIconUrls?: string[];
       } | null>;
@@ -815,6 +830,10 @@ const FISHING_MAX_BITE_WAIT_MS = 4200;
 const FISHING_MIN_BITE_WINDOW_MS = 1000;
 const FISHING_MAX_BITE_WINDOW_MS = 7000;
 const WALK_ANIMATION_STEPS_PER_CYCLE = 6;
+const FISHING_CAST_ANIMATION_FRAME_MS = 120;
+const WALK_ANIMATION_FRAME_MS = 60;
+const ACTOR_SPRITE_WIDTH_SCALE = 1.08;
+const BATTLE_KNOCKOUT_RESOLUTION_DELAY_MS = 520;
 
 export class GameRuntime {
   private mapRegistry: Record<string, WorldMap> = buildMapRegistryFromInputs([SPAWN_MAP_INPUT], TILE_DEFINITIONS);
@@ -1158,7 +1177,7 @@ export class GameRuntime {
     };
   }
 
-  private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
+private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     const width = map.width * TILE_SIZE;
     const height = map.height * TILE_SIZE;
     const cached = this.staticMapRenderCache.get(map.id);
@@ -1241,6 +1260,14 @@ export class GameRuntime {
     return nextCache;
   }
 
+  private static getCenteredCameraOrigin(focusCoord: number, viewTiles: number, mapTiles: number): number {
+    const centeredOrigin = focusCoord + 0.5 - viewTiles / 2;
+    if (mapTiles <= viewTiles) {
+      return centeredOrigin;
+    }
+    return Math.max(0, Math.min(mapTiles - viewTiles, centeredOrigin));
+  }
+
   public render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
     const map = this.getCurrentMap();
     this.preloadMapVisualAssets(map.id);
@@ -1256,18 +1283,8 @@ export class GameRuntime {
 
     let cameraX: number;
     let cameraY: number;
-    if (map.width <= viewTilesX) {
-      cameraX = -(viewTilesX - map.width) / 2;
-    } else {
-      cameraX = playerRenderPos.x - viewTilesX / 2;
-      cameraX = Math.max(0, Math.min(map.width - viewTilesX, cameraX));
-    }
-    if (map.height <= viewTilesY) {
-      cameraY = -(viewTilesY - map.height) / 2;
-    } else {
-      cameraY = playerRenderPos.y - viewTilesY / 2;
-      cameraY = Math.max(0, Math.min(map.height - viewTilesY, cameraY));
-    }
+    cameraX = GameRuntime.getCenteredCameraOrigin(playerRenderPos.x, viewTilesX, map.width);
+    cameraY = GameRuntime.getCenteredCameraOrigin(playerRenderPos.y, viewTilesY, map.height);
 
     ctx.fillStyle = '#101419';
     ctx.fillRect(0, 0, width, height);
@@ -2187,6 +2204,9 @@ export class GameRuntime {
       return false;
     }
 
+    if (existingCritterId !== null) {
+      this.clearCritterEquipmentLoadout(existingCritterId);
+    }
     this.playerCritterProgress.squad[safeSlotIndex] = critterId;
     this.markProgressDirty();
     this.showMessage(`${critter.name} joined your squad.`, 2200);
@@ -2217,9 +2237,19 @@ export class GameRuntime {
     }
 
     const critterName = this.critterLookup[currentCritterId]?.name ?? 'Critter';
+    this.clearCritterEquipmentLoadout(currentCritterId);
     this.playerCritterProgress.squad[safeSlotIndex] = null;
     this.markProgressDirty();
     this.showMessage(`${critterName} removed from squad.`, 2000);
+    return true;
+  }
+
+  private clearCritterEquipmentLoadout(critterId: number): boolean {
+    const progress = this.playerCritterProgress.collection.find((entry) => entry.critterId === critterId);
+    if (!progress?.unlocked || !Array.isArray(progress.equippedEquipmentAnchors) || progress.equippedEquipmentAnchors.length === 0) {
+      return false;
+    }
+    progress.equippedEquipmentAnchors = [];
     return true;
   }
 
@@ -2430,6 +2460,7 @@ export class GameRuntime {
       prev.defenseModifier = 1;
       prev.speedModifier = 1;
       prev.activeEffectIds = [];
+      prev.persistentHeal = null;
     }
     battle.playerActiveIndex = teamIndex;
 
@@ -3947,7 +3978,6 @@ export class GameRuntime {
       this.advanceDialogue();
       return;
     }
-    this.clearFishingSession();
 
     const interactWarp = this.findInteractWarpAtPlayer();
     if (interactWarp) {
@@ -3965,6 +3995,11 @@ export class GameRuntime {
     });
     if (npc) {
       this.startNpcDialogue(npc);
+      return;
+    }
+
+    const toolItem = this.getBestOwnedToolForFacingTile();
+    if (toolItem && this.tryUseToolItem(toolItem)) {
       return;
     }
 
@@ -4463,12 +4498,12 @@ export class GameRuntime {
   }
 
   private tryUseToolItem(item: GameItemDefinition): boolean {
-    const effect = item.effectConfig as { actionId?: string; successText?: string };
-    const actionId = typeof effect.actionId === 'string' ? effect.actionId.trim().toLowerCase() : '';
+    const effect = item.effectConfig as { successText?: string };
+    const actionId = this.getToolActionId(item);
     if (actionId === 'fishing') {
       return this.tryUseFishingTool(item);
     }
-    this.showMessage(this.resolveItemSuccessText(item, effect.successText?.trim() || `${item.name} used.`), 2000);
+    this.showToolUseMessage(item, effect.successText?.trim() || 'Used.');
     return true;
   }
 
@@ -4494,31 +4529,37 @@ export class GameRuntime {
       waitRemainingMs: 0,
       biteWindowRemainingMs: 0,
       biteWindowDurationMs: 0,
+      castAnimationElapsedMs: 0,
+      castAnimationDurationMs: this.resolveFishingCastAnimationDurationMs(this.facing),
     };
     this.fishingSession.waitRemainingMs = this.fishingSession.waitDurationMs;
+    const effect = item.effectConfig as { successText?: string };
+    this.showToolUseMessage(item, effect.successText?.trim() || 'You cast your line.');
     return true;
   }
 
   private tryHandleFishingInputKey(key: string): boolean {
     const isFishingKey = key === 'f' || key === 'F';
-    const canReelWithInteract = isInteractKey(key) && this.fishingSession?.hasPendingBite;
-    if (!isFishingKey && !canReelWithInteract) {
+    const isInteractPress = isInteractKey(key);
+    if (!isFishingKey && !isInteractPress) {
       return false;
-    }
-
-    if (canReelWithInteract) {
-      this.resolveFishingReelIn();
-      return true;
     }
 
     if (this.fishingSession) {
       if (this.fishingSession.hasPendingBite) {
         this.resolveFishingReelIn();
+      } else {
+        this.clearFishingSession();
+        this.showMessage('You reeled in too early and caught nothing.', 1800);
       }
       return true;
     }
 
-    const fishingTool = this.getHotkeyFishingToolItem();
+    if (!isFishingKey) {
+      return false;
+    }
+
+    const fishingTool = this.getBestOwnedToolForAction('fishing');
     if (!fishingTool) {
       return false;
     }
@@ -4530,6 +4571,13 @@ export class GameRuntime {
     const session = this.fishingSession;
     if (!session) {
       return;
+    }
+
+    if (session.castAnimationDurationMs > 0) {
+      session.castAnimationElapsedMs = Math.min(
+        session.castAnimationDurationMs,
+        session.castAnimationElapsedMs + deltaMs,
+      );
     }
 
     if (session.mapId !== this.currentMapId || this.activeBattle) {
@@ -4568,22 +4616,107 @@ export class GameRuntime {
     this.fishingSession = null;
   }
 
-  private getHotkeyFishingToolItem(): GameItemDefinition | null {
+  private getBestOwnedToolForAction(actionId: string): GameItemDefinition | null {
+    const normalizedActionId = actionId.trim().toLowerCase();
+    let bestItem: GameItemDefinition | null = null;
+    let bestPower = Number.NEGATIVE_INFINITY;
     for (const item of this.itemDatabase) {
-      if (!item.isActive || item.effectType !== 'tool_action') {
+      if (!this.isOwnedToolItem(item)) {
         continue;
       }
-      const effect = item.effectConfig as { actionId?: string };
-      const actionId = typeof effect.actionId === 'string' ? effect.actionId.trim().toLowerCase() : '';
-      if (actionId !== 'fishing') {
+      if (this.getToolActionId(item) !== normalizedActionId) {
         continue;
       }
-      if (getItemInventoryQuantity(this.playerItemInventory, item.id) <= 0) {
+      const power = this.getToolSelectionPower(item);
+      if (bestItem && power <= bestPower) {
         continue;
       }
-      return item;
+      bestItem = item;
+      bestPower = power;
     }
-    return null;
+    return bestItem;
+  }
+
+  private getBestOwnedToolForFacingTile(): GameItemDefinition | null {
+    const map = this.getCurrentMap();
+    const targetTile = this.getFacingTile();
+    if (!isInsideMap(map, targetTile.x, targetTile.y)) {
+      return null;
+    }
+
+    const targetTileCode = tileAt(map, targetTile.x, targetTile.y);
+    if (!targetTileCode) {
+      return null;
+    }
+    const tileLabel = this.getTileDefinition(targetTileCode).label.trim().toLowerCase();
+    if (!tileLabel) {
+      return null;
+    }
+
+    let bestItem: GameItemDefinition | null = null;
+    let bestPower = Number.NEGATIVE_INFINITY;
+    for (const item of this.itemDatabase) {
+      if (!this.isOwnedToolItem(item)) {
+        continue;
+      }
+      if (!this.doesToolMatchFacingTile(item, tileLabel)) {
+        continue;
+      }
+      if (!this.isToolUsableForFacingTile(item)) {
+        continue;
+      }
+      const power = this.getToolSelectionPower(item);
+      if (bestItem && power <= bestPower) {
+        continue;
+      }
+      bestItem = item;
+      bestPower = power;
+    }
+    return bestItem;
+  }
+
+  private isOwnedToolItem(item: GameItemDefinition): boolean {
+    return item.isActive && item.effectType === 'tool_action' && getItemInventoryQuantity(this.playerItemInventory, item.id) > 0;
+  }
+
+  private getToolActionId(item: GameItemDefinition): string {
+    const effect = item.effectConfig as { actionId?: string };
+    return typeof effect.actionId === 'string' ? effect.actionId.trim().toLowerCase() : '';
+  }
+
+  private getToolSelectionPower(item: GameItemDefinition): number {
+    if (this.getToolActionId(item) === 'fishing') {
+      return this.resolveFishingPower(item);
+    }
+    const effect = item.effectConfig as { power?: number };
+    if (typeof effect.power === 'number' && Number.isFinite(effect.power)) {
+      return effect.power;
+    }
+    if (typeof item.value === 'number' && Number.isFinite(item.value)) {
+      return item.value;
+    }
+    return 0;
+  }
+
+  private doesToolMatchFacingTile(item: GameItemDefinition, tileLabel: string): boolean {
+    const effect = item.effectConfig as { requiresFacingTileKeyword?: string[] };
+    const keywords = Array.isArray(effect.requiresFacingTileKeyword)
+      ? effect.requiresFacingTileKeyword
+          .filter((entry): entry is string => typeof entry === 'string')
+          .map((entry) => entry.trim().toLowerCase())
+          .filter((entry) => entry.length > 0)
+      : [];
+    if (keywords.length === 0) {
+      return false;
+    }
+    return keywords.some((keyword) => tileLabel.includes(keyword));
+  }
+
+  private isToolUsableForFacingTile(item: GameItemDefinition): boolean {
+    if (this.getToolActionId(item) === 'fishing') {
+      return this.getFishingContextForFacingTile() !== null;
+    }
+    return true;
   }
 
   private getFishingContextForFacingTile(): {
@@ -4642,6 +4775,14 @@ export class GameRuntime {
     const minWindow = Math.round(lerp(FISHING_MIN_BITE_WINDOW_MS, 5000, clampedPower));
     const maxWindow = Math.round(lerp(2000, FISHING_MAX_BITE_WINDOW_MS, clampedPower));
     return randomInt(Math.max(500, Math.min(minWindow, maxWindow)), Math.max(minWindow, maxWindow));
+  }
+
+  private resolveFishingCastAnimationDurationMs(facing: Direction): number {
+    const frames = this.getDirectionalAnimationFrames(this.playerSpriteConfig.animationSets, 'fish', facing);
+    if (frames.length === 0) {
+      return 0;
+    }
+    return frames.length * FISHING_CAST_ANIMATION_FRAME_MS;
   }
 
   private resolveFishingReelIn(): void {
@@ -4910,6 +5051,15 @@ export class GameRuntime {
     return text.trim() || fallback;
   }
 
+  private showToolUseMessage(item: GameItemDefinition, fallback: string): void {
+    const itemName = item.name.trim() || 'Tool';
+    const message = this.resolveItemSuccessText(item, fallback).trim() || fallback.trim() || 'Used.';
+    const normalizedItemName = itemName.toLowerCase();
+    const normalizedMessage = message.toLowerCase();
+    const text = normalizedMessage.startsWith(normalizedItemName) ? message : `${itemName}: ${message}`;
+    this.showMessage(text, 2000);
+  }
+
   private showItemMisuse(item: GameItemDefinition, fallback: string): void {
     const text = item.misuseText.trim() || fallback;
     if (!text) {
@@ -5102,6 +5252,7 @@ export class GameRuntime {
       activeNarration: null,
       activeAnimation: null,
       pendingKnockoutResolution: null,
+      pendingEndTurnResolution: false,
       nextAnimationToken: 1,
     };
     this.nextBattleId += 1;
@@ -5246,6 +5397,7 @@ export class GameRuntime {
         speedModifier: 1,
         activeEffectIds: [],
         equipmentEffectIds,
+        persistentHeal: null,
         consecutiveSuccessfulGuardCount: 0,
         equippedSkillIds: progress.equippedSkillIds,
       });
@@ -5327,6 +5479,7 @@ export class GameRuntime {
       speedModifier: 1,
       activeEffectIds: [],
       equipmentEffectIds: [],
+      persistentHeal: null,
       consecutiveSuccessfulGuardCount: 0,
       equippedSkillIds,
     };
@@ -5349,6 +5502,7 @@ export class GameRuntime {
     }
 
     battle.turnNumber += 1;
+    battle.pendingEndTurnResolution = false;
 
     const narration: BattleNarrationEvent[] = [];
 
@@ -5373,6 +5527,13 @@ export class GameRuntime {
       const opponentResult = this.executeBattleSkill(battle, 'opponent', true, guardSucceeded);
       if (opponentResult.narrationEvents.length > 0) {
         narration.push(...opponentResult.narrationEvents);
+      }
+      if (
+        !opponentResult.defenderFainted &&
+        battle.result === 'ongoing' &&
+        battle.phase === 'player-turn'
+      ) {
+        battle.pendingEndTurnResolution = true;
       }
       this.startBattleNarration(battle, narration);
       return;
@@ -5407,6 +5568,13 @@ export class GameRuntime {
       if (opponentResult.narrationEvents.length > 0) {
         narration.push(...opponentResult.narrationEvents);
       }
+      if (
+        !opponentResult.defenderFainted &&
+        battle.result === 'ongoing' &&
+        battle.phase === 'player-turn'
+      ) {
+        battle.pendingEndTurnResolution = true;
+      }
       this.startBattleNarration(battle, narration);
       return;
     }
@@ -5430,6 +5598,13 @@ export class GameRuntime {
     );
     if (playerResult.narrationEvents.length > 0) {
       narration.push(...playerResult.narrationEvents);
+    }
+    if (
+      !playerResult.defenderFainted &&
+      battle.result === 'ongoing' &&
+      battle.phase === 'player-turn'
+    ) {
+      battle.pendingEndTurnResolution = true;
     }
     this.startBattleNarration(battle, narration);
   }
@@ -8584,13 +8759,13 @@ export class GameRuntime {
             stridePhase: this.playerStridePhase,
           }
         : undefined;
-    const frameIndex = this.getSpriteFrameIndex(
-      this.playerSpriteConfig,
-      facing,
-      isMoving,
-      this.playerAnimationMs,
-      { moveProgressAndPhase },
-    );
+    const fishingCastFrameIndex = this.getActiveFishingCastAnimationFrameIndex(facing);
+    const frameIndex =
+      fishingCastFrameIndex >= 0
+        ? fishingCastFrameIndex
+        : this.getSpriteFrameIndex(this.playerSpriteConfig, facing, isMoving, this.playerAnimationMs, {
+            moveProgressAndPhase,
+          });
     if (
       this.playerSpriteSheet.status === 'ready' &&
       this.playerSpriteSheet.image &&
@@ -8610,6 +8785,25 @@ export class GameRuntime {
     }
 
     this.drawActor(ctx, position, '#2f5fd0', cameraX, cameraY, facing, true);
+  }
+
+  private getActiveFishingCastAnimationFrameIndex(facing: Direction): number {
+    const session = this.fishingSession;
+    if (!session || session.castAnimationDurationMs <= 0 || session.castAnimationElapsedMs >= session.castAnimationDurationMs) {
+      return -1;
+    }
+
+    const frames = this.getDirectionalAnimationFrames(this.playerSpriteConfig.animationSets, 'fish', facing);
+    if (frames.length === 0) {
+      return -1;
+    }
+
+    const frameIndex = Math.min(
+      Math.floor(session.castAnimationElapsedMs / FISHING_CAST_ANIMATION_FRAME_MS),
+      frames.length - 1,
+    );
+    const frame = frames[frameIndex];
+    return Number.isFinite(frame) && frame >= 0 ? Math.floor(frame) : -1;
   }
 
   private getNpcFrameIndex(npc: NpcDefinition, facing: Direction, isMoving: boolean): number {
@@ -8658,7 +8852,7 @@ export class GameRuntime {
 
     const renderWidthTiles = Math.max(1, sprite.renderWidthTiles ?? 1);
     const renderHeightTiles = Math.max(1, sprite.renderHeightTiles ?? 2);
-    const destWidth = renderWidthTiles * TILE_SIZE;
+    const destWidth = renderWidthTiles * TILE_SIZE * ACTOR_SPRITE_WIDTH_SCALE;
     const destHeight = renderHeightTiles * TILE_SIZE;
     const baseLeftX = (position.x - cameraX) * TILE_SIZE;
     const baseBottomY = (position.y - cameraY + 1) * TILE_SIZE;
@@ -8669,7 +8863,15 @@ export class GameRuntime {
     const baseY = baseBottomY;
     ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
     ctx.beginPath();
-    ctx.ellipse(centerX, baseY - TILE_SIZE * 0.08, TILE_SIZE * 0.22, TILE_SIZE * 0.12, 0, 0, Math.PI * 2);
+    ctx.ellipse(
+      centerX,
+      baseY - TILE_SIZE * 0.08,
+      TILE_SIZE * 0.22 * ACTOR_SPRITE_WIDTH_SCALE,
+      TILE_SIZE * 0.12,
+      0,
+      0,
+      Math.PI * 2,
+    );
     ctx.fill();
 
     ctx.imageSmoothingEnabled = false;
@@ -8720,10 +8922,7 @@ export class GameRuntime {
 
       const moveFramesFromSet = this.getDirectionalAnimationFrames(sprite.animationSets, moveAnimationName, facing);
       if (moveFramesFromSet.length > 0) {
-        const frameIdx = Math.min(
-          Math.floor(cycleProgress * moveFramesFromSet.length),
-          moveFramesFromSet.length - 1,
-        );
+        const frameIdx = Math.floor(animationMs / WALK_ANIMATION_FRAME_MS) % moveFramesFromSet.length;
         const frame = moveFramesFromSet[frameIdx];
         if (Number.isFinite(frame) && frame >= 0) {
           return Math.floor(frame);
@@ -8731,7 +8930,7 @@ export class GameRuntime {
       }
       const walkFrames = sprite.walkFrames?.[facing];
       if (Array.isArray(walkFrames) && walkFrames.length > 0) {
-        const frameIdx = Math.min(Math.floor(cycleProgress * walkFrames.length), walkFrames.length - 1);
+        const frameIdx = Math.floor(animationMs / WALK_ANIMATION_FRAME_MS) % walkFrames.length;
         const frame = walkFrames[frameIdx];
         if (Number.isFinite(frame) && frame >= 0) {
           return Math.floor(frame);

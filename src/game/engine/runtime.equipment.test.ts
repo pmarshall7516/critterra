@@ -384,6 +384,54 @@ describe('GameRuntime equipment integration', () => {
     expect(runtime.equipEquipmentItem(2, 0, 'simple-helmet')).toBe(false);
   });
 
+  it('unequips all equipment when a critter is removed from the squad', () => {
+    const critterA = createCritter({ id: 1, name: 'Buddo', level: 1 });
+    const critterB = createCritter({ id: 2, name: 'Sprout', level: 1 });
+    const runtime = createRuntimeHarness({
+      critters: [critterA, critterB],
+      collection: [
+        createProgressEntry(critterA, {
+          level: 1,
+          equippedEquipmentAnchors: [{ itemId: 'simple-helmet', slotIndex: 0 }],
+        }),
+        createProgressEntry(critterB, { level: 1 }),
+      ],
+      squad: [1, 2, null, null, null, null, null, null],
+      items: [createEquipmentItem({ id: 'simple-helmet', name: 'Simple Helmet', equipSize: 1 })],
+      itemInventory: inventory([{ itemId: 'simple-helmet', quantity: 1 }]),
+    });
+
+    expect(runtime.clearSquadSlot(0)).toBe(true);
+    expect((runtime as any).playerCritterProgress.squad[0]).toBeNull();
+    const removedCritter = (runtime as any).playerCritterProgress.collection[0] as PlayerCritterCollectionEntry;
+    expect(removedCritter.equippedEquipmentAnchors).toEqual([]);
+  });
+
+  it('unequips all equipment when a critter is swapped out of a squad slot', () => {
+    const critterA = createCritter({ id: 1, name: 'Buddo', level: 1 });
+    const critterB = createCritter({ id: 2, name: 'Sprout', level: 1 });
+    const critterC = createCritter({ id: 3, name: 'Moss', level: 1 });
+    const runtime = createRuntimeHarness({
+      critters: [critterA, critterB, critterC],
+      collection: [
+        createProgressEntry(critterA, {
+          level: 1,
+          equippedEquipmentAnchors: [{ itemId: 'simple-helmet', slotIndex: 0 }],
+        }),
+        createProgressEntry(critterB, { level: 1 }),
+        createProgressEntry(critterC, { level: 1 }),
+      ],
+      squad: [1, 3, null, null, null, null, null, null],
+      items: [createEquipmentItem({ id: 'simple-helmet', name: 'Simple Helmet', equipSize: 1 })],
+      itemInventory: inventory([{ itemId: 'simple-helmet', quantity: 1 }]),
+    });
+
+    expect(runtime.assignCritterToSquadSlot(0, 2)).toBe(true);
+    expect((runtime as any).playerCritterProgress.squad[0]).toBe(2);
+    const replacedCritter = (runtime as any).playerCritterProgress.collection[0] as PlayerCritterCollectionEntry;
+    expect(replacedCritter.equippedEquipmentAnchors).toEqual([]);
+  });
+
   it('applies equipment effects to battle stats and squad snapshot overrides', () => {
     const critter = createCritter({ id: 1, name: 'Buddo', level: 2, extraEquipSlots: 1 });
     const effects: EquipmentEffectDefinition[] = [
