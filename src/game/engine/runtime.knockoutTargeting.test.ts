@@ -3,6 +3,7 @@ import { GameRuntime } from '@/game/engine/runtime';
 import { missionProgressKey } from '@/game/critters/schema';
 import type { CritterDefinition, PlayerCritterCollectionEntry, PlayerCritterProgress } from '@/game/critters/types';
 import { PLAYER_CRITTER_PROGRESS_VERSION } from '@/game/critters/types';
+import type { GameItemDefinition } from '@/game/items/types';
 
 const EMPTY_STAT_DELTA = {
   hp: 0,
@@ -50,6 +51,7 @@ function createCollectionEntry(
   input: {
     unlocked: boolean;
     level: number;
+    equippedEquipmentAnchors?: PlayerCritterCollectionEntry['equippedEquipmentAnchors'];
   },
 ): PlayerCritterCollectionEntry {
   return {
@@ -64,7 +66,7 @@ function createCollectionEntry(
     effectiveStats: { ...critter.baseStats },
     unlockedAbilityIds: [],
     equippedSkillIds: [null, null, null, null],
-    equippedEquipmentAnchors: [],
+    equippedEquipmentAnchors: input.equippedEquipmentAnchors ?? [],
     lastProgressAt: null,
   };
 }
@@ -72,7 +74,9 @@ function createCollectionEntry(
 function createRuntimeHarness(input: {
   critters: CritterDefinition[];
   progress: PlayerCritterProgress;
+  items?: GameItemDefinition[];
 }) {
+  const items = input.items ?? [];
   const runtime = Object.create(GameRuntime.prototype) as any;
   runtime.critterDatabase = input.critters;
   runtime.critterLookup = input.critters.reduce<Record<number, CritterDefinition>>((registry, critter) => {
@@ -80,11 +84,37 @@ function createRuntimeHarness(input: {
     return registry;
   }, {});
   runtime.playerCritterProgress = input.progress;
+  runtime.itemDatabase = items;
+  runtime.itemById = items.reduce<Record<string, GameItemDefinition>>((registry, item) => {
+    registry[item.id] = item;
+    return registry;
+  }, {});
   runtime.sideStoryMissions = {};
   runtime.flags = {};
   runtime.markProgressDirty = vi.fn();
   runtime.showMessage = vi.fn();
   return runtime;
+}
+
+function createEquipmentItem(id: string, name: string): GameItemDefinition {
+  return {
+    id,
+    name,
+    category: 'equipment',
+    description: '',
+    imageUrl: '',
+    misuseText: '',
+    successText: '',
+    effectType: 'equip_effect',
+    effectConfig: {
+      equipSize: 1,
+      equipmentEffectIds: [],
+    },
+    consumable: false,
+    maxStack: 99,
+    isActive: true,
+    starterGrantAmount: 0,
+  };
 }
 
 function readMissionProgress(
@@ -343,5 +373,130 @@ describe('GameRuntime knockout mission targeting', () => {
     runtime.recordOpposingKnockoutProgress(99, 1);
 
     expect(progress.lockedKnockoutTargetCritterId).toBeNull();
+  });
+
+  it('credits knockout-with-item missions when the attacker meets the equipped item requirements', () => {
+    const attacker = createCritter({
+      id: 1,
+      name: 'Attacker',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 2,
+          statDelta: { ...EMPTY_STAT_DELTA },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+        {
+          level: 2,
+          missions: [
+            {
+              id: 'item-ko',
+              type: 'opposing_knockouts_with_item',
+              targetValue: 5,
+              requiredEquippedItemCount: 2,
+              requiredEquippedItemIds: ['trainer-charm'],
+            },
+          ],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STAT_DELTA },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const opponent = createCritter({ id: 99, name: 'Opponent', element: 'ember', levels: [] });
+    const progress: PlayerCritterProgress = {
+      version: PLAYER_CRITTER_PROGRESS_VERSION,
+      unlockedSquadSlots: 2,
+      squad: [1, null, null, null, null, null, null, null],
+      collection: [
+        createCollectionEntry(attacker, {
+          unlocked: true,
+          level: 1,
+          equippedEquipmentAnchors: [
+            { itemId: 'trainer-charm', slotIndex: 0 },
+            { itemId: 'battle-ribbon', slotIndex: 1 },
+          ],
+        }),
+      ],
+      lockedKnockoutTargetCritterId: null,
+    };
+    const runtime = createRuntimeHarness({
+      critters: [attacker, opponent],
+      progress,
+      items: [
+        createEquipmentItem('trainer-charm', 'Trainer Charm'),
+        createEquipmentItem('battle-ribbon', 'Battle Ribbon'),
+      ],
+    });
+
+    runtime.recordOpposingKnockoutProgress(99, 1);
+
+    expect(readMissionProgress(progress, 1, 2, 'item-ko')).toBe(1);
+  });
+
+  it('does not credit knockout-with-item missions when the attacker lacks the required equipment setup', () => {
+    const attacker = createCritter({
+      id: 1,
+      name: 'Attacker',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 2,
+          statDelta: { ...EMPTY_STAT_DELTA },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+        {
+          level: 2,
+          missions: [
+            {
+              id: 'item-ko',
+              type: 'opposing_knockouts_with_item',
+              targetValue: 5,
+              requiredEquippedItemCount: 2,
+              requiredEquippedItemIds: ['trainer-charm'],
+            },
+          ],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STAT_DELTA },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const opponent = createCritter({ id: 99, name: 'Opponent', element: 'ember', levels: [] });
+    const progress: PlayerCritterProgress = {
+      version: PLAYER_CRITTER_PROGRESS_VERSION,
+      unlockedSquadSlots: 2,
+      squad: [1, null, null, null, null, null, null, null],
+      collection: [
+        createCollectionEntry(attacker, {
+          unlocked: true,
+          level: 1,
+          equippedEquipmentAnchors: [{ itemId: 'battle-ribbon', slotIndex: 0 }],
+        }),
+      ],
+      lockedKnockoutTargetCritterId: null,
+    };
+    const runtime = createRuntimeHarness({
+      critters: [attacker, opponent],
+      progress,
+      items: [
+        createEquipmentItem('trainer-charm', 'Trainer Charm'),
+        createEquipmentItem('battle-ribbon', 'Battle Ribbon'),
+      ],
+    });
+
+    runtime.recordOpposingKnockoutProgress(99, 1);
+
+    expect(readMissionProgress(progress, 1, 2, 'item-ko')).toBe(0);
   });
 });

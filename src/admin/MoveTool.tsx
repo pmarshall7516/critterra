@@ -1,9 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CRITTER_ELEMENTS } from '@/game/critters/types';
-import type { SkillDefinition } from '@/game/skills/types';
-import { ELEMENT_SKILL_COLORS, SKILL_TYPES } from '@/game/skills/types';
+import type { SkillDefinition, SkillHealMode } from '@/game/skills/types';
+import {
+  DAMAGE_SKILL_HEAL_MODES,
+  ELEMENT_SKILL_COLORS,
+  SKILL_TYPES,
+  SUPPORT_SKILL_HEAL_MODES,
+  getSkillValueDisplayNumber,
+} from '@/game/skills/types';
 import { sanitizeSkillLibrary } from '@/game/skills/schema';
 import { apiFetchJson } from '@/shared/apiClient';
+
+type SkillDraftType = SkillDefinition['type'];
 
 function extractSupabasePublicBucketRoot(assetUrl: string): string | null {
   try {
@@ -43,7 +51,7 @@ interface AdminSkillCellContentProps {
 function AdminSkillCellContent({ skill, effectList, iconsBucketRoot }: AdminSkillCellContentProps) {
   const elementLogoUrl = buildElementLogoUrlFromIconsBucket(skill.element, iconsBucketRoot);
   const typeLabel = skill.type === 'damage' ? 'D' : 'S';
-  const value = skill.type === 'damage' ? skill.damage : skill.healPercent != null ? Math.round(skill.healPercent * 100) : null;
+  const value = getSkillValueDisplayNumber(skill);
   const effectIconUrls = (skill.effectIds ?? [])
     .map((id) => {
       const effect = effectList.find((e) => e.id === id);
@@ -86,9 +94,10 @@ interface SkillDraft {
   skill_id: string;
   skill_name: string;
   element: string;
-  type: 'damage' | 'support';
+  type: SkillDraftType;
   damage: string;
-  healPercent: string;
+  healMode: SkillHealMode;
+  healValue: string;
   effectIds: string[];
 }
 
@@ -98,18 +107,62 @@ const emptyDraft: SkillDraft = {
   element: 'normal',
   type: 'damage',
   damage: '20',
-  healPercent: '0',
+  healMode: 'none',
+  healValue: '0',
   effectIds: [],
 };
 
+function normalizeDraftHealMode(type: SkillDraftType, healMode: string): SkillHealMode {
+  if (type === 'support') {
+    return SUPPORT_SKILL_HEAL_MODES.includes(healMode as (typeof SUPPORT_SKILL_HEAL_MODES)[number])
+      ? (healMode as SkillHealMode)
+      : 'flat';
+  }
+  return DAMAGE_SKILL_HEAL_MODES.includes(healMode as (typeof DAMAGE_SKILL_HEAL_MODES)[number])
+    ? (healMode as SkillHealMode)
+    : 'none';
+}
+
+function parseDraftHealValue(healMode: SkillHealMode, rawValue: string): number {
+  if (healMode === 'flat') {
+    return Math.max(0, parseInt(rawValue, 10) || 0);
+  }
+  return Math.max(0, Math.min(1, parseFloat(rawValue) || 0));
+}
+
+function getHealModeLabel(healMode: SkillHealMode): string {
+  if (healMode === 'flat') {
+    return 'Flat HP';
+  }
+  if (healMode === 'percent_damage') {
+    return '% of damage dealt';
+  }
+  if (healMode === 'percent_max_hp') {
+    return '% of max HP';
+  }
+  return 'No heal';
+}
+
+function getHealValueLabel(type: SkillDraftType, healMode: SkillHealMode): string {
+  if (healMode === 'flat') {
+    return type === 'damage' ? 'Heal amount (HP)' : 'Support heal amount (HP)';
+  }
+  if (healMode === 'percent_damage') {
+    return 'Heal % of damage (0-1)';
+  }
+  return 'Heal % of max HP (0-1)';
+}
+
 function skillToDraft(skill: SkillDefinition, effectIds: string[]): SkillDraft {
+  const healMode = normalizeDraftHealMode(skill.type, skill.healMode ?? (skill.type === 'support' ? 'flat' : 'none'));
   return {
     skill_id: skill.skill_id,
     skill_name: skill.skill_name,
     element: skill.element,
     type: skill.type,
     damage: skill.type === 'damage' && skill.damage != null ? String(skill.damage) : '20',
-    healPercent: skill.type === 'support' && skill.healPercent != null ? String(skill.healPercent) : '0',
+    healMode,
+    healValue: typeof skill.healValue === 'number' ? String(skill.healValue) : '0',
     effectIds: skill.effectIds ?? effectIds.filter((id) => (skill.effectIds ?? []).includes(id)),
   };
 }
@@ -139,6 +192,9 @@ export function MoveTool() {
     () => skills.find((s) => s.skill_id === selectedSkillId) ?? null,
     [skills, selectedSkillId],
   );
+  const activeHealMode = normalizeDraftHealMode(draft.type, draft.healMode);
+  const showHealValueInput = draft.type === 'support' || activeHealMode !== 'none';
+  const usesPercentHealValue = activeHealMode === 'percent_damage' || activeHealMode === 'percent_max_hp';
 
   const filteredSkills = useMemo(() => {
     const query = searchInput.trim().toLowerCase();
@@ -241,7 +297,8 @@ export function MoveTool() {
         element: s.element,
         type: s.type,
         damage: s.type === 'damage' ? s.damage : undefined,
-        healPercent: s.type === 'support' ? s.healPercent : undefined,
+        healMode: s.healMode,
+        healValue: s.healMode ? s.healValue : undefined,
         effectIds: s.effectIds?.length ? s.effectIds : undefined,
       }));
       const result = await apiFetchJson<SkillsSaveResponse>('/api/admin/skills/save', {
@@ -278,14 +335,15 @@ export function MoveTool() {
       return;
     }
     const damageNum = draft.type === 'damage' ? Math.max(1, parseInt(draft.damage, 10) || 20) : undefined;
-    const healNum = draft.type === 'support' ? Math.max(0, Math.min(1, parseFloat(draft.healPercent) || 0)) : undefined;
+    const healValue = parseDraftHealValue(activeHealMode, draft.healValue);
     const newSkill: SkillDefinition = {
       skill_id: id,
       skill_name: name,
       element: draft.element as SkillDefinition['element'],
       type: draft.type,
       ...(draft.type === 'damage' && { damage: damageNum }),
-      ...(draft.type === 'support' && { healPercent: healNum }),
+      ...(draft.type === 'support' && { healMode: activeHealMode, healValue }),
+      ...(draft.type === 'damage' && activeHealMode !== 'none' && { healMode: activeHealMode, healValue }),
       ...(draft.effectIds.length > 0 && { effectIds: draft.effectIds }),
     };
     const existingIndex = skills.findIndex((s) => s.skill_id === id);
@@ -407,7 +465,16 @@ export function MoveTool() {
               Type
               <select
                 value={draft.type}
-                onChange={(e) => setDraft((d) => ({ ...d, type: e.target.value as 'damage' | 'support' }))}
+                onChange={(e) =>
+                  setDraft((d) => {
+                    const nextType = e.target.value as SkillDraftType;
+                    return {
+                      ...d,
+                      type: nextType,
+                      healMode: normalizeDraftHealMode(nextType, d.healMode),
+                    };
+                  })
+                }
               >
                 {SKILL_TYPES.map((t) => (
                   <option key={t} value={t}>{t}</option>
@@ -426,18 +493,34 @@ export function MoveTool() {
               />
             </label>
           )}
-          {draft.type === 'support' && (
+          <label>
+            {draft.type === 'damage' ? 'Damage heal mode' : 'Support heal mode'}
+            <select
+              value={activeHealMode}
+              onChange={(e) => setDraft((d) => ({ ...d, healMode: normalizeDraftHealMode(d.type, e.target.value) }))}
+            >
+              {(draft.type === 'damage' ? DAMAGE_SKILL_HEAL_MODES : SUPPORT_SKILL_HEAL_MODES).map((mode) => (
+                <option key={mode} value={mode}>
+                  {getHealModeLabel(mode)}
+                </option>
+              ))}
+            </select>
+          </label>
+          {showHealValueInput && (
             <label>
-              Heal % (0–1)
+              {getHealValueLabel(draft.type, activeHealMode)}
               <input
                 type="number"
                 min={0}
-                max={1}
-                step={0.01}
-                value={draft.healPercent}
-                onChange={(e) => setDraft((d) => ({ ...d, healPercent: e.target.value }))}
+                max={usesPercentHealValue ? 1 : undefined}
+                step={usesPercentHealValue ? 0.01 : 1}
+                value={draft.healValue}
+                onChange={(e) => setDraft((d) => ({ ...d, healValue: e.target.value }))}
               />
             </label>
+          )}
+          {showHealValueInput && usesPercentHealValue && (
+            <p className="admin-note">Percent heal values use 0-1 decimals. Example: 0.25 = 25%.</p>
           )}
           {effectList.length > 0 && (
             <label className="admin-effect-picker-wrap">

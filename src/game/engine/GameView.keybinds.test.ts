@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  getActionablePayMissions,
   resolveGameViewKeyIntent,
   resolvePinnedLockedKnockoutTrackerState,
   shouldShowLockedKnockoutTargetButton,
@@ -154,5 +155,52 @@ describe('locked knockout tracker UI helpers', () => {
         },
       } as any),
     ).toBe('hidden');
+  });
+});
+
+describe('pay mission UI helpers', () => {
+  it('returns only incomplete pay missions from the active requirement', () => {
+    expect(
+      getActionablePayMissions({
+        activeRequirement: {
+          level: 2,
+          targetLevel: 2,
+          requiredMissionCount: 1,
+          completedMissionCount: 0,
+          completed: false,
+          missions: [
+            {
+              id: 'pay-1',
+              type: 'pay_item',
+              targetValue: 50,
+              currentValue: 0,
+              completed: false,
+              requiredPaymentItemId: 'lume',
+              requiredPaymentItemName: 'Lume',
+              requiredPaymentOwnedQuantity: 25,
+              requiredPaymentAffordable: false,
+            },
+            {
+              id: 'ko-1',
+              type: 'opposing_knockouts',
+              targetValue: 3,
+              currentValue: 0,
+              completed: false,
+            },
+            {
+              id: 'pay-done',
+              type: 'pay_item',
+              targetValue: 10,
+              currentValue: 10,
+              completed: true,
+              requiredPaymentItemId: 'lume',
+              requiredPaymentItemName: 'Lume',
+              requiredPaymentOwnedQuantity: 10,
+              requiredPaymentAffordable: true,
+            },
+          ],
+        },
+      } as any).map((mission: any) => mission.id),
+    ).toEqual(['pay-1']);
   });
 });

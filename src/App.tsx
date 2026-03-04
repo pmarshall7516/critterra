@@ -129,6 +129,7 @@ function App() {
     return (
       <TitleScreen
         userEmail={authUser?.email ?? 'unknown'}
+        isAdmin={authUser?.isAdmin ?? false}
         hasSave={hasSave}
         onLogout={() => {
           void apiFetchJson<{ ok: boolean }>('/api/auth/logout', { method: 'POST' });

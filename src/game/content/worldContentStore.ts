@@ -31,6 +31,11 @@ export interface StoredWorldContent {
     primaryCode: string;
     width: number;
     height: number;
+    ySortWithActors?: boolean;
+    /** Per-tile tileset from DB: use this image and dimensions for atlas coordinates. */
+    tilesetUrl?: string;
+    tilePixelWidth?: number;
+    tilePixelHeight?: number;
     cells: Array<{
       code: string;
       atlasIndex: number;
@@ -124,11 +129,25 @@ export function readStoredWorldContent(): StoredWorldContent | null {
 
   try {
     const parsed = JSON.parse(raw) as Partial<StoredWorldContent>;
+    const rawTiles = Array.isArray(parsed.savedPaintTiles) ? parsed.savedPaintTiles : [];
+    const savedPaintTiles = rawTiles.map((t) => {
+      const entry = t as Record<string, unknown>;
+      return {
+        id: typeof entry.id === 'string' ? entry.id : '',
+        name: typeof entry.name === 'string' ? entry.name : '',
+        primaryCode: typeof entry.primaryCode === 'string' ? entry.primaryCode : '',
+        width: typeof entry.width === 'number' ? entry.width : 1,
+        height: typeof entry.height === 'number' ? entry.height : 1,
+        ...(typeof entry.ySortWithActors === 'boolean' && { ySortWithActors: entry.ySortWithActors }),
+        ...(typeof entry.tilesetUrl === 'string' && entry.tilesetUrl.trim() && { tilesetUrl: entry.tilesetUrl.trim() }),
+        ...(typeof entry.tilePixelWidth === 'number' && Number.isFinite(entry.tilePixelWidth) && { tilePixelWidth: Math.max(1, Math.floor(entry.tilePixelWidth)) }),
+        ...(typeof entry.tilePixelHeight === 'number' && Number.isFinite(entry.tilePixelHeight) && { tilePixelHeight: Math.max(1, Math.floor(entry.tilePixelHeight)) }),
+        cells: Array.isArray(entry.cells) ? (entry.cells as StoredWorldContent['savedPaintTiles'][0]['cells']) : [],
+      };
+    });
     return {
       maps: Array.isArray(parsed.maps) ? (parsed.maps as WorldMapInput[]) : [],
-      savedPaintTiles: Array.isArray(parsed.savedPaintTiles)
-        ? (parsed.savedPaintTiles as StoredWorldContent['savedPaintTiles'])
-        : [],
+      savedPaintTiles,
       customTileDefinitions:
         parsed.customTileDefinitions && typeof parsed.customTileDefinitions === 'object'
           ? (parsed.customTileDefinitions as Record<string, TileDefinition>)
@@ -193,11 +212,27 @@ export async function hydrateWorldContentFromServer(): Promise<void> {
   const content = result.data.content;
   const skillEffects = sanitizeSkillEffectLibrary(content.skillEffects);
   const knownEffectIds = new Set(skillEffects.map((e) => e.effect_id));
+  const rawTiles = Array.isArray(content.savedPaintTiles) ? content.savedPaintTiles : [];
+  const savedPaintTiles = rawTiles.map((t) => {
+    const entry = t as Record<string, unknown>;
+    return {
+      id: typeof entry.id === 'string' ? entry.id : '',
+      name: typeof entry.name === 'string' ? entry.name : '',
+      primaryCode: typeof entry.primaryCode === 'string' ? entry.primaryCode : '',
+      width: typeof entry.width === 'number' ? entry.width : 1,
+      height: typeof entry.height === 'number' ? entry.height : 1,
+      ...(typeof entry.ySortWithActors === 'boolean' && { ySortWithActors: entry.ySortWithActors }),
+      ...(typeof entry.tilesetUrl === 'string' && entry.tilesetUrl.trim() && { tilesetUrl: entry.tilesetUrl.trim() }),
+      ...(typeof entry.tilePixelWidth === 'number' && Number.isFinite(entry.tilePixelWidth) && { tilePixelWidth: Math.max(1, Math.floor(entry.tilePixelWidth)) }),
+      ...(typeof entry.tilePixelHeight === 'number' && Number.isFinite(entry.tilePixelHeight) && { tilePixelHeight: Math.max(1, Math.floor(entry.tilePixelHeight)) }),
+      cells: Array.isArray(entry.cells)
+        ? (entry.cells as Array<{ code: string; atlasIndex: number; dx: number; dy: number }>)
+        : [],
+    };
+  }) as StoredWorldContent['savedPaintTiles'];
   const next: StoredWorldContent = {
     maps: Array.isArray(content.maps) ? (content.maps as WorldMapInput[]) : [],
-    savedPaintTiles: Array.isArray(content.savedPaintTiles)
-      ? (content.savedPaintTiles as StoredWorldContent['savedPaintTiles'])
-      : [],
+    savedPaintTiles,
     customTileDefinitions:
       content.customTileDefinitions && typeof content.customTileDefinitions === 'object'
         ? (content.customTileDefinitions as Record<string, TileDefinition>)

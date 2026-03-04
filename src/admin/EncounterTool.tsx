@@ -2,7 +2,7 @@ import { type CSSProperties, useEffect, useMemo, useState } from 'react';
 import type { CritterDefinition } from '@/game/critters/types';
 import { sanitizeCritterDatabase } from '@/game/critters/schema';
 import { sanitizeEncounterTableLibrary } from '@/game/encounters/schema';
-import type { EncounterTableDefinition } from '@/game/encounters/types';
+import type { EncounterCritterDropDefinition, EncounterTableDefinition } from '@/game/encounters/types';
 import type { GameItemDefinition } from '@/game/items/types';
 import { sanitizeItemCatalog } from '@/game/items/schema';
 import { apiFetchJson } from '@/shared/apiClient';
@@ -32,15 +32,34 @@ interface EncounterSaveResponse {
 
 type EncounterDraftEntryKind = 'critter' | 'item';
 
-interface EncounterEntryDraft {
+interface EncounterDropDraft {
   rowId: string;
-  kind: EncounterDraftEntryKind;
+  itemId: string;
+  minAmountInput: string;
+  maxAmountInput: string;
+  dropChanceInput: string;
+}
+
+interface EncounterCritterDraftEntry {
+  rowId: string;
+  kind: 'critter';
   critterId: number | null;
+  weightInput: string;
+  minLevelInput: string;
+  maxLevelInput: string;
+  drops: EncounterDropDraft[];
+}
+
+interface EncounterItemDraftEntry {
+  rowId: string;
+  kind: 'item';
   itemId: string;
   weightInput: string;
-  minValueInput: string;
-  maxValueInput: string;
+  minAmountInput: string;
+  maxAmountInput: string;
 }
+
+type EncounterEntryDraft = EncounterCritterDraftEntry | EncounterItemDraftEntry;
 
 interface EncounterTableDraft {
   id: string;
@@ -228,10 +247,10 @@ export function EncounterTool() {
           rowId: createDraftRowId(),
           kind: 'critter',
           critterId,
-          itemId: '',
           weightInput: '0',
-          minValueInput: '1',
-          maxValueInput: String(maxLevel),
+          minLevelInput: '1',
+          maxLevelInput: String(maxLevel),
+          drops: [],
         },
       ],
     }));
@@ -252,11 +271,10 @@ export function EncounterTool() {
         {
           rowId: createDraftRowId(),
           kind: 'item',
-          critterId: null,
           itemId,
           weightInput: '0',
-          minValueInput: '1',
-          maxValueInput: '1',
+          minAmountInput: '1',
+          maxAmountInput: '1',
         },
       ],
     }));
@@ -264,10 +282,22 @@ export function EncounterTool() {
     setStatus(`Added item row for "${item.name}" with weight 0 and amount range 1-1.`);
   };
 
-  const updateDraftEntry = (rowId: string, patch: Partial<EncounterEntryDraft>) => {
+  const updateCritterDraftEntry = (
+    rowId: string,
+    patch: Partial<Omit<EncounterCritterDraftEntry, 'rowId' | 'kind'>>,
+  ) => {
     setDraft((current) => ({
       ...current,
-      entries: current.entries.map((entry) => (entry.rowId === rowId ? { ...entry, ...patch } : entry)),
+      entries: current.entries.map((entry) =>
+        entry.rowId === rowId && entry.kind === 'critter' ? { ...entry, ...patch } : entry,
+      ),
+    }));
+  };
+
+  const updateItemDraftEntry = (rowId: string, patch: Partial<Omit<EncounterItemDraftEntry, 'rowId' | 'kind'>>) => {
+    setDraft((current) => ({
+      ...current,
+      entries: current.entries.map((entry) => (entry.rowId === rowId && entry.kind === 'item' ? { ...entry, ...patch } : entry)),
     }));
   };
 
@@ -280,25 +310,78 @@ export function EncounterTool() {
         }
         if (nextKind === 'item') {
           return {
-            ...entry,
+            rowId: entry.rowId,
             kind: 'item',
-            critterId: null,
             itemId: sortedItems[0]?.id ?? '',
-            minValueInput: '1',
-            maxValueInput: '1',
+            weightInput: entry.weightInput,
+            minAmountInput: '1',
+            maxAmountInput: '1',
           };
         }
         const fallbackCritter = sortedCritters[0];
         const maxLevel = getMaxCritterLevel(fallbackCritter);
         return {
-          ...entry,
+          rowId: entry.rowId,
           kind: 'critter',
           critterId: fallbackCritter?.id ?? 1,
-          itemId: '',
-          minValueInput: '1',
-          maxValueInput: String(maxLevel),
+          weightInput: entry.weightInput,
+          minLevelInput: '1',
+          maxLevelInput: String(maxLevel),
+          drops: [],
         };
       }),
+    }));
+  };
+
+  const addDropToCritterDraft = (rowId: string) => {
+    const defaultItemId = sortedItems[0]?.id ?? '';
+    if (!defaultItemId) {
+      setError('Add items before configuring wild drops.');
+      return;
+    }
+    setDraft((current) => ({
+      ...current,
+      entries: current.entries.map((entry) =>
+        entry.rowId === rowId && entry.kind === 'critter'
+          ? {
+              ...entry,
+              drops: [...entry.drops, createDefaultDropDraft(defaultItemId)],
+            }
+          : entry,
+      ),
+    }));
+    setError('');
+  };
+
+  const updateCritterDropDraft = (
+    rowId: string,
+    dropRowId: string,
+    patch: Partial<Omit<EncounterDropDraft, 'rowId'>>,
+  ) => {
+    setDraft((current) => ({
+      ...current,
+      entries: current.entries.map((entry) =>
+        entry.rowId === rowId && entry.kind === 'critter'
+          ? {
+              ...entry,
+              drops: entry.drops.map((drop) => (drop.rowId === dropRowId ? { ...drop, ...patch } : drop)),
+            }
+          : entry,
+      ),
+    }));
+  };
+
+  const removeCritterDropDraft = (rowId: string, dropRowId: string) => {
+    setDraft((current) => ({
+      ...current,
+      entries: current.entries.map((entry) =>
+        entry.rowId === rowId && entry.kind === 'critter'
+          ? {
+              ...entry,
+              drops: entry.drops.filter((drop) => drop.rowId !== dropRowId),
+            }
+          : entry,
+      ),
     }));
   };
 
@@ -315,7 +398,7 @@ export function EncounterTool() {
       allowedItemIds: new Set(items.map((item) => item.id)),
     });
     if (!parsed) {
-      setError('Encounter table draft is invalid. Check ID, weights, critter/item rows, and ranges.');
+      setError('Encounter table draft is invalid. Check ID, weights, ranges, and critter drop rows.');
       return;
     }
 
@@ -466,19 +549,17 @@ export function EncounterTool() {
           </div>
 
           <h4>Current Entries</h4>
-          <p className="admin-note">Critter rows use level ranges. Item rows use amount ranges.</p>
+          <p className="admin-note">Critter rows use level ranges and optional wild drops. Item rows use amount ranges.</p>
           <div className="encounter-current-grid">
             {draft.entries.map((entry) => {
               const critter = entry.kind === 'critter' && entry.critterId !== null ? critterById.get(entry.critterId) : null;
               const item = entry.kind === 'item' ? itemById.get(entry.itemId) : null;
-              const rangeLabelMin = entry.kind === 'critter' ? 'Min Lv' : 'Min Amt';
-              const rangeLabelMax = entry.kind === 'critter' ? 'Max Lv' : 'Max Amt';
               return (
                 <article key={entry.rowId} className="encounter-entry-card">
                   <p className="encounter-entry-card__name">
                     {entry.kind === 'critter'
                       ? `Critter: #${entry.critterId ?? '?'} ${critter?.name ?? 'Unknown Critter'}`
-                      : `Item: ${item?.name ?? entry.itemId ?? 'Unknown Item'}`}
+                      : `Item: ${item?.name ?? entry.itemId}`}
                   </p>
                   <div className="encounter-entry-card__fields">
                     <label>
@@ -499,10 +580,10 @@ export function EncounterTool() {
                           onChange={(event) => {
                             const nextId = Number.parseInt(event.target.value, 10);
                             const maxLevel = getMaxCritterLevel(critterById.get(nextId));
-                            updateDraftEntry(entry.rowId, {
+                            updateCritterDraftEntry(entry.rowId, {
                               critterId: Number.isFinite(nextId) ? nextId : null,
-                              minValueInput: '1',
-                              maxValueInput: String(maxLevel),
+                              minLevelInput: '1',
+                              maxLevelInput: String(maxLevel),
                             });
                           }}
                         >
@@ -518,7 +599,7 @@ export function EncounterTool() {
                         Item
                         <select
                           value={entry.itemId}
-                          onChange={(event) => updateDraftEntry(entry.rowId, { itemId: event.target.value })}
+                          onChange={(event) => updateItemDraftEntry(entry.rowId, { itemId: event.target.value })}
                         >
                           {sortedItems.map((candidate) => (
                             <option key={`row-${entry.rowId}-item-${candidate.id}`} value={candidate.id}>
@@ -532,25 +613,52 @@ export function EncounterTool() {
                       Wt
                       <input
                         value={entry.weightInput}
-                        onChange={(event) => updateDraftEntry(entry.rowId, { weightInput: event.target.value })}
+                        onChange={(event) =>
+                          entry.kind === 'critter'
+                            ? updateCritterDraftEntry(entry.rowId, { weightInput: event.target.value })
+                            : updateItemDraftEntry(entry.rowId, { weightInput: event.target.value })
+                        }
                       />
                     </label>
-                    <label>
-                      {rangeLabelMin}
-                      <input
-                        value={entry.minValueInput}
-                        onChange={(event) => updateDraftEntry(entry.rowId, { minValueInput: event.target.value })}
-                        placeholder="auto"
-                      />
-                    </label>
-                    <label>
-                      {rangeLabelMax}
-                      <input
-                        value={entry.maxValueInput}
-                        onChange={(event) => updateDraftEntry(entry.rowId, { maxValueInput: event.target.value })}
-                        placeholder="auto"
-                      />
-                    </label>
+                    {entry.kind === 'critter' ? (
+                      <>
+                        <label>
+                          Min Lv
+                          <input
+                            value={entry.minLevelInput}
+                            onChange={(event) => updateCritterDraftEntry(entry.rowId, { minLevelInput: event.target.value })}
+                            placeholder="auto"
+                          />
+                        </label>
+                        <label>
+                          Max Lv
+                          <input
+                            value={entry.maxLevelInput}
+                            onChange={(event) => updateCritterDraftEntry(entry.rowId, { maxLevelInput: event.target.value })}
+                            placeholder="auto"
+                          />
+                        </label>
+                      </>
+                    ) : (
+                      <>
+                        <label>
+                          Min Amt
+                          <input
+                            value={entry.minAmountInput}
+                            onChange={(event) => updateItemDraftEntry(entry.rowId, { minAmountInput: event.target.value })}
+                            placeholder="auto"
+                          />
+                        </label>
+                        <label>
+                          Max Amt
+                          <input
+                            value={entry.maxAmountInput}
+                            onChange={(event) => updateItemDraftEntry(entry.rowId, { maxAmountInput: event.target.value })}
+                            placeholder="auto"
+                          />
+                        </label>
+                      </>
+                    )}
                   </div>
                   <button
                     type="button"
@@ -559,6 +667,87 @@ export function EncounterTool() {
                   >
                     Remove
                   </button>
+                  {entry.kind === 'critter' && (
+                    <section className="encounter-entry-card__drops">
+                      <div className="encounter-entry-card__drops-header">
+                        <div>
+                          <p className="encounter-entry-card__drops-title">Wild Drops</p>
+                          <p className="admin-note encounter-entry-card__drops-note">
+                            Each drop rolls independently. Chances do not need to total 1.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className="secondary encounter-entry-card__drop-add"
+                          onClick={() => addDropToCritterDraft(entry.rowId)}
+                          disabled={sortedItems.length === 0}
+                        >
+                          Add Drop Item
+                        </button>
+                      </div>
+                      {sortedItems.length === 0 ? (
+                        <p className="admin-note">No items are available to add as drops.</p>
+                      ) : entry.drops.length === 0 ? (
+                        <p className="admin-note">No drop items configured.</p>
+                      ) : (
+                        <div className="encounter-drop-list">
+                          {entry.drops.map((drop) => (
+                            <div key={drop.rowId} className="encounter-drop-row">
+                              <label>
+                                Item
+                                <select
+                                  value={drop.itemId}
+                                  onChange={(event) =>
+                                    updateCritterDropDraft(entry.rowId, drop.rowId, { itemId: event.target.value })
+                                  }
+                                >
+                                  {sortedItems.map((candidate) => (
+                                    <option key={`drop-${drop.rowId}-item-${candidate.id}`} value={candidate.id}>
+                                      {candidate.name} ({candidate.id})
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label>
+                                Min Amt
+                                <input
+                                  value={drop.minAmountInput}
+                                  onChange={(event) =>
+                                    updateCritterDropDraft(entry.rowId, drop.rowId, { minAmountInput: event.target.value })
+                                  }
+                                />
+                              </label>
+                              <label>
+                                Max Amt
+                                <input
+                                  value={drop.maxAmountInput}
+                                  onChange={(event) =>
+                                    updateCritterDropDraft(entry.rowId, drop.rowId, { maxAmountInput: event.target.value })
+                                  }
+                                />
+                              </label>
+                              <label>
+                                Chance
+                                <input
+                                  value={drop.dropChanceInput}
+                                  onChange={(event) =>
+                                    updateCritterDropDraft(entry.rowId, drop.rowId, { dropChanceInput: event.target.value })
+                                  }
+                                />
+                              </label>
+                              <button
+                                type="button"
+                                className="secondary encounter-drop-row__remove"
+                                onClick={() => removeCritterDropDraft(entry.rowId, drop.rowId)}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                  )}
                 </article>
               );
             })}
@@ -652,21 +841,26 @@ function tableToDraft(table: EncounterTableDefinition): EncounterTableDraft {
         return {
           rowId: `row-${index + 1}`,
           kind: 'item',
-          critterId: null,
           itemId: entry.itemId,
           weightInput: String(entry.weight),
-          minValueInput: typeof entry.minAmount === 'number' ? String(entry.minAmount) : '',
-          maxValueInput: typeof entry.maxAmount === 'number' ? String(entry.maxAmount) : '',
+          minAmountInput: typeof entry.minAmount === 'number' ? String(entry.minAmount) : '',
+          maxAmountInput: typeof entry.maxAmount === 'number' ? String(entry.maxAmount) : '',
         };
       }
       return {
         rowId: `row-${index + 1}`,
         kind: 'critter',
         critterId: entry.critterId,
-        itemId: '',
         weightInput: String(entry.weight),
-        minValueInput: typeof entry.minLevel === 'number' ? String(entry.minLevel) : '',
-        maxValueInput: typeof entry.maxLevel === 'number' ? String(entry.maxLevel) : '',
+        minLevelInput: typeof entry.minLevel === 'number' ? String(entry.minLevel) : '',
+        maxLevelInput: typeof entry.maxLevel === 'number' ? String(entry.maxLevel) : '',
+        drops: (entry.drops ?? []).map((drop, dropIndex) => ({
+          rowId: `row-${index + 1}-drop-${dropIndex + 1}`,
+          itemId: drop.itemId,
+          minAmountInput: String(drop.minAmount),
+          maxAmountInput: String(drop.maxAmount),
+          dropChanceInput: String(drop.dropChance),
+        })),
       };
     }),
   };
@@ -694,15 +888,12 @@ function parseDraft(
       if (!itemId || !options.allowedItemIds.has(itemId)) {
         return null;
       }
-      const minAmount = parseAmountInput(entry.minValueInput);
-      const maxAmount = parseAmountInput(entry.maxValueInput);
+      const minAmount = parseAmountInput(entry.minAmountInput);
+      const maxAmount = parseAmountInput(entry.maxAmountInput);
       if (minAmount === undefined || maxAmount === undefined) {
         return null;
       }
-      const normalizedMin =
-        minAmount !== null && maxAmount !== null && minAmount > maxAmount ? maxAmount : minAmount;
-      const normalizedMax =
-        minAmount !== null && maxAmount !== null && minAmount > maxAmount ? minAmount : maxAmount;
+      const [normalizedMin, normalizedMax] = normalizeOptionalRange(minAmount, maxAmount);
       entries.push({
         kind: 'item',
         itemId,
@@ -716,21 +907,23 @@ function parseDraft(
     if (entry.critterId === null || !Number.isInteger(entry.critterId) || !options.allowedCritterIds.has(entry.critterId)) {
       return null;
     }
-    const minLevel = parseLevelInput(entry.minValueInput);
-    const maxLevel = parseLevelInput(entry.maxValueInput);
+    const minLevel = parseLevelInput(entry.minLevelInput);
+    const maxLevel = parseLevelInput(entry.maxLevelInput);
     if (minLevel === undefined || maxLevel === undefined) {
       return null;
     }
-    const normalizedMin =
-      minLevel !== null && maxLevel !== null && minLevel > maxLevel ? maxLevel : minLevel;
-    const normalizedMax =
-      minLevel !== null && maxLevel !== null && minLevel > maxLevel ? minLevel : maxLevel;
+    const [normalizedMin, normalizedMax] = normalizeOptionalRange(minLevel, maxLevel);
+    const drops = parseDropDrafts(entry.drops, options.allowedItemIds);
+    if (!drops) {
+      return null;
+    }
     entries.push({
       kind: 'critter',
       critterId: entry.critterId,
       weight,
       minLevel: normalizedMin,
       maxLevel: normalizedMax,
+      ...(drops.length > 0 ? { drops } : {}),
     });
   }
 
@@ -768,6 +961,75 @@ function parseAmountInput(value: string): number | null | undefined {
     return undefined;
   }
   return Math.max(1, Math.min(9999, Math.floor(parsed)));
+}
+
+function parseRequiredAmountInput(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed || !/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  return Math.max(1, Math.min(9999, Math.floor(parsed)));
+}
+
+function parseChanceInput(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = Number.parseFloat(trimmed);
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  return roundProbabilityValue(parsed);
+}
+
+function parseDropDrafts(drops: EncounterDropDraft[], allowedItemIds: Set<string>): EncounterCritterDropDefinition[] | null {
+  const parsed: EncounterCritterDropDefinition[] = [];
+  for (const drop of drops) {
+    const itemId = sanitizeItemId(drop.itemId);
+    if (!itemId || !allowedItemIds.has(itemId)) {
+      return null;
+    }
+    const minAmount = parseRequiredAmountInput(drop.minAmountInput);
+    const maxAmount = parseRequiredAmountInput(drop.maxAmountInput);
+    const dropChance = parseChanceInput(drop.dropChanceInput);
+    if (minAmount === undefined || maxAmount === undefined || dropChance === undefined) {
+      return null;
+    }
+    const [normalizedMin, normalizedMax] = normalizeRequiredRange(minAmount, maxAmount);
+    parsed.push({
+      itemId,
+      minAmount: normalizedMin,
+      maxAmount: normalizedMax,
+      dropChance,
+    });
+  }
+  return parsed;
+}
+
+function normalizeOptionalRange(
+  minValue: number | null,
+  maxValue: number | null,
+): [number | null, number | null] {
+  if (minValue !== null && maxValue !== null && minValue > maxValue) {
+    return [maxValue, minValue];
+  }
+  return [minValue, maxValue];
+}
+
+function normalizeRequiredRange(minValue: number, maxValue: number): [number, number] {
+  if (minValue > maxValue) {
+    return [maxValue, minValue];
+  }
+  return [minValue, maxValue];
+}
+
+function roundProbabilityValue(value: number): number {
+  return Math.round(Math.max(0, Math.min(1, value)) * 1000000) / 1000000;
 }
 
 function encounterCandidateCardStyle(element: string): CSSProperties {
@@ -812,16 +1074,39 @@ function createDraftRowId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function createDefaultDropDraft(itemId: string): EncounterDropDraft {
+  return {
+    rowId: createDraftRowId(),
+    itemId,
+    minAmountInput: '1',
+    maxAmountInput: '1',
+    dropChanceInput: '0',
+  };
+}
+
 function toComparableDraftJson(draft: EncounterTableDraft): string {
   return JSON.stringify({
     id: draft.id.trim(),
     entries: draft.entries.map((entry) => ({
       kind: entry.kind,
-      critterId: entry.critterId,
-      itemId: entry.itemId,
       weightInput: entry.weightInput,
-      minValueInput: entry.minValueInput,
-      maxValueInput: entry.maxValueInput,
+      ...(entry.kind === 'critter'
+        ? {
+            critterId: entry.critterId,
+            minLevelInput: entry.minLevelInput,
+            maxLevelInput: entry.maxLevelInput,
+            drops: entry.drops.map((drop) => ({
+              itemId: drop.itemId,
+              minAmountInput: drop.minAmountInput,
+              maxAmountInput: drop.maxAmountInput,
+              dropChanceInput: drop.dropChanceInput,
+            })),
+          }
+        : {
+            itemId: entry.itemId,
+            minAmountInput: entry.minAmountInput,
+            maxAmountInput: entry.maxAmountInput,
+          }),
     })),
   });
 }

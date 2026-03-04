@@ -441,6 +441,7 @@ export function EquipmentEffectsTool() {
               </button>
             </div>
             <label>
+              Search Icons
               <input
                 type="text"
                 placeholder="Search by icon name/path"
@@ -463,7 +464,7 @@ export function EquipmentEffectsTool() {
                 </button>
               </div>
             ) : null}
-            <div className="spritesheet-browser" style={{ maxHeight: 200, overflowY: 'auto', marginTop: '0.35rem' }}>
+            <div className="spritesheet-browser">
               {filteredIconEntries.map((entry) => (
                 <div
                   key={entry.path}
@@ -497,4 +498,3 @@ export function EquipmentEffectsTool() {
     </section>
   );
 }
-

@@ -1,5 +1,9 @@
 import type { Vector2 } from '@/shared/types';
-import type { EncounterTableDefinition, MapEncounterGroupDefinition } from '@/game/encounters/types';
+import type {
+  EncounterCritterDropDefinition,
+  EncounterTableDefinition,
+  MapEncounterGroupDefinition,
+} from '@/game/encounters/types';
 
 const ENCOUNTER_ID_FALLBACK = 'encounter-table';
 const ENCOUNTER_ID_REGEX = /[^a-z0-9-]/g;
@@ -72,12 +76,42 @@ export function sanitizeEncounterEntries(raw: unknown): EncounterTableDefinition
       continue;
     }
     const [minLevel, maxLevel] = sanitizeEncounterLevelRange(record.minLevel, record.maxLevel);
+    const drops = sanitizeEncounterCritterDrops(record.drops);
     parsed.push({
       kind: 'critter',
       critterId,
       weight: sanitizeEncounterWeight(record.weight),
       minLevel,
       maxLevel,
+      ...(drops.length > 0 ? { drops } : {}),
+    });
+  }
+  return parsed;
+}
+
+export function sanitizeEncounterCritterDrops(raw: unknown): EncounterCritterDropDefinition[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const parsed: EncounterCritterDropDefinition[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const itemId = sanitizeEncounterItemId(record.itemId);
+    if (!itemId) {
+      continue;
+    }
+    const [minAmount, maxAmount] = sanitizeEncounterDropAmountRange(
+      record.minAmount ?? record.minQty ?? record.minQuantity,
+      record.maxAmount ?? record.maxQty ?? record.maxQuantity,
+    );
+    parsed.push({
+      itemId,
+      minAmount,
+      maxAmount,
+      dropChance: sanitizeEncounterDropChance(record.dropChance ?? record.chance ?? record.percent),
     });
   }
   return parsed;
@@ -143,6 +177,10 @@ export function sanitizeEncounterWeight(raw: unknown): number {
   return Math.round(normalized * WEIGHT_PRECISION) / WEIGHT_PRECISION;
 }
 
+export function sanitizeEncounterDropChance(raw: unknown): number {
+  return sanitizeEncounterWeight(raw);
+}
+
 export function sanitizeEncounterFrequency(raw: unknown): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) {
     return 0;
@@ -187,6 +225,22 @@ function sanitizeEncounterAmountRange(minRaw: unknown, maxRaw: unknown): [number
 function sanitizeEncounterAmountValue(raw: unknown): number | null {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) {
     return null;
+  }
+  return clampInt(raw, 1, 9999, 1);
+}
+
+function sanitizeEncounterDropAmountRange(minRaw: unknown, maxRaw: unknown): [number, number] {
+  const minAmount = sanitizeEncounterDropAmountValue(minRaw);
+  const maxAmount = sanitizeEncounterDropAmountValue(maxRaw);
+  if (minAmount > maxAmount) {
+    return [maxAmount, minAmount];
+  }
+  return [minAmount, maxAmount];
+}
+
+function sanitizeEncounterDropAmountValue(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return 1;
   }
   return clampInt(raw, 1, 9999, 1);
 }

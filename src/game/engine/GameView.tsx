@@ -1,7 +1,13 @@
 import { type CSSProperties, type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { GameRuntime, RuntimeSnapshot } from '@/game/engine/runtime';
 import { TILE_SIZE } from '@/shared/constants';
-import { ELEMENT_SKILL_COLORS } from '@/game/skills/types';
+import {
+  ELEMENT_SKILL_COLORS,
+  describeSkillHealForTooltip,
+  getSkillValueDisplayNumber,
+  type SkillDefinition,
+  type SkillHealMode,
+} from '@/game/skills/types';
 
 interface GameViewProps {
   mode: 'new' | 'continue';
@@ -25,6 +31,9 @@ const DEFAULT_VIEWPORT: ViewportSize = {
 };
 
 const FIXED_STEP_MS = 1000 / 60;
+const TARGET_RENDER_STEP_MS = 1000 / 30;
+const MAX_FRAME_DELTA_MS = 250;
+const MAX_UPDATE_STEPS_PER_FRAME = 6;
 
 type SideMenuView = 'root' | 'squad' | 'collection' | 'backpack';
 type CollectionSort = 'id' | 'name';
@@ -72,6 +81,20 @@ export function shouldShowLockedKnockoutTargetButton(
   return !entry.unlocked && entry.lockedKnockoutTargetEligible;
 }
 
+export function getActionablePayMissions(
+  entry: Pick<CritterCardEntry, 'activeRequirement'>,
+): Array<NonNullable<CritterCardEntry['activeRequirement']>['missions'][number]> {
+  if (!entry.activeRequirement) {
+    return [];
+  }
+  return entry.activeRequirement.missions.filter(
+    (
+      mission,
+    ): mission is NonNullable<CritterCardEntry['activeRequirement']>['missions'][number] =>
+      mission.type === 'pay_item' && !mission.completed,
+  );
+}
+
 export type PinnedLockedKnockoutTrackerState = 'hidden' | 'no-target' | 'selected-target';
 
 export function resolvePinnedLockedKnockoutTrackerState(
@@ -93,9 +116,15 @@ export function shouldShowPinnedLockedKnockoutTracker(
   return resolvePinnedLockedKnockoutTrackerState(critters) !== 'hidden';
 }
 
+function parseCssPixelValue(value: string): number {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const squadGridRef = useRef<HTMLDivElement | null>(null);
   const runtimeRef = useRef<GameRuntime | null>(null);
   const menuOpenRef = useRef(false);
   const battleActiveRef = useRef(false);
@@ -116,6 +145,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
   const [backpackTargetSelection, setBackpackTargetSelection] = useState<BackpackTargetSelection | null>(null);
   const [squadPickerSlotIndex, setSquadPickerSlotIndex] = useState<number | null>(null);
   const [squadSearchInput, setSquadSearchInput] = useState('');
+  const [squadUniformCardHeight, setSquadUniformCardHeight] = useState<number | null>(null);
   const [expandedStatsByCritterId, setExpandedStatsByCritterId] = useState<Record<number, boolean>>({});
   const [hoveredStarterCritterId, setHoveredStarterCritterId] = useState<number | null>(null);
 
@@ -224,35 +254,56 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     };
 
     resizeCanvas();
+    renderCurrentFrame();
     window.addEventListener('resize', resizeCanvas);
 
     let animationFrame = 0;
     let previousTime = performance.now();
+    let updateAccumulator = 0;
+    let renderAccumulator = 0;
     let snapshotTimer = 0;
 
     const frame = (currentTime: number) => {
-      const delta = Math.min(33, currentTime - previousTime);
+      const delta = Math.min(MAX_FRAME_DELTA_MS, Math.max(0, currentTime - previousTime));
       previousTime = currentTime;
 
       const shouldAutoAdvance = !menuOpenRef.current && currentTime >= manualStepUntilRef.current;
       if (shouldAutoAdvance) {
-        runtime.update(delta);
+        updateAccumulator += delta;
+        let updateSteps = 0;
+        while (updateAccumulator >= FIXED_STEP_MS && updateSteps < MAX_UPDATE_STEPS_PER_FRAME) {
+          runtime.update(FIXED_STEP_MS);
+          updateAccumulator -= FIXED_STEP_MS;
+          updateSteps += 1;
+        }
+        if (updateSteps === MAX_UPDATE_STEPS_PER_FRAME) {
+          updateAccumulator = 0;
+        }
+      } else {
+        updateAccumulator = 0;
       }
 
       const viewportSize = runtime.getViewportSize();
+      let viewportSizeChanged = false;
       if (
         renderSizeRef.current.width !== viewportSize.width ||
         renderSizeRef.current.height !== viewportSize.height
       ) {
         resizeCanvas();
+        viewportSizeChanged = true;
       }
 
-      renderCurrentFrame();
+      renderAccumulator += delta;
+      const shouldRender = viewportSizeChanged || renderAccumulator >= TARGET_RENDER_STEP_MS;
+      if (shouldRender) {
+        renderCurrentFrame();
+        renderAccumulator = renderAccumulator >= TARGET_RENDER_STEP_MS ? renderAccumulator % TARGET_RENDER_STEP_MS : 0;
+      }
 
       snapshotTimer += delta;
       if (snapshotTimer >= 100) {
         setSnapshot(runtime.getSnapshot());
-        snapshotTimer = 0;
+        snapshotTimer %= 100;
       }
 
       animationFrame = requestAnimationFrame(frame);
@@ -270,11 +321,13 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
       const steps = Math.max(1, Math.round(safeMs / FIXED_STEP_MS));
 
       manualStepUntilRef.current = performance.now() + 80;
+      updateAccumulator = 0;
       for (let i = 0; i < steps; i += 1) {
         runtime.update(FIXED_STEP_MS);
       }
 
       renderCurrentFrame();
+      renderAccumulator = 0;
       setSnapshot(runtime.getSnapshot());
     };
 
@@ -303,6 +356,14 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
       }
 
       if (battleActiveRef.current) {
+        if (key === ' ' || key === 'Enter') {
+          event.preventDefault();
+          const changed = runtime.battleAdvanceNarration() || runtime.battleAcknowledgeResult();
+          if (changed) {
+            setSnapshot(runtime.getSnapshot());
+          }
+          return;
+        }
         if (
           key.startsWith('Arrow') ||
           key === 'w' ||
@@ -421,6 +482,15 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     if (changed) {
       setSnapshot(runtime.getSnapshot());
     }
+  };
+
+  const handlePayCritterMission = (critterId: number, missionId: string) => {
+    const runtime = runtimeRef.current;
+    if (!runtime) {
+      return;
+    }
+    runtime.payCritterMission(critterId, missionId);
+    setSnapshot(runtime.getSnapshot());
   };
 
   const handleSetLockedKnockoutTarget = (critterId: number | null) => {
@@ -680,6 +750,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
 
   const critterState = snapshot?.critters;
   const lockedKnockoutTracker = critterState?.lockedKnockoutTracker ?? null;
+  const recentTrackedMissions = critterState?.recentTrackedMissions ?? [];
   const backpackState = snapshot?.backpack;
   const starterSelection = snapshot?.story.starterSelection ?? null;
   const healPrompt = snapshot?.story.healPrompt ?? null;
@@ -690,6 +761,79 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
   const showPinnedLockedKnockoutTracker = pinnedLockedKnockoutTrackerState !== 'hidden';
   const backpackItems = backpackState?.items ?? [];
   const backpackCategories = backpackState?.categories ?? [];
+  useEffect(() => {
+    if (!menuOpen || menuView !== 'squad') {
+      setSquadUniformCardHeight(null);
+      return;
+    }
+
+    const grid = squadGridRef.current;
+    if (!grid) {
+      setSquadUniformCardHeight(null);
+      return;
+    }
+
+    let frameId = 0;
+    const measure = () => {
+      const cards = Array.from(grid.querySelectorAll<HTMLElement>(':scope > .collection-card'));
+      if (cards.length === 0) {
+        setSquadUniformCardHeight(null);
+        return;
+      }
+
+      let tallest = 0;
+      for (const card of cards) {
+        const body = card.querySelector<HTMLElement>('.collection-card__body');
+        const bodyHeight = body ? body.getBoundingClientRect().height : card.getBoundingClientRect().height;
+        const styles = window.getComputedStyle(card);
+        const chromeHeight =
+          parseCssPixelValue(styles.paddingTop) +
+          parseCssPixelValue(styles.paddingBottom) +
+          parseCssPixelValue(styles.borderTopWidth) +
+          parseCssPixelValue(styles.borderBottomWidth);
+        tallest = Math.max(tallest, Math.ceil(bodyHeight + chromeHeight));
+      }
+      setSquadUniformCardHeight((current) => (current === tallest ? current : tallest));
+    };
+    const scheduleMeasure = () => {
+      if (frameId !== 0) {
+        window.cancelAnimationFrame(frameId);
+      }
+      frameId = window.requestAnimationFrame(() => {
+        frameId = 0;
+        measure();
+      });
+    };
+
+    scheduleMeasure();
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver === 'function') {
+      observer = new ResizeObserver(scheduleMeasure);
+      observer.observe(grid);
+      for (const card of Array.from(grid.querySelectorAll<HTMLElement>(':scope > .collection-card'))) {
+        observer.observe(card);
+        const body = card.querySelector<HTMLElement>('.collection-card__body');
+        if (body) {
+          observer.observe(body);
+        }
+      }
+    }
+    window.addEventListener('resize', scheduleMeasure);
+    return () => {
+      if (frameId !== 0) {
+        window.cancelAnimationFrame(frameId);
+      }
+      observer?.disconnect();
+      window.removeEventListener('resize', scheduleMeasure);
+    };
+  }, [menuOpen, menuView, squadSlots, collection, expandedStatsByCritterId]);
+  const squadGridStyle = useMemo(
+    () =>
+      squadUniformCardHeight
+        ? ({ '--squad-uniform-card-height': `${squadUniformCardHeight}px` } as CSSProperties)
+        : undefined,
+    [squadUniformCardHeight],
+  );
   useEffect(() => {
     if (backpackCategoryFilter === 'all') {
       return;
@@ -952,6 +1096,21 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                   Backpack
                 </button>
               </div>
+              {recentTrackedMissions.length > 0 && (
+                <section className="side-menu__tracker">
+                  <h3>Recent Missions</h3>
+                  <ul>
+                    {recentTrackedMissions.map((mission) => (
+                      <li key={`recent-tracked-${mission.id}`}>
+                        <span>
+                          {mission.critterName}: {formatMissionTypeLabel(mission)}
+                        </span>
+                        <span>{Math.min(mission.currentValue, mission.targetValue)}/{mission.targetValue}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
               {showPinnedLockedKnockoutTracker && (
                 <section className="side-menu__tracker">
                   <h3>KO Mission Tracker</h3>
@@ -1001,7 +1160,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
               </p>
               <p className="side-menu__meta">Click cards to assign or swap. Right-click a filled card to remove.</p>
               {snapshot?.message && <p className="side-menu__notice">{snapshot.message}</p>}
-              <div className="collection-grid squad-grid">
+              <div ref={squadGridRef} className="collection-grid squad-grid" style={squadGridStyle}>
                 {squadSlots.map((slot) => {
                   const slottedCritter = slot.critterId ? collectionById.get(slot.critterId) ?? null : null;
                   if (!slot.unlocked || !slottedCritter) {
@@ -1298,6 +1457,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                     showStatBreakdown={Boolean(expandedStatsByCritterId[entry.critterId])}
                     onToggleStatInfo={() => handleToggleStatInfo(entry.critterId)}
                     onAdvanceCritter={handleAdvanceCritter}
+                    onPayMission={handlePayCritterMission}
                     onSetLockedKnockoutTarget={handleSetLockedKnockoutTarget}
                     onEquipSkill={handleEquipSkill}
                     onUnequipSkill={handleUnequipSkill}
@@ -1453,6 +1613,7 @@ interface CritterCardProps {
   showStatBreakdown: boolean;
   onToggleStatInfo: () => void;
   onAdvanceCritter?: (critterId: number) => void;
+  onPayMission?: (critterId: number, missionId: string) => void;
   onSetLockedKnockoutTarget?: (critterId: number | null) => void;
   onSelectCritter?: (critterId: number) => void;
   onCardContextMenu?: (event: MouseEvent<HTMLElement>) => void;
@@ -1478,9 +1639,10 @@ interface CritterCardProps {
 function buildSkillSlotTooltip(slot: {
   name: string;
   element?: string;
-  type: string;
+  type: SkillDefinition['type'];
   damage?: number;
-  healPercent?: number;
+  healMode?: SkillHealMode;
+  healValue?: number;
   effectDescriptions?: string | null;
 }): string {
   const lines: string[] = [slot.name];
@@ -1490,8 +1652,9 @@ function buildSkillSlotTooltip(slot: {
   if (slot.type === 'damage' && slot.damage != null) {
     lines.push(`Power: ${slot.damage}`);
   }
-  if (slot.type === 'support' && slot.healPercent != null) {
-    lines.push(`Heals: ${Math.round((slot.healPercent ?? 0) * 100)}% HP`);
+  const healDescription = describeSkillHealForTooltip(slot.healMode, slot.healValue);
+  if (healDescription) {
+    lines.push(`Heals: ${healDescription}`);
   }
   if (slot.effectDescriptions && slot.effectDescriptions.trim()) {
     lines.push(`Effect: ${slot.effectDescriptions.trim()}`);
@@ -1517,9 +1680,10 @@ interface SkillCellContentProps {
   slot: {
     name: string;
     element: string;
-    type: string;
+    type: SkillDefinition['type'];
     damage?: number;
-    healPercent?: number;
+    healMode?: SkillHealMode;
+    healValue?: number;
     effectIconUrls?: string[];
   } | null;
   iconsBucketRoot: string | null;
@@ -1532,7 +1696,7 @@ function SkillCellContent({ slot, iconsBucketRoot, emptyLabel = '—' }: SkillCe
   }
   const elementLogoUrl = buildElementLogoUrlFromIconsBucket(slot.element, iconsBucketRoot);
   const typeLabel = slot.type === 'damage' ? 'D' : 'S';
-  const value = slot.type === 'damage' ? slot.damage : slot.healPercent != null ? Math.round(slot.healPercent * 100) : null;
+  const value = getSkillValueDisplayNumber(slot);
   return (
     <>
       {elementLogoUrl && (
@@ -1560,6 +1724,7 @@ function CritterCard({
   showStatBreakdown,
   onToggleStatInfo,
   onAdvanceCritter,
+  onPayMission,
   onSetLockedKnockoutTarget,
   onSelectCritter,
   onCardContextMenu,
@@ -1615,7 +1780,11 @@ function CritterCard({
     '--health-progress-color-start': healthFillStart,
     '--health-progress-color-end': healthFillEnd,
   } as CSSProperties;
-  const showLockedKnockoutTargetButton = shouldShowLockedKnockoutTargetButton(entry);
+  const actionablePayMissions = getActionablePayMissions(entry);
+  const showLockedKnockoutTargetButton =
+    actionablePayMissions.length === 0 && shouldShowLockedKnockoutTargetButton(entry);
+  const showLockedKnockoutClearButton =
+    shouldShowLockedKnockoutTargetButton(entry) && entry.lockedKnockoutTargetSelected;
   const equippedEquipmentItemIds = new Set(
     equipmentSlots
       .map((slot) => slot?.itemId ?? null)
@@ -1910,7 +2079,13 @@ function CritterCard({
               {entry.activeRequirement.missions.map((mission) => (
                 <li key={`mission-${entry.critterId}-${entry.activeRequirement?.level}-${mission.id}`}>
                   <span>{formatMissionTypeLabel(mission)}</span>
-                  <span>{Math.min(mission.currentValue, mission.targetValue)}/{mission.targetValue}</span>
+                  <span>
+                    {mission.type === 'pay_item' && mission.completed
+                      ? 'Paid'
+                      : mission.type === 'pay_item'
+                        ? `${Math.min(mission.requiredPaymentOwnedQuantity ?? 0, mission.targetValue)}/${mission.targetValue}`
+                        : `${Math.min(mission.currentValue, mission.targetValue)}/${mission.targetValue}`}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -1919,20 +2094,43 @@ function CritterCard({
           <p className="collection-card__mission-summary">{isMaxLevel ? 'MAX LEVEL' : 'No mission requirements configured.'}</p>
         )}
       </section>
-      {showLockedKnockoutTargetButton && onSetLockedKnockoutTarget && (
+      {((actionablePayMissions.length > 0 && onPayMission) ||
+        (showLockedKnockoutTargetButton && onSetLockedKnockoutTarget) ||
+        (showLockedKnockoutClearButton && onSetLockedKnockoutTarget)) && (
         <div className="collection-card__tracker-actions">
-          <button
-            type="button"
-            className="secondary"
-            onClick={(event) => {
-              event.stopPropagation();
-              onSetLockedKnockoutTarget(entry.critterId);
-            }}
-            disabled={entry.lockedKnockoutTargetSelected}
-          >
-            {entry.lockedKnockoutTargetSelected ? 'Tracking KO Mission' : 'Track KO Mission'}
-          </button>
-          {entry.lockedKnockoutTargetSelected && (
+          {actionablePayMissions.length > 0 && onPayMission && actionablePayMissions.map((mission) => (
+            <button
+              key={`pay-mission-action-${entry.critterId}-${mission.id}`}
+              type="button"
+              className="secondary"
+              onClick={(event) => {
+                event.stopPropagation();
+                onPayMission(entry.critterId, mission.id);
+              }}
+              title={
+                mission.requiredPaymentAffordable
+                  ? `Pay ${mission.targetValue}x ${mission.requiredPaymentItemName ?? mission.requiredPaymentItemId ?? 'item'}`
+                  : `Need ${mission.targetValue}x ${mission.requiredPaymentItemName ?? mission.requiredPaymentItemId ?? 'item'}; you have ${mission.requiredPaymentOwnedQuantity ?? 0}.`
+              }
+            >
+              {(mission.requiredPaymentItemName ?? mission.requiredPaymentItemId ?? 'Pay')} {' '}
+              {Math.min(mission.requiredPaymentOwnedQuantity ?? 0, mission.targetValue)}/{mission.targetValue}
+            </button>
+          ))}
+          {showLockedKnockoutTargetButton && onSetLockedKnockoutTarget && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={(event) => {
+                event.stopPropagation();
+                onSetLockedKnockoutTarget(entry.critterId);
+              }}
+              disabled={entry.lockedKnockoutTargetSelected}
+            >
+              {entry.lockedKnockoutTargetSelected ? 'Tracking KO Mission' : 'Track KO Mission'}
+            </button>
+          )}
+          {showLockedKnockoutClearButton && onSetLockedKnockoutTarget && (
             <button
               type="button"
               className="secondary"
@@ -2698,9 +2896,40 @@ function formatMissionTypeLabel(mission: {
   knockoutElements?: string[];
   knockoutCritterIds?: number[];
   knockoutCritterNames?: string[];
+  requiredEquippedItemCount?: number;
+  requiredEquippedItemIds?: string[];
+  requiredEquippedItemNames?: string[];
+  requiredPaymentItemId?: string;
+  requiredPaymentItemName?: string;
+  requiredPaymentOwnedQuantity?: number;
+  requiredPaymentAffordable?: boolean;
+  requiredHealingItemIds?: string[];
+  requiredHealingItemNames?: string[];
   storyFlagId?: string;
   label?: string;
 }): string {
+  if (mission.type === 'opposing_knockouts_with_item') {
+    const knockoutCritterNames = Array.isArray(mission.knockoutCritterNames) ? mission.knockoutCritterNames : [];
+    const knockoutElements = Array.isArray(mission.knockoutElements) ? mission.knockoutElements : [];
+    const targetSuffix =
+      knockoutCritterNames.length > 0
+        ? ` vs ${knockoutCritterNames.join(', ')}`
+        : knockoutElements.length > 0
+          ? ` vs ${knockoutElements.map(capitalizeToken).join(', ')}`
+          : '';
+    const requiredEquippedItemCount =
+      typeof mission.requiredEquippedItemCount === 'number' && Number.isFinite(mission.requiredEquippedItemCount)
+        ? Math.max(1, Math.floor(mission.requiredEquippedItemCount))
+        : 1;
+    const requiredEquippedItemNames = Array.isArray(mission.requiredEquippedItemNames)
+      ? mission.requiredEquippedItemNames
+      : [];
+    const requirementLabel =
+      requiredEquippedItemNames.length > 0
+        ? `${requiredEquippedItemCount}+ equipped; ${requiredEquippedItemNames.join(', ')}`
+        : `${requiredEquippedItemCount}+ equipped`;
+    return `Knock-out with Item${targetSuffix} (${requirementLabel})`;
+  }
   if (mission.type === 'opposing_knockouts') {
     const knockoutCritterNames = Array.isArray(mission.knockoutCritterNames) ? mission.knockoutCritterNames : [];
     if (knockoutCritterNames.length > 0) {
@@ -2711,6 +2940,25 @@ function formatMissionTypeLabel(mission: {
       return `Opposing Knockouts (${knockoutElements.map(capitalizeToken).join(', ')})`;
     }
     return 'Opposing Knockouts';
+  }
+  if (mission.type === 'use_guard') {
+    return 'Use Guard';
+  }
+  if (mission.type === 'pay_item') {
+    const itemLabel = mission.requiredPaymentItemName ?? mission.requiredPaymentItemId ?? 'Item';
+    return `Pay ${mission.targetValue} ${itemLabel}`;
+  }
+  if (mission.type === 'swap_in') {
+    return 'Swap In';
+  }
+  if (mission.type === 'heal_critter') {
+    const requiredHealingItemNames = Array.isArray(mission.requiredHealingItemNames)
+      ? mission.requiredHealingItemNames
+      : [];
+    if (requiredHealingItemNames.length > 0) {
+      return `Heal Critter (${requiredHealingItemNames.join(', ')})`;
+    }
+    return 'Heal Critter';
   }
   if (mission.type === 'ascension') {
     const sourceLabel = mission.ascendsFromCritterName

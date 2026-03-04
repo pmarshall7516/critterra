@@ -7,8 +7,22 @@ export type CritterRarity = (typeof CRITTER_RARITIES)[number];
 export const CRITTER_ABILITY_KINDS = ['passive', 'active'] as const;
 export type CritterAbilityKind = (typeof CRITTER_ABILITY_KINDS)[number];
 
-export const CRITTER_MISSION_TYPES = ['opposing_knockouts', 'ascension', 'story_flag'] as const;
+export const CRITTER_MISSION_TYPES = [
+  'opposing_knockouts',
+  'opposing_knockouts_with_item',
+  'pay_item',
+  'use_guard',
+  'swap_in',
+  'heal_critter',
+  'ascension',
+  'story_flag',
+] as const;
 export type CritterMissionType = (typeof CRITTER_MISSION_TYPES)[number];
+export type CritterKnockoutMissionType = 'opposing_knockouts' | 'opposing_knockouts_with_item';
+
+export function isKnockoutMissionType(type: string): type is CritterKnockoutMissionType {
+  return type === 'opposing_knockouts' || type === 'opposing_knockouts_with_item';
+}
 
 export interface CritterStats {
   hp: number;
@@ -38,6 +52,10 @@ export interface CritterLevelMissionRequirement {
   ascendsFromCritterId?: number;
   knockoutElements?: CritterElement[];
   knockoutCritterIds?: number[];
+  requiredEquippedItemCount?: number;
+  requiredEquippedItemIds?: string[];
+  requiredPaymentItemId?: string;
+  requiredHealingItemIds?: string[];
   storyFlagId?: string;
   label?: string;
 }
