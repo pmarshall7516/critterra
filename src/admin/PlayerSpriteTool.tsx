@@ -25,11 +25,15 @@ interface SavePlayerSpriteResponse {
   ok: boolean;
   error?: string;
   filePath?: string;
+  playerSpriteLibrary?: PlayerSpriteLibraryEntry[];
+  selectedSpriteId?: string;
 }
 
 interface LoadPlayerSpriteResponse {
   ok: boolean;
   playerSprite?: NpcSpriteConfigPayload;
+  playerSpriteLibrary?: PlayerSpriteLibraryEntry[];
+  selectedSpriteId?: string;
   error?: string;
 }
 
@@ -46,6 +50,12 @@ interface LoadSupabaseSpriteSheetsResponse {
   prefix?: string;
   spritesheets?: SupabaseSpriteSheetListItem[];
   error?: string;
+}
+
+interface PlayerSpriteLibraryEntry {
+  id: string;
+  label: string;
+  sprite: NpcSpriteConfigPayload;
 }
 
 interface NpcSpriteConfigPayload {
@@ -80,7 +90,8 @@ export function PlayerSpriteTool() {
     1,
     PLAYER_SPRITE_CONFIG.frameCellsTall ?? Math.round(PLAYER_SPRITE_CONFIG.frameHeight / defaultAtlasCellHeight),
   );
-  const [spriteLabel] = useState('Player Sprite');
+  const [spriteIdInput, setSpriteIdInput] = useState('player-default');
+  const [spriteLabelInput, setSpriteLabelInput] = useState('Player Sprite');
   const [spriteUrl, setSpriteUrl] = useState('');
   const [frameWidthInput, setFrameWidthInput] = useState(
     String(defaultAtlasCellWidth),
@@ -111,6 +122,10 @@ export function PlayerSpriteTool() {
   const [selectedAnimationName, setSelectedAnimationName] = useState('walk');
   const [newAnimationNameInput, setNewAnimationNameInput] = useState('');
   const [renameAnimationNameInput, setRenameAnimationNameInput] = useState('');
+  const [playerSpriteLibrary, setPlayerSpriteLibrary] = useState<PlayerSpriteLibraryEntry[]>([]);
+  const [playerSpriteEditorMode, setPlayerSpriteEditorMode] = useState<'create' | 'edit'>('create');
+  const [editingPlayerSpriteId, setEditingPlayerSpriteId] = useState('');
+  const [selectedPlayerSpriteId, setSelectedPlayerSpriteId] = useState('');
   const [facingFrames, setFacingFrames] = useState<Record<Direction, number>>({
     up: PLAYER_SPRITE_CONFIG.facingFrames.up,
     down: PLAYER_SPRITE_CONFIG.facingFrames.down,
@@ -185,6 +200,14 @@ export function PlayerSpriteTool() {
       (entry) => entry.name.toLowerCase().includes(query) || entry.path.toLowerCase().includes(query),
     );
   }, [spritesheetEntries, spritesheetSearchInput]);
+  const selectedPlayerSpriteForEditor = useMemo(
+    () => playerSpriteLibrary.find((entry) => entry.id === editingPlayerSpriteId) ?? null,
+    [editingPlayerSpriteId, playerSpriteLibrary],
+  );
+  const activePlayerSprite = useMemo(
+    () => playerSpriteLibrary.find((entry) => entry.id === selectedPlayerSpriteId) ?? null,
+    [playerSpriteLibrary, selectedPlayerSpriteId],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -309,6 +332,34 @@ export function PlayerSpriteTool() {
     setRenameAnimationNameInput(selectedAnimationName);
   }, [selectedAnimationName]);
 
+  useEffect(() => {
+    if (playerSpriteLibrary.length === 0) {
+      if (selectedPlayerSpriteId) {
+        setSelectedPlayerSpriteId('');
+      }
+      if (playerSpriteEditorMode === 'edit') {
+        setPlayerSpriteEditorMode('create');
+        setEditingPlayerSpriteId('');
+      }
+      return;
+    }
+    if (selectedPlayerSpriteId && playerSpriteLibrary.some((entry) => entry.id === selectedPlayerSpriteId)) {
+      return;
+    }
+    setSelectedPlayerSpriteId(playerSpriteLibrary[0].id);
+  }, [playerSpriteEditorMode, playerSpriteLibrary, selectedPlayerSpriteId]);
+
+  useEffect(() => {
+    if (playerSpriteEditorMode !== 'edit') {
+      return;
+    }
+    if (editingPlayerSpriteId && playerSpriteLibrary.some((entry) => entry.id === editingPlayerSpriteId)) {
+      return;
+    }
+    setPlayerSpriteEditorMode('create');
+    setEditingPlayerSpriteId('');
+  }, [editingPlayerSpriteId, playerSpriteEditorMode, playerSpriteLibrary]);
+
   const setStatus = (message: string) => {
     setStatusMessage(message);
     setErrorMessage(null);
@@ -371,13 +422,81 @@ export function PlayerSpriteTool() {
     setDefaultMoveAnimationInput(nextMoveAnimation);
   };
 
+  const loadPlayerSpriteIntoEditor = (
+    sprite: PlayerSpriteLibraryEntry,
+    options?: {
+      statusMessage?: string;
+    },
+  ) => {
+    setPlayerSpriteEditorMode('edit');
+    setEditingPlayerSpriteId(sprite.id);
+    setSpriteIdInput(sprite.id);
+    setSpriteLabelInput(sprite.label);
+    applySpriteConfigState(sprite.sprite);
+    if (options?.statusMessage) {
+      setStatus(options.statusMessage);
+    }
+  };
+
+  const startNewPlayerSpriteDraft = () => {
+    setPlayerSpriteEditorMode('create');
+    setEditingPlayerSpriteId('');
+    setSpriteIdInput(createNextPlayerSpriteId(playerSpriteLibrary));
+    setSpriteLabelInput(createNextPlayerSpriteLabel(playerSpriteLibrary));
+    setStatus('Player sprite editor is now in create mode. Saving will create a new database entry.');
+  };
+
   useEffect(() => {
     const loadFromDatabase = async () => {
       const result = await apiFetchJson<LoadPlayerSpriteResponse>('/api/admin/player-sprite/get');
-      if (!result.ok || !result.data?.playerSprite) {
+      if (!result.ok || !result.data) {
         return;
       }
-      applySpriteConfigState(result.data.playerSprite);
+      const fallbackSprite = result.data.playerSprite ?? null;
+      const loadedLibrary = Array.isArray(result.data.playerSpriteLibrary)
+        ? result.data.playerSpriteLibrary.filter(
+            (entry): entry is PlayerSpriteLibraryEntry =>
+              Boolean(
+                entry &&
+                  typeof entry.id === 'string' &&
+                  entry.id.trim() &&
+                  typeof entry.label === 'string' &&
+                  entry.label.trim() &&
+                  entry.sprite &&
+                  typeof entry.sprite === 'object',
+              ),
+          )
+        : [];
+      const effectiveLibrary =
+        loadedLibrary.length > 0
+          ? loadedLibrary
+          : fallbackSprite
+            ? [
+                {
+                  id: 'player-default',
+                  label: 'Player Sprite',
+                  sprite: fallbackSprite,
+                },
+              ]
+            : [];
+      if (effectiveLibrary.length === 0) {
+        if (fallbackSprite) {
+          applySpriteConfigState(fallbackSprite);
+        }
+        return;
+      }
+      const requestedSelectedId =
+        typeof result.data.selectedSpriteId === 'string' && result.data.selectedSpriteId.trim()
+          ? result.data.selectedSpriteId.trim()
+          : '';
+      const resolvedSelectedId = effectiveLibrary.some((entry) => entry.id === requestedSelectedId)
+        ? requestedSelectedId
+        : effectiveLibrary[0].id;
+      const selectedEntry =
+        effectiveLibrary.find((entry) => entry.id === resolvedSelectedId) ?? effectiveLibrary[0];
+      setPlayerSpriteLibrary(effectiveLibrary);
+      setSelectedPlayerSpriteId(resolvedSelectedId);
+      loadPlayerSpriteIntoEditor(selectedEntry);
       setStatus('Loaded player sprite config from database.');
     };
 
@@ -564,29 +683,8 @@ export function PlayerSpriteTool() {
       setError('Select a rectangle on the sheet first.');
       return;
     }
-    if (!selectedAnimationName) {
-      setError('Select an animation before adding frames.');
-      return;
-    }
-
     const frameIndex = selectedAtlasRect.minRow * atlasMeta.columns + selectedAtlasRect.minCol;
-    setFrameCellsWideInput(String(selectedAtlasRect.width));
-    setFrameCellsTallInput(String(selectedAtlasRect.height));
-    const currentSet = parsedAnimationSets[selectedAnimationName] ?? {};
-    const currentFrames = currentSet[assignDirection] ? [...currentSet[assignDirection]!] : [];
-    if (!currentFrames.includes(frameIndex)) {
-      currentFrames.push(frameIndex);
-    }
-    setAnimationSetsDraft({
-      ...parsedAnimationSets,
-      [selectedAnimationName]: {
-        ...currentSet,
-        [assignDirection]: currentFrames,
-      },
-    });
-    setStatus(
-      `Added frame ${frameIndex} to "${selectedAnimationName}" ${assignDirection} (${selectedAtlasRect.width}x${selectedAtlasRect.height} cells).`,
-    );
+    appendFrameToSelectedAnimation(frameIndex, selectedAtlasRect.width, selectedAtlasRect.height);
   };
 
   const removeFrameFromAnimation = (frameIndex: number) => {
@@ -621,13 +719,121 @@ export function PlayerSpriteTool() {
     setStatus(`Cleared frames for "${selectedAnimationName}" ${assignDirection}.`);
   };
 
+  const appendFrameToSelectedAnimation = (
+    frameIndex: number,
+    frameCellsWide: number,
+    frameCellsTall: number,
+    options?: {
+      allowDuplicate?: boolean;
+    },
+  ) => {
+    if (!selectedAnimationName) {
+      setError('Select an animation before adding frames.');
+      return;
+    }
+    const normalizedFrameCellsWide = Math.max(1, Math.floor(frameCellsWide));
+    const normalizedFrameCellsTall = Math.max(1, Math.floor(frameCellsTall));
+    setFrameCellsWideInput(String(normalizedFrameCellsWide));
+    setFrameCellsTallInput(String(normalizedFrameCellsTall));
+    const currentSet = parsedAnimationSets[selectedAnimationName] ?? {};
+    const currentFrames = currentSet[assignDirection] ? [...currentSet[assignDirection]!] : [];
+    if (options?.allowDuplicate || !currentFrames.includes(frameIndex)) {
+      currentFrames.push(frameIndex);
+    }
+    setAnimationSetsDraft({
+      ...parsedAnimationSets,
+      [selectedAnimationName]: {
+        ...currentSet,
+        [assignDirection]: currentFrames,
+      },
+    });
+    setStatus(
+      `Added frame ${frameIndex} to "${selectedAnimationName}" ${assignDirection} (${normalizedFrameCellsWide}x${normalizedFrameCellsTall} cells).`,
+    );
+  };
+
+  const persistPlayerSpriteLibraryToDatabase = async (
+    nextLibrary: PlayerSpriteLibraryEntry[],
+    nextSelectedId: string,
+  ): Promise<{ savedLibrary: PlayerSpriteLibraryEntry[]; savedSelectedId: string; filePath: string } | null> => {
+    if (nextLibrary.length === 0) {
+      setError('At least one player sprite must be saved.');
+      return null;
+    }
+    setIsSaving(true);
+    try {
+      const result = await apiFetchJson<SavePlayerSpriteResponse>('/api/admin/player-sprite/save', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          playerSpriteLibrary: nextLibrary,
+          selectedSpriteId: nextSelectedId,
+        }),
+      });
+      if (!result.ok || !result.data) {
+        throw new Error(result.error ?? result.data?.error ?? 'Unable to save player sprite config.');
+      }
+      const responseData = result.data;
+      const savedLibrary =
+        Array.isArray(responseData.playerSpriteLibrary) && responseData.playerSpriteLibrary.length > 0
+          ? responseData.playerSpriteLibrary
+          : nextLibrary;
+      const savedSelectedId =
+        typeof responseData.selectedSpriteId === 'string' &&
+        savedLibrary.some((entry) => entry.id === responseData.selectedSpriteId)
+          ? responseData.selectedSpriteId
+          : nextSelectedId;
+      setPlayerSpriteLibrary(savedLibrary);
+      setSelectedPlayerSpriteId(savedSelectedId);
+      return {
+        savedLibrary,
+        savedSelectedId,
+        filePath: responseData.filePath ?? 'src/game/world/playerSprite.ts',
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to save player sprite config.';
+      setError(message);
+      return null;
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const setActivePlayerSprite = async (spriteId: string) => {
+    if (spriteId === selectedPlayerSpriteId) {
+      return;
+    }
+    const targetSprite = playerSpriteLibrary.find((entry) => entry.id === spriteId);
+    if (!targetSprite) {
+      setError('That player sprite no longer exists in the library.');
+      return;
+    }
+    const persisted = await persistPlayerSpriteLibraryToDatabase(playerSpriteLibrary, spriteId);
+    if (!persisted) {
+      return;
+    }
+    setStatus(`Set "${targetSprite.label}" as the active player sprite. (${persisted.filePath})`);
+  };
+
   const saveToProject = async () => {
+    const spriteId = spriteIdInput.trim();
+    const spriteLabel = spriteLabelInput.trim();
     const atlasCellWidth = parseInteger(frameWidthInput);
     const atlasCellHeight = parseInteger(frameHeightInput);
     const frameCellsWide = parseInteger(frameCellsWideInput);
     const frameCellsTall = parseInteger(frameCellsTallInput);
     const renderWidthTiles = parseInteger(renderWidthTilesInput);
     const renderHeightTiles = parseInteger(renderHeightTilesInput);
+    if (!spriteId) {
+      setError('Sprite ID is required.');
+      return;
+    }
+    if (!spriteLabel) {
+      setError('Sprite label is required.');
+      return;
+    }
     if (
       !spriteUrl.trim() ||
       !atlasCellWidth ||
@@ -662,44 +868,54 @@ export function PlayerSpriteTool() {
       defaultIdleAnimation,
       defaultMoveAnimation,
     );
-
-    setIsSaving(true);
-    try {
-      const result = await apiFetchJson<SavePlayerSpriteResponse>('/api/admin/player-sprite/save', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          playerSprite: {
-            url: withCacheBusterTag(spriteUrl.trim()),
-            frameWidth,
-            frameHeight,
-            atlasCellWidth,
-            atlasCellHeight,
-            frameCellsWide,
-            frameCellsTall,
-            renderWidthTiles,
-            renderHeightTiles,
-            animationSets: parsedSets.animationSets,
-            defaultIdleAnimation,
-            defaultMoveAnimation,
-            facingFrames: legacyFrames.facingFrames,
-            walkFrames: legacyFrames.walkFrames,
-          },
-        }),
-      });
-      if (!result.ok || !result.data) {
-        throw new Error(result.error ?? result.data?.error ?? 'Unable to save player sprite config.');
-      }
-      const payload = result.data;
-      setStatus(`Saved player sprite config (${payload.filePath ?? 'src/game/world/playerSprite.ts'}).`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to save player sprite config.';
-      setError(message);
-    } finally {
-      setIsSaving(false);
+    const spriteEntry: PlayerSpriteLibraryEntry = {
+      id: spriteId,
+      label: spriteLabel,
+      sprite: {
+        url: withCacheBusterTag(spriteUrl.trim()),
+        frameWidth,
+        frameHeight,
+        atlasCellWidth,
+        atlasCellHeight,
+        frameCellsWide,
+        frameCellsTall,
+        renderWidthTiles,
+        renderHeightTiles,
+        animationSets: parsedSets.animationSets,
+        defaultIdleAnimation,
+        defaultMoveAnimation,
+        facingFrames: legacyFrames.facingFrames,
+        walkFrames: legacyFrames.walkFrames,
+      },
+    };
+    const editingIndex = playerSpriteLibrary.findIndex((entry) => entry.id === editingPlayerSpriteId);
+    const isEditingExisting = playerSpriteEditorMode === 'edit' && editingIndex >= 0;
+    if (playerSpriteEditorMode === 'edit' && editingPlayerSpriteId && editingIndex < 0) {
+      setError('The selected player sprite no longer exists. Switch to create mode and save a new sprite.');
+      return;
     }
+    const conflictingEntry = playerSpriteLibrary.find(
+      (entry, index) => entry.id === spriteEntry.id && (!isEditingExisting || index !== editingIndex),
+    );
+    if (conflictingEntry) {
+      setError(`Sprite ID "${spriteEntry.id}" is already in use.`);
+      return;
+    }
+    const nextLibrary =
+      isEditingExisting
+        ? playerSpriteLibrary.map((entry, index) => (index === editingIndex ? spriteEntry : entry))
+        : [...playerSpriteLibrary, spriteEntry];
+    const persisted = await persistPlayerSpriteLibraryToDatabase(nextLibrary, spriteEntry.id);
+    if (!persisted) {
+      return;
+    }
+    setPlayerSpriteEditorMode('edit');
+    setEditingPlayerSpriteId(spriteEntry.id);
+    setStatus(
+      isEditingExisting
+        ? `Updated player sprite "${spriteEntry.label}" and set it active. (${persisted.filePath})`
+        : `Created player sprite "${spriteEntry.label}" and set it active. (${persisted.filePath})`,
+    );
   };
 
   return (
@@ -716,7 +932,64 @@ export function PlayerSpriteTool() {
       </header>
 
       <div className="admin-panel">
-        <h3>{spriteLabel}</h3>
+        <h3>Player Sprite Library</h3>
+        <div className="admin-grid-2">
+          <label>
+            Sprite ID
+            <input value={spriteIdInput} onChange={(event) => setSpriteIdInput(event.target.value)} />
+          </label>
+          <label>
+            Sprite Label
+            <input value={spriteLabelInput} onChange={(event) => setSpriteLabelInput(event.target.value)} />
+          </label>
+        </div>
+        <div className="admin-row">
+          <button type="button" className="secondary" onClick={startNewPlayerSpriteDraft}>
+            Create New Sprite
+          </button>
+          <span className="admin-note">
+            {playerSpriteEditorMode === 'edit' && selectedPlayerSpriteForEditor
+              ? `Edit mode: ${selectedPlayerSpriteForEditor.label} (${selectedPlayerSpriteForEditor.id})`
+              : 'Create mode: saving will create a new player sprite entry.'}
+          </span>
+        </div>
+        <p className="admin-note">
+          Active player sprite: {activePlayerSprite ? `${activePlayerSprite.label} (${activePlayerSprite.id})` : 'none saved yet'}
+        </p>
+        <div className="saved-paint-list">
+          {playerSpriteLibrary.length === 0 && <p className="admin-note">No player sprites saved yet.</p>}
+          {playerSpriteLibrary.map((sprite) => (
+            <div
+              key={sprite.id}
+              className={`saved-paint-row ${
+                editingPlayerSpriteId === sprite.id ? 'is-selected' : ''
+              } ${selectedPlayerSpriteId === sprite.id ? 'is-active' : ''}`}
+            >
+              <button
+                type="button"
+                className="secondary"
+                onClick={() =>
+                  loadPlayerSpriteIntoEditor(sprite, {
+                    statusMessage: `Loaded player sprite "${sprite.label}" into edit mode.`,
+                  })
+                }
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => void setActivePlayerSprite(sprite.id)}
+                disabled={isSaving || selectedPlayerSpriteId === sprite.id}
+              >
+                {selectedPlayerSpriteId === sprite.id ? 'Active' : 'Set Active'}
+              </button>
+              <span className="saved-paint-row__meta">{sprite.label}</span>
+              <span className="saved-paint-row__meta">{sprite.id}</span>
+            </div>
+          ))}
+        </div>
+        <h4>Spritesheet</h4>
         <div className="admin-grid-2">
           <label>
             Atlas Cell Width
@@ -877,6 +1150,7 @@ export function PlayerSpriteTool() {
             Clear Direction Frames
           </button>
         </div>
+        <p className="admin-note">Tip: Hold Command/Ctrl and click sheet cells to append frames in click order.</p>
 
         <div className="tileset-grid-wrap player-sprite-atlas-wrap">
           {atlasMeta.loaded ? (
@@ -914,6 +1188,32 @@ export function PlayerSpriteTool() {
                         return;
                       }
                       event.preventDefault();
+                      if (event.metaKey || event.ctrlKey) {
+                        if (atlasMeta.columns <= 0) {
+                          setError('Player sheet is not ready yet.');
+                          return;
+                        }
+                        const currentFrameCellsWide = Math.max(1, parseInteger(frameCellsWideInput) ?? 1);
+                        const currentFrameCellsTall = Math.max(1, parseInteger(frameCellsTallInput) ?? 1);
+                        const startCol = frameIndex % atlasMeta.columns;
+                        const startRow = Math.floor(frameIndex / atlasMeta.columns);
+                        const endCol = Math.min(
+                          atlasMeta.columns - 1,
+                          startCol + Math.max(0, currentFrameCellsWide - 1),
+                        );
+                        const endRow = Math.min(
+                          atlasMeta.rows - 1,
+                          startRow + Math.max(0, currentFrameCellsTall - 1),
+                        );
+                        const endIndex = endRow * atlasMeta.columns + endCol;
+                        setIsSelectingAtlas(false);
+                        setSelectedAtlasStartIndex(frameIndex);
+                        setSelectedAtlasEndIndex(endIndex);
+                        appendFrameToSelectedAnimation(frameIndex, currentFrameCellsWide, currentFrameCellsTall, {
+                          allowDuplicate: true,
+                        });
+                        return;
+                      }
                       setIsSelectingAtlas(true);
                       setSelectedAtlasStartIndex(frameIndex);
                       setSelectedAtlasEndIndex(frameIndex);
@@ -972,7 +1272,7 @@ export function PlayerSpriteTool() {
           Selected Rectangle: {selectedAtlasRect ? `${selectedAtlasRect.width}x${selectedAtlasRect.height}` : 'none'}
         </p>
         <button type="button" className="primary" onClick={saveToProject} disabled={isSaving}>
-          {isSaving ? 'Saving...' : 'Save Player Sprite To Project'}
+          {isSaving ? 'Saving...' : playerSpriteEditorMode === 'edit' ? 'Update Selected Sprite' : 'Save New Sprite'}
         </button>
       </div>
     </section>
@@ -1241,4 +1541,19 @@ function isAtlasCellInRect(rect: AtlasSelectionRect | null, atlasIndex: number, 
   const col = atlasIndex % columns;
   const row = Math.floor(atlasIndex / columns);
   return col >= rect.minCol && col <= rect.maxCol && row >= rect.minRow && row <= rect.maxRow;
+}
+
+function createNextPlayerSpriteId(library: PlayerSpriteLibraryEntry[]): string {
+  const existingIds = new Set(library.map((entry) => entry.id));
+  let index = Math.max(1, library.length + 1);
+  let candidate = `player-sprite-${index}`;
+  while (existingIds.has(candidate)) {
+    index += 1;
+    candidate = `player-sprite-${index}`;
+  }
+  return candidate;
+}
+
+function createNextPlayerSpriteLabel(library: PlayerSpriteLibraryEntry[]): string {
+  return `Player Sprite ${Math.max(1, library.length + 1)}`;
 }

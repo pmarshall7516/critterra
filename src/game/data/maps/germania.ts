@@ -347,6 +347,50 @@ export const germaniaMap = createMap({
       ],
       requiredFacing: 'up',
       requireInteract: false
+    },
+    {
+      id: 'germania_warp_5',
+      from: {
+        x: 24,
+        y: 4
+      },
+      fromPositions: [
+        {
+          x: 24,
+          y: 4
+        },
+        {
+          x: 24,
+          y: 5
+        },
+        {
+          x: 24,
+          y: 6
+        }
+      ],
+      toMapId: 'don-bram-den',
+      to: {
+        x: 1,
+        y: 3
+      },
+      toPositions: [
+        {
+          x: 1,
+          y: 3
+        },
+        {
+          x: 1,
+          y: 4
+        },
+        {
+          x: 1,
+          y: 5
+        }
+      ],
+      requireInteract: false,
+      requiredFacing: 'right',
+      label: 'To Don Bram\'s Den',
+      toFacing: 'right'
     }
   ],
   encounterGroups: [

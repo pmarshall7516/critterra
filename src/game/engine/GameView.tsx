@@ -31,6 +31,9 @@ const DEFAULT_VIEWPORT: ViewportSize = {
 };
 
 const FIXED_STEP_MS = 1000 / 60;
+const TARGET_RENDER_STEP_MS = 1000 / 30;
+const MAX_FRAME_DELTA_MS = 250;
+const MAX_UPDATE_STEPS_PER_FRAME = 6;
 
 type SideMenuView = 'root' | 'squad' | 'collection' | 'backpack';
 type CollectionSort = 'id' | 'name';
@@ -251,35 +254,56 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     };
 
     resizeCanvas();
+    renderCurrentFrame();
     window.addEventListener('resize', resizeCanvas);
 
     let animationFrame = 0;
     let previousTime = performance.now();
+    let updateAccumulator = 0;
+    let renderAccumulator = 0;
     let snapshotTimer = 0;
 
     const frame = (currentTime: number) => {
-      const delta = Math.min(33, currentTime - previousTime);
+      const delta = Math.min(MAX_FRAME_DELTA_MS, Math.max(0, currentTime - previousTime));
       previousTime = currentTime;
 
       const shouldAutoAdvance = !menuOpenRef.current && currentTime >= manualStepUntilRef.current;
       if (shouldAutoAdvance) {
-        runtime.update(delta);
+        updateAccumulator += delta;
+        let updateSteps = 0;
+        while (updateAccumulator >= FIXED_STEP_MS && updateSteps < MAX_UPDATE_STEPS_PER_FRAME) {
+          runtime.update(FIXED_STEP_MS);
+          updateAccumulator -= FIXED_STEP_MS;
+          updateSteps += 1;
+        }
+        if (updateSteps === MAX_UPDATE_STEPS_PER_FRAME) {
+          updateAccumulator = 0;
+        }
+      } else {
+        updateAccumulator = 0;
       }
 
       const viewportSize = runtime.getViewportSize();
+      let viewportSizeChanged = false;
       if (
         renderSizeRef.current.width !== viewportSize.width ||
         renderSizeRef.current.height !== viewportSize.height
       ) {
         resizeCanvas();
+        viewportSizeChanged = true;
       }
 
-      renderCurrentFrame();
+      renderAccumulator += delta;
+      const shouldRender = viewportSizeChanged || renderAccumulator >= TARGET_RENDER_STEP_MS;
+      if (shouldRender) {
+        renderCurrentFrame();
+        renderAccumulator = renderAccumulator >= TARGET_RENDER_STEP_MS ? renderAccumulator % TARGET_RENDER_STEP_MS : 0;
+      }
 
       snapshotTimer += delta;
       if (snapshotTimer >= 100) {
         setSnapshot(runtime.getSnapshot());
-        snapshotTimer = 0;
+        snapshotTimer %= 100;
       }
 
       animationFrame = requestAnimationFrame(frame);
@@ -297,11 +321,13 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
       const steps = Math.max(1, Math.round(safeMs / FIXED_STEP_MS));
 
       manualStepUntilRef.current = performance.now() + 80;
+      updateAccumulator = 0;
       for (let i = 0; i < steps; i += 1) {
         runtime.update(FIXED_STEP_MS);
       }
 
       renderCurrentFrame();
+      renderAccumulator = 0;
       setSnapshot(runtime.getSnapshot());
     };
 
@@ -330,6 +356,14 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
       }
 
       if (battleActiveRef.current) {
+        if (key === ' ' || key === 'Enter') {
+          event.preventDefault();
+          const changed = runtime.battleAdvanceNarration() || runtime.battleAcknowledgeResult();
+          if (changed) {
+            setSnapshot(runtime.getSnapshot());
+          }
+          return;
+        }
         if (
           key.startsWith('Arrow') ||
           key === 'w' ||

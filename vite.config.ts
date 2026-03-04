@@ -121,6 +121,8 @@ interface SavePlayerSpriteRequestPayload {
       right?: unknown;
     };
   };
+  playerSpriteLibrary?: unknown;
+  selectedSpriteId?: unknown;
 }
 
 interface AuthRequestPayload {
@@ -2445,14 +2447,44 @@ function sanitizeLoadedPlayerSpriteConfig(value: unknown): Record<string, unknow
   return record;
 }
 
-function savePlayerSpriteToProject(payload: SavePlayerSpriteRequestPayload): {
-  filePath: string;
-  spriteConfig: Record<string, unknown>;
-} {
-  const sprite = payload.playerSprite;
-  if (!sprite || typeof sprite !== 'object') {
+type StoredPlayerSpriteConfig = {
+  url: string;
+  frameWidth: number;
+  frameHeight: number;
+  atlasCellWidth: number;
+  atlasCellHeight: number;
+  frameCellsWide: number;
+  frameCellsTall: number;
+  renderWidthTiles: number;
+  renderHeightTiles: number;
+  animationSets?: Partial<Record<string, Partial<Record<'up' | 'down' | 'left' | 'right', number[]>>>>;
+  defaultIdleAnimation?: string;
+  defaultMoveAnimation?: string;
+  facingFrames: {
+    down: number;
+    left: number;
+    right: number;
+    up: number;
+  };
+  walkFrames: {
+    down: number[];
+    left: number[];
+    right: number[];
+    up: number[];
+  };
+};
+
+type StoredPlayerSpriteLibraryEntry = {
+  id: string;
+  label: string;
+  sprite: StoredPlayerSpriteConfig;
+};
+
+function normalizePlayerSpriteConfigInput(value: unknown): StoredPlayerSpriteConfig {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Missing playerSprite payload.');
   }
+  const sprite = value as Record<string, unknown>;
   if (typeof sprite.url !== 'string' || !sprite.url.trim()) {
     throw new Error('playerSprite.url is required.');
   }
@@ -2460,7 +2492,6 @@ function savePlayerSpriteToProject(payload: SavePlayerSpriteRequestPayload): {
   if (spriteUrl.startsWith('blob:')) {
     throw new Error('playerSprite.url cannot be a temporary blob URL. Use a file path or data URL.');
   }
-  const fileSpriteUrl = spriteUrl.startsWith('data:') ? defaultPlayerSpriteUrl : spriteUrl;
 
   const frameWidth =
     typeof sprite.frameWidth === 'number' && Number.isFinite(sprite.frameWidth)
@@ -2494,18 +2525,25 @@ function savePlayerSpriteToProject(payload: SavePlayerSpriteRequestPayload): {
     typeof sprite.renderHeightTiles === 'number' && Number.isFinite(sprite.renderHeightTiles)
       ? Math.max(1, Math.floor(sprite.renderHeightTiles))
       : 2;
-
+  const facingFrameRecord =
+    sprite.facingFrames && typeof sprite.facingFrames === 'object' && !Array.isArray(sprite.facingFrames)
+      ? (sprite.facingFrames as Record<string, unknown>)
+      : {};
+  const walkFrameRecord =
+    sprite.walkFrames && typeof sprite.walkFrames === 'object' && !Array.isArray(sprite.walkFrames)
+      ? (sprite.walkFrames as Record<string, unknown>)
+      : {};
   const facingFrames = {
-    down: parseSpriteFrame(sprite.facingFrames?.down),
-    left: parseSpriteFrame(sprite.facingFrames?.left),
-    right: parseSpriteFrame(sprite.facingFrames?.right),
-    up: parseSpriteFrame(sprite.facingFrames?.up),
+    down: parseSpriteFrame(facingFrameRecord.down),
+    left: parseSpriteFrame(facingFrameRecord.left),
+    right: parseSpriteFrame(facingFrameRecord.right),
+    up: parseSpriteFrame(facingFrameRecord.up),
   };
   const walkFrames = {
-    down: parseWalkFrames(sprite.walkFrames?.down),
-    left: parseWalkFrames(sprite.walkFrames?.left),
-    right: parseWalkFrames(sprite.walkFrames?.right),
-    up: parseWalkFrames(sprite.walkFrames?.up),
+    down: parseWalkFrames(walkFrameRecord.down),
+    left: parseWalkFrames(walkFrameRecord.left),
+    right: parseWalkFrames(walkFrameRecord.right),
+    up: parseWalkFrames(walkFrameRecord.up),
   };
   const animationSets = parseDirectionalAnimationSets(sprite.animationSets);
   const defaultIdleAnimation =
@@ -2517,33 +2555,7 @@ function savePlayerSpriteToProject(payload: SavePlayerSpriteRequestPayload): {
       ? sprite.defaultMoveAnimation.trim()
       : undefined;
 
-  const source = [
-    "import type { NpcSpriteConfig } from '@/game/world/types';",
-    '',
-    `export const PLAYER_SPRITE_CONFIG: NpcSpriteConfig = ${toTsLiteral(
-      {
-        url: fileSpriteUrl,
-        frameWidth,
-        frameHeight,
-        atlasCellWidth,
-        atlasCellHeight,
-        frameCellsWide,
-        frameCellsTall,
-        renderWidthTiles,
-        renderHeightTiles,
-        animationSets,
-        defaultIdleAnimation,
-        defaultMoveAnimation,
-        facingFrames,
-        walkFrames,
-      },
-      0,
-    )};`,
-    '',
-  ].join('\n');
-
-  fs.writeFileSync(playerSpritePath, source, 'utf8');
-  const spriteConfig = {
+  return {
     url: spriteUrl,
     frameWidth,
     frameHeight,
@@ -2559,9 +2571,157 @@ function savePlayerSpriteToProject(payload: SavePlayerSpriteRequestPayload): {
     facingFrames,
     walkFrames,
   };
+}
+
+function writePlayerSpriteConfigToProject(spriteConfig: StoredPlayerSpriteConfig): string {
+  const fileSpriteUrl = spriteConfig.url.startsWith('data:') ? defaultPlayerSpriteUrl : spriteConfig.url;
+  const source = [
+    "import type { NpcSpriteConfig } from '@/game/world/types';",
+    '',
+    `export const PLAYER_SPRITE_CONFIG: NpcSpriteConfig = ${toTsLiteral(
+      {
+        url: fileSpriteUrl,
+        frameWidth: spriteConfig.frameWidth,
+        frameHeight: spriteConfig.frameHeight,
+        atlasCellWidth: spriteConfig.atlasCellWidth,
+        atlasCellHeight: spriteConfig.atlasCellHeight,
+        frameCellsWide: spriteConfig.frameCellsWide,
+        frameCellsTall: spriteConfig.frameCellsTall,
+        renderWidthTiles: spriteConfig.renderWidthTiles,
+        renderHeightTiles: spriteConfig.renderHeightTiles,
+        animationSets: spriteConfig.animationSets,
+        defaultIdleAnimation: spriteConfig.defaultIdleAnimation,
+        defaultMoveAnimation: spriteConfig.defaultMoveAnimation,
+        facingFrames: spriteConfig.facingFrames,
+        walkFrames: spriteConfig.walkFrames,
+      },
+      0,
+    )};`,
+    '',
+  ].join('\n');
+
+  fs.writeFileSync(playerSpritePath, source, 'utf8');
+  return path.relative(repoRoot, playerSpritePath);
+}
+
+function parsePlayerSpriteLibraryInput(value: unknown): StoredPlayerSpriteLibraryEntry[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const spriteLibrary: StoredPlayerSpriteLibraryEntry[] = [];
+  const seenIds = new Set<string>();
+
+  for (const rawEntry of value) {
+    if (!rawEntry || typeof rawEntry !== 'object' || Array.isArray(rawEntry)) {
+      throw new Error('Each player sprite entry must be an object.');
+    }
+    const entry = rawEntry as Record<string, unknown>;
+    const id = typeof entry.id === 'string' ? entry.id.trim() : '';
+    if (!id) {
+      throw new Error('Each player sprite entry must include a non-empty id.');
+    }
+    if (seenIds.has(id)) {
+      throw new Error(`Duplicate player sprite id "${id}".`);
+    }
+    seenIds.add(id);
+    const label = typeof entry.label === 'string' && entry.label.trim() ? entry.label.trim() : id;
+    spriteLibrary.push({
+      id,
+      label,
+      sprite: normalizePlayerSpriteConfigInput(entry.sprite),
+    });
+  }
+
+  return spriteLibrary;
+}
+
+function sanitizeLoadedPlayerSpriteLibrary(value: unknown): StoredPlayerSpriteLibraryEntry[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const spriteLibrary: StoredPlayerSpriteLibraryEntry[] = [];
+  const seenIds = new Set<string>();
+
+  for (const rawEntry of value) {
+    if (!rawEntry || typeof rawEntry !== 'object' || Array.isArray(rawEntry)) {
+      continue;
+    }
+    const entry = rawEntry as Record<string, unknown>;
+    const id = typeof entry.id === 'string' ? entry.id.trim() : '';
+    if (!id || seenIds.has(id)) {
+      continue;
+    }
+    try {
+      spriteLibrary.push({
+        id,
+        label: typeof entry.label === 'string' && entry.label.trim() ? entry.label.trim() : id,
+        sprite: normalizePlayerSpriteConfigInput(entry.sprite),
+      });
+      seenIds.add(id);
+    } catch {
+      continue;
+    }
+  }
+
+  return spriteLibrary;
+}
+
+function buildFallbackPlayerSpriteLibrary(value: unknown): StoredPlayerSpriteLibraryEntry[] {
+  try {
+    return [
+      {
+        id: 'player-default',
+        label: 'Player Sprite',
+        sprite: normalizePlayerSpriteConfigInput(value),
+      },
+    ];
+  } catch {
+    return [];
+  }
+}
+
+function resolveSelectedPlayerSpriteId(
+  value: unknown,
+  spriteLibrary: StoredPlayerSpriteLibraryEntry[],
+): string {
+  const selectedId = typeof value === 'string' ? value.trim() : '';
+  if (selectedId && spriteLibrary.some((entry) => entry.id === selectedId)) {
+    return selectedId;
+  }
+  return spriteLibrary[0]?.id ?? 'player-default';
+}
+
+function savePlayerSpriteToProject(payload: SavePlayerSpriteRequestPayload): {
+  filePath: string;
+  spriteConfig: Record<string, unknown>;
+  spriteLibrary: StoredPlayerSpriteLibraryEntry[];
+  selectedSpriteId: string;
+} {
+  const playerSpriteLibrary = parsePlayerSpriteLibraryInput(payload.playerSpriteLibrary);
+  const spriteLibrary =
+    playerSpriteLibrary.length > 0
+      ? playerSpriteLibrary
+      : [
+          {
+            id:
+              typeof payload.selectedSpriteId === 'string' && payload.selectedSpriteId.trim()
+                ? payload.selectedSpriteId.trim()
+                : 'player-default',
+            label:
+              typeof payload.selectedSpriteId === 'string' && payload.selectedSpriteId.trim()
+                ? payload.selectedSpriteId.trim()
+                : 'Player Sprite',
+            sprite: normalizePlayerSpriteConfigInput(payload.playerSprite),
+          },
+        ];
+  const selectedSpriteId = resolveSelectedPlayerSpriteId(payload.selectedSpriteId, spriteLibrary);
+  const selectedSprite = spriteLibrary.find((entry) => entry.id === selectedSpriteId) ?? spriteLibrary[0];
+  const filePath = writePlayerSpriteConfigToProject(selectedSprite.sprite);
   return {
-    filePath: path.relative(repoRoot, playerSpritePath),
-    spriteConfig,
+    filePath,
+    spriteConfig: selectedSprite.sprite,
+    spriteLibrary,
+    selectedSpriteId,
   };
 }
 
@@ -3239,14 +3399,26 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         'SELECT sprite_config FROM player_sprite_configs ORDER BY updated_at DESC NULLS LAST LIMIT 1',
       );
       const legacySpriteConfig = sanitizeLoadedPlayerSpriteConfig(legacyPlayerSpriteResult.rows[0]?.sprite_config) ?? {};
+      const legacySpriteLibrary = buildFallbackPlayerSpriteLibrary(legacySpriteConfig);
+      const legacySelectedSpriteId =
+        legacySpriteLibrary.length > 0 ? resolveSelectedPlayerSpriteId(null, legacySpriteLibrary) : null;
       await client.query(
         `
-          INSERT INTO game_player_sprite_configs (catalog_key, sprite_config, updated_at)
-          VALUES ($1, $2::jsonb, NOW())
+          INSERT INTO game_player_sprite_configs (catalog_key, sprite_config, sprite_library, selected_sprite_id, updated_at)
+          VALUES ($1, $2::jsonb, $3::jsonb, $4, NOW())
           ON CONFLICT (catalog_key)
-          DO UPDATE SET sprite_config = EXCLUDED.sprite_config, updated_at = NOW()
+          DO UPDATE SET
+            sprite_config = EXCLUDED.sprite_config,
+            sprite_library = EXCLUDED.sprite_library,
+            selected_sprite_id = EXCLUDED.selected_sprite_id,
+            updated_at = NOW()
         `,
-        [GLOBAL_CATALOG_KEY, JSON.stringify(legacySpriteConfig)],
+        [
+          GLOBAL_CATALOG_KEY,
+          JSON.stringify(legacySpriteConfig),
+          JSON.stringify(legacySpriteLibrary),
+          legacySelectedSpriteId,
+        ],
       );
     }
 
@@ -3580,8 +3752,18 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       CREATE TABLE IF NOT EXISTS game_player_sprite_configs (
         catalog_key TEXT PRIMARY KEY,
         sprite_config JSONB NOT NULL,
+        sprite_library JSONB NOT NULL DEFAULT '[]'::jsonb,
+        selected_sprite_id TEXT,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+    `);
+    await pool.query(`
+      ALTER TABLE game_player_sprite_configs
+      ADD COLUMN IF NOT EXISTS sprite_library JSONB NOT NULL DEFAULT '[]'::jsonb
+    `);
+    await pool.query(`
+      ALTER TABLE game_player_sprite_configs
+      ADD COLUMN IF NOT EXISTS selected_sprite_id TEXT
     `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS game_critter_catalog (
@@ -4925,10 +5107,26 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         }
         await ensureGlobalCatalogBaseline();
         const result = await pool.query(
-          'SELECT sprite_config FROM game_player_sprite_configs WHERE catalog_key = $1',
+          'SELECT sprite_config, sprite_library, selected_sprite_id FROM game_player_sprite_configs WHERE catalog_key = $1',
           [GLOBAL_CATALOG_KEY],
         );
-        sendJson(res, 200, { ok: true, playerSprite: sanitizeLoadedPlayerSpriteConfig(result.rows[0]?.sprite_config) });
+        const currentSpriteConfig = sanitizeLoadedPlayerSpriteConfig(result.rows[0]?.sprite_config);
+        const loadedSpriteLibrary = sanitizeLoadedPlayerSpriteLibrary(result.rows[0]?.sprite_library);
+        const spriteLibrary =
+          loadedSpriteLibrary.length > 0 ? loadedSpriteLibrary : buildFallbackPlayerSpriteLibrary(currentSpriteConfig);
+        const selectedSpriteId = spriteLibrary.length > 0
+          ? resolveSelectedPlayerSpriteId(result.rows[0]?.selected_sprite_id, spriteLibrary)
+          : null;
+        const activeSprite =
+          (selectedSpriteId
+            ? spriteLibrary.find((entry) => entry.id === selectedSpriteId)?.sprite
+            : null) ?? currentSpriteConfig;
+        sendJson(res, 200, {
+          ok: true,
+          playerSprite: activeSprite,
+          playerSpriteLibrary: spriteLibrary,
+          selectedSpriteId,
+        });
         return;
       }
 
@@ -4971,14 +5169,28 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         const result = savePlayerSpriteToProject(rawBody);
         await pool.query(
           `
-            INSERT INTO game_player_sprite_configs (catalog_key, sprite_config, updated_at)
-            VALUES ($1, $2::jsonb, NOW())
+            INSERT INTO game_player_sprite_configs (catalog_key, sprite_config, sprite_library, selected_sprite_id, updated_at)
+            VALUES ($1, $2::jsonb, $3::jsonb, $4, NOW())
             ON CONFLICT (catalog_key)
-            DO UPDATE SET sprite_config = EXCLUDED.sprite_config, updated_at = NOW()
+            DO UPDATE SET
+              sprite_config = EXCLUDED.sprite_config,
+              sprite_library = EXCLUDED.sprite_library,
+              selected_sprite_id = EXCLUDED.selected_sprite_id,
+              updated_at = NOW()
           `,
-          [GLOBAL_CATALOG_KEY, JSON.stringify(result.spriteConfig)],
+          [
+            GLOBAL_CATALOG_KEY,
+            JSON.stringify(result.spriteConfig),
+            JSON.stringify(result.spriteLibrary),
+            result.selectedSpriteId,
+          ],
         );
-        sendJson(res, 200, { ok: true, filePath: result.filePath });
+        sendJson(res, 200, {
+          ok: true,
+          filePath: result.filePath,
+          playerSpriteLibrary: result.spriteLibrary,
+          selectedSpriteId: result.selectedSpriteId,
+        });
         return;
       }
 

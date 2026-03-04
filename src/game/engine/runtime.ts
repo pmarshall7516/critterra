@@ -155,7 +155,7 @@ interface NpcRuntimeState {
   patternIndex: number;
   patternDirection: 1 | -1;
   animationMs: number;
-  /** Alternates 0/1 each cell moved; used for half-cycle walk animation (first leg / second leg). */
+  /** Counts completed walk steps within the shared walk animation loop. */
   stridePhase: number;
 }
 
@@ -185,6 +185,24 @@ interface MapTilesetRequirements {
     tileWidth: number;
     tileHeight: number;
   }>;
+}
+
+interface StaticMapOverlayTile {
+  x: number;
+  y: number;
+  pixelX: number;
+  pixelY: number;
+  depthY: number;
+  layerOrder: number;
+  tile: TileDefinition;
+  tileTransform: number;
+}
+
+interface StaticMapRenderCache {
+  width: number;
+  height: number;
+  background: HTMLCanvasElement;
+  overlayTiles: StaticMapOverlayTile[];
 }
 
 interface ResolvedNpcDefinition extends NpcDefinition {
@@ -316,6 +334,34 @@ interface BattleNarrationEvent {
   /** When present, apply this damage to the defender when this event is shown (so HP bars update in attack order). */
   applyDamageDefender?: 'player' | 'opponent';
   applyDamageAmount?: number;
+  /** Per-box healing/buff mutations that resolve when this narration event is shown. */
+  postDamageResolution?: BattlePostDamageResolution;
+  /** Static follow-up boxes that should be queued immediately after this one. */
+  followUpEvents?: BattleNarrationEvent[];
+  /** If the hit causes a knockout, generate knockout/result follow-up boxes after showing this event. */
+  pendingKnockoutResolution?: BattleNarrationKnockoutResolution;
+  /** Battle-state changes that should happen when this narration box becomes active. */
+  stateChange?: BattleNarrationStateChange;
+}
+
+interface BattlePostDamageResolution {
+  attackingTeam: 'player' | 'opponent';
+  healToAttacker: number;
+  attackerEffectIds: string[];
+  healMessageAttackerName?: string;
+}
+
+interface BattleNarrationKnockoutResolution {
+  defenderTeam: 'player' | 'opponent';
+  playerAttackerCritterId: number | null;
+}
+
+interface BattleNarrationStateChange {
+  result?: BattleResult;
+  resultMessage?: string;
+  phase?: BattlePhase;
+  pendingForcedSwap?: boolean;
+  opponentActiveIndex?: number | null;
 }
 
 interface BattleAnimationState {
@@ -768,7 +814,7 @@ const FISHING_MIN_BITE_WAIT_MS = 900;
 const FISHING_MAX_BITE_WAIT_MS = 4200;
 const FISHING_MIN_BITE_WINDOW_MS = 1000;
 const FISHING_MAX_BITE_WINDOW_MS = 7000;
-const BATTLE_KNOCKOUT_RESOLUTION_DELAY_MS = 520;
+const WALK_ANIMATION_STEPS_PER_CYCLE = 6;
 
 export class GameRuntime {
   private mapRegistry: Record<string, WorldMap> = buildMapRegistryFromInputs([SPAWN_MAP_INPUT], TILE_DEFINITIONS);
@@ -818,7 +864,7 @@ export class GameRuntime {
   private selectedStarterId: string | null;
   private playerCritterProgress: PlayerCritterProgress = createDefaultPlayerCritterProgress();
   private playerAnimationMs = 0;
-  /** Alternates 0/1 each cell moved; used for half-cycle walk animation (first leg / second leg). */
+  /** Counts completed walk steps within the shared walk animation loop. */
   private playerStridePhase = 0;
   private warpCooldownMs = 0;
   private autosaveMs = AUTOSAVE_INTERVAL_MS;
@@ -863,6 +909,7 @@ export class GameRuntime {
   /** Per-tile tilesets keyed by URL+tile dimensions (e.g. "url::16x16"). */
   private perTileTilesetCache = new Map<string, PerTileTilesetState>();
   private mapTilesetRequirementsCache = new Map<string, MapTilesetRequirements>();
+  private staticMapRenderCache = new Map<string, StaticMapRenderCache>();
   private announcedCritterAdvanceKeys = new Set<string>();
 
   constructor(options?: RuntimeInitOptions) {
@@ -1077,7 +1124,7 @@ export class GameRuntime {
       this.moveStep.elapsed += deltaMs;
       if (this.moveStep.elapsed >= this.moveStep.duration) {
         this.playerPosition = { ...this.moveStep.to };
-        this.playerStridePhase = (this.playerStridePhase + 1) % 2;
+        this.playerStridePhase = (this.playerStridePhase + 1) % WALK_ANIMATION_STEPS_PER_CYCLE;
         this.moveStep = null;
         const previousMapId = this.currentMapId;
         this.checkAutomaticWarp();
@@ -1109,6 +1156,89 @@ export class GameRuntime {
       width: Math.max(refW, mapW),
       height: Math.max(refH, mapH),
     };
+  }
+
+  private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
+    const width = map.width * TILE_SIZE;
+    const height = map.height * TILE_SIZE;
+    const cached = this.staticMapRenderCache.get(map.id);
+    if (cached && cached.width === width && cached.height === height) {
+      return cached;
+    }
+
+    if (typeof document === 'undefined') {
+      return null;
+    }
+
+    const background = document.createElement('canvas');
+    background.width = width;
+    background.height = height;
+    const backgroundContext = background.getContext('2d');
+    if (!backgroundContext) {
+      return null;
+    }
+
+    backgroundContext.imageSmoothingEnabled = false;
+    const overlayTiles: StaticMapOverlayTile[] = [];
+    const visibleLayers = map.layers
+      .filter((layer) => layer.visible)
+      .sort((left, right) => left.orderId - right.orderId);
+
+    for (const layer of visibleLayers) {
+      for (let y = 0; y < map.height; y += 1) {
+        const tileRow = layer.tiles[y];
+        if (!tileRow) {
+          continue;
+        }
+        const rotationRow = layer.rotations[y] ?? [];
+        for (let x = 0; x < map.width; x += 1) {
+          const code = tileRow[x];
+          if (!code || code === BLANK_TILE_CODE) {
+            continue;
+          }
+
+          const tile = this.getTileDefinition(code);
+          const tileTransform = sanitizeTileTransformValue(rotationRow[x] ?? 0);
+          const pixelX = x * TILE_SIZE;
+          const pixelY = y * TILE_SIZE;
+
+          if (this.shouldDepthSortTile(layer.orderId, tile)) {
+            overlayTiles.push({
+              x,
+              y,
+              pixelX,
+              pixelY,
+              depthY: y + 1,
+              layerOrder: layer.orderId,
+              tile,
+              tileTransform,
+            });
+            continue;
+          }
+
+          const drewAtlas = this.drawTileFromTileset(backgroundContext, tile, pixelX, pixelY, tileTransform);
+          if (!drewAtlas) {
+            this.drawTile(
+              backgroundContext,
+              tile.color,
+              tile.accentColor ?? tile.color,
+              pixelX,
+              pixelY,
+              tile.height,
+            );
+          }
+        }
+      }
+    }
+
+    const nextCache: StaticMapRenderCache = {
+      width,
+      height,
+      background,
+      overlayTiles,
+    };
+    this.staticMapRenderCache.set(map.id, nextCache);
+    return nextCache;
   }
 
   public render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
@@ -1170,6 +1300,7 @@ export class GameRuntime {
     const endY = Math.ceil(cameraY + viewTilesY) + 1;
     const cameraPixelX = Math.round(cameraX * TILE_SIZE);
     const cameraPixelY = Math.round(cameraY * TILE_SIZE);
+    const staticMapCache = this.getStaticMapRenderCache(map);
 
     type DepthDrawEntry = {
       depthY: number;
@@ -1179,52 +1310,111 @@ export class GameRuntime {
     };
 
     const depthDraws: DepthDrawEntry[] = [];
-    const visibleLayers = map.layers
-      .filter((layer) => layer.visible)
-      .sort((left, right) => left.orderId - right.orderId);
+    if (staticMapCache) {
+      const sourceX = Math.max(0, cameraPixelX);
+      const sourceY = Math.max(0, cameraPixelY);
+      const destinationX = cameraPixelX < 0 ? -cameraPixelX : 0;
+      const destinationY = cameraPixelY < 0 ? -cameraPixelY : 0;
+      const sourceWidth = Math.max(0, Math.min(staticMapCache.width - sourceX, viewPixelW - destinationX));
+      const sourceHeight = Math.max(0, Math.min(staticMapCache.height - sourceY, viewPixelH - destinationY));
+      if (sourceWidth > 0 && sourceHeight > 0) {
+        ctx.drawImage(
+          staticMapCache.background,
+          sourceX,
+          sourceY,
+          sourceWidth,
+          sourceHeight,
+          destinationX,
+          destinationY,
+          sourceWidth,
+          sourceHeight,
+        );
+      }
 
-    for (const layer of visibleLayers) {
-      for (let y = startY; y < endY; y += 1) {
-        const tileRow = layer.tiles[y];
-        if (!tileRow) {
+      for (const overlayTile of staticMapCache.overlayTiles) {
+        if (
+          overlayTile.x < startX ||
+          overlayTile.x >= endX ||
+          overlayTile.y < startY ||
+          overlayTile.y >= endY
+        ) {
           continue;
         }
-        const rotationRow = layer.rotations[y] ?? [];
-        for (let x = startX; x < endX; x += 1) {
-          if (x < 0 || x >= tileRow.length) {
-            continue;
-          }
-
-          const code = tileRow[x];
-          if (!code || code === BLANK_TILE_CODE) {
-            continue;
-          }
-
-          const tile = this.getTileDefinition(code);
-          const screenX = x * TILE_SIZE - cameraPixelX;
-          const screenY = y * TILE_SIZE - cameraPixelY;
-          const tileTransform = sanitizeTileTransformValue(rotationRow[x] ?? 0);
-
-          // Draw atlas first so transparent pixels on higher layers reveal lower layers.
-          // Only use color fallback when atlas art is unavailable for this tile.
-          const isOverhead = this.shouldDepthSortTile(layer.orderId, tile);
-          if (!isOverhead) {
-            const drewAtlas = this.drawTileFromTileset(ctx, tile, screenX, screenY, tileTransform);
-            if (!drewAtlas) {
-              this.drawTile(ctx, tile.color, tile.accentColor ?? tile.color, screenX, screenY, tile.height);
+        depthDraws.push({
+          depthY: overlayTile.depthY,
+          layerOrder: overlayTile.layerOrder,
+          kind: 'overlay',
+          draw: () => {
+            const screenX = overlayTile.pixelX - cameraPixelX;
+            const screenY = overlayTile.pixelY - cameraPixelY;
+            const drewOverlayAtlas = this.drawTileFromTileset(
+              ctx,
+              overlayTile.tile,
+              screenX,
+              screenY,
+              overlayTile.tileTransform,
+            );
+            if (!drewOverlayAtlas) {
+              this.drawTile(
+                ctx,
+                overlayTile.tile.color,
+                overlayTile.tile.accentColor ?? overlayTile.tile.color,
+                screenX,
+                screenY,
+                overlayTile.tile.height,
+              );
             }
-          } else {
-            depthDraws.push({
-              depthY: y + 1,
-              layerOrder: layer.orderId,
-              kind: 'overlay',
-              draw: () => {
-                const drewOverlayAtlas = this.drawTileFromTileset(ctx, tile, screenX, screenY, tileTransform);
-                if (!drewOverlayAtlas) {
-                  this.drawTile(ctx, tile.color, tile.accentColor ?? tile.color, screenX, screenY, tile.height);
-                }
-              },
-            });
+          },
+        });
+      }
+    } else {
+      const visibleLayers = map.layers
+        .filter((layer) => layer.visible)
+        .sort((left, right) => left.orderId - right.orderId);
+
+      for (const layer of visibleLayers) {
+        for (let y = startY; y < endY; y += 1) {
+          const tileRow = layer.tiles[y];
+          if (!tileRow) {
+            continue;
+          }
+          const rotationRow = layer.rotations[y] ?? [];
+          for (let x = startX; x < endX; x += 1) {
+            if (x < 0 || x >= tileRow.length) {
+              continue;
+            }
+
+            const code = tileRow[x];
+            if (!code || code === BLANK_TILE_CODE) {
+              continue;
+            }
+
+            const tile = this.getTileDefinition(code);
+            const screenX = x * TILE_SIZE - cameraPixelX;
+            const screenY = y * TILE_SIZE - cameraPixelY;
+            const tileTransform = sanitizeTileTransformValue(rotationRow[x] ?? 0);
+
+            // Draw atlas first so transparent pixels on higher layers reveal lower layers.
+            // Only use color fallback when atlas art is unavailable for this tile.
+            const isOverhead = this.shouldDepthSortTile(layer.orderId, tile);
+            if (!isOverhead) {
+              const drewAtlas = this.drawTileFromTileset(ctx, tile, screenX, screenY, tileTransform);
+              if (!drewAtlas) {
+                this.drawTile(ctx, tile.color, tile.accentColor ?? tile.color, screenX, screenY, tile.height);
+              }
+            } else {
+              depthDraws.push({
+                depthY: y + 1,
+                layerOrder: layer.orderId,
+                kind: 'overlay',
+                draw: () => {
+                  const drewOverlayAtlas = this.drawTileFromTileset(ctx, tile, screenX, screenY, tileTransform);
+                  if (!drewOverlayAtlas) {
+                    this.drawTile(ctx, tile.color, tile.accentColor ?? tile.color, screenX, screenY, tile.height);
+                  }
+                },
+              });
+            }
           }
         }
       }
@@ -3317,7 +3507,7 @@ export class GameRuntime {
         state.moveStep.elapsed += deltaMs;
         if (state.moveStep.elapsed >= state.moveStep.duration) {
           state.position = { ...state.moveStep.to };
-          state.stridePhase = (state.stridePhase + 1) % 2;
+          state.stridePhase = (state.stridePhase + 1) % WALK_ANIMATION_STEPS_PER_CYCLE;
           state.moveStep = null;
         }
       }
@@ -4930,7 +5120,6 @@ export class GameRuntime {
       }
     }
 
-    this.updatePendingKnockoutResolution(battle, deltaMs);
     this.updatePendingOpponentSwitchAnnouncement(battle, deltaMs);
 
     if (battle.phase !== 'transition') {
@@ -4947,29 +5136,6 @@ export class GameRuntime {
       battle.source.type === 'wild'
         ? `${battle.source.label} appeared. Choose your lead critter.`
         : 'Choose your lead critter.';
-  }
-
-  private updatePendingKnockoutResolution(battle: BattleRuntimeState, deltaMs: number): void {
-    const pending = battle.pendingKnockoutResolution;
-    if (!pending) {
-      return;
-    }
-
-    pending.remainingMs = Math.max(0, pending.remainingMs - deltaMs);
-    if (pending.remainingMs > 0) {
-      return;
-    }
-
-    battle.pendingKnockoutResolution = null;
-    if (battle.result !== 'ongoing') {
-      return;
-    }
-
-    if (pending.defenderTeam === 'opponent') {
-      this.handleOpponentKnockout(battle, pending.playerAttackerCritterId);
-      return;
-    }
-    this.handlePlayerKnockout(battle);
   }
 
   private updatePendingOpponentSwitchAnnouncement(battle: BattleRuntimeState, deltaMs: number): void {
@@ -5205,8 +5371,8 @@ export class GameRuntime {
         narration.push({ message: "Guard failed!", attacker: null });
       }
       const opponentResult = this.executeBattleSkill(battle, 'opponent', true, guardSucceeded);
-      if (opponentResult.narration) {
-        narration.push(opponentResult.narration);
+      if (opponentResult.narrationEvents.length > 0) {
+        narration.push(...opponentResult.narrationEvents);
       }
       this.startBattleNarration(battle, narration);
       return;
@@ -5229,8 +5395,8 @@ export class GameRuntime {
         false,
         false,
       );
-      if (playerResult.narration) {
-        narration.push(playerResult.narration);
+      if (playerResult.narrationEvents.length > 0) {
+        narration.push(...playerResult.narrationEvents);
       }
       if (playerResult.defenderFainted || battle.result !== 'ongoing' || battle.phase !== 'player-turn') {
         this.startBattleNarration(battle, narration);
@@ -5238,16 +5404,16 @@ export class GameRuntime {
       }
 
       const opponentResult = this.executeBattleSkill(battle, 'opponent', false, false);
-      if (opponentResult.narration) {
-        narration.push(opponentResult.narration);
+      if (opponentResult.narrationEvents.length > 0) {
+        narration.push(...opponentResult.narrationEvents);
       }
       this.startBattleNarration(battle, narration);
       return;
     }
 
     const opponentResult = this.executeBattleSkill(battle, 'opponent', false, false);
-    if (opponentResult.narration) {
-      narration.push(opponentResult.narration);
+    if (opponentResult.narrationEvents.length > 0) {
+      narration.push(...opponentResult.narrationEvents);
     }
     if (opponentResult.defenderFainted || battle.result !== 'ongoing' || battle.phase !== 'player-turn') {
       this.startBattleNarration(battle, narration);
@@ -5262,8 +5428,8 @@ export class GameRuntime {
       false,
       false,
     );
-    if (playerResult.narration) {
-      narration.push(playerResult.narration);
+    if (playerResult.narrationEvents.length > 0) {
+      narration.push(...playerResult.narrationEvents);
     }
     this.startBattleNarration(battle, narration);
   }
@@ -5284,8 +5450,8 @@ export class GameRuntime {
       },
     ];
     const opponentAttack = this.executeBattleSkill(battle, 'opponent', false, false);
-    if (opponentAttack.narration) {
-      narration.push(opponentAttack.narration);
+    if (opponentAttack.narrationEvents.length > 0) {
+      narration.push(...opponentAttack.narrationEvents);
     }
     this.startBattleNarration(battle, narration);
   }
@@ -5295,7 +5461,7 @@ export class GameRuntime {
     attackingTeam: 'player' | 'opponent',
     defenderGuarded: boolean,
     guardSucceeded: boolean,
-  ): { narration: BattleNarrationEvent | null; defenderFainted: boolean; damageToDefender?: number } {
+  ): { narrationEvents: BattleNarrationEvent[]; defenderFainted: boolean; damageToDefender?: number } {
     const attacker = this.getActiveBattleCritter(battle, attackingTeam);
     let skill = DEFAULT_TACKLE_SKILL;
     let skillSlotIndex = 0;
@@ -5333,32 +5499,33 @@ export class GameRuntime {
     _skillSlotIndex: number,
     defenderGuarded: boolean,
     guardSucceeded: boolean,
-  ): { narration: BattleNarrationEvent | null; defenderFainted: boolean; damageToDefender?: number } {
+  ): { narrationEvents: BattleNarrationEvent[]; defenderFainted: boolean; damageToDefender?: number } {
     const attacker = this.getActiveBattleCritter(battle, attackingTeam);
     const defender = this.getActiveBattleCritter(battle, attackingTeam === 'player' ? 'opponent' : 'player');
     if (!attacker || !defender || attacker.fainted) {
-      return { narration: null, defenderFainted: false };
+      return { narrationEvents: [], defenderFainted: false };
     }
 
     const applyDamageDefender: 'player' | 'opponent' = attackingTeam === 'player' ? 'opponent' : 'player';
-    const defenderTeam = attackingTeam === 'player' ? battle.opponentTeam : battle.playerTeam;
     const defenderActiveIndex = attackingTeam === 'player' ? battle.opponentActiveIndex : battle.playerActiveIndex;
 
     if (skill.type === 'support') {
-      const actualHeal = resolveSkillHealAmount(skill, attacker);
-      if (actualHeal > 0) {
-        attacker.currentHp = Math.min(attacker.maxHp, attacker.currentHp + actualHeal);
-      }
-      this.applySkillEffectsToAttacker(attacker, skill);
-      const message =
-        actualHeal > 0
-          ? `Your ${attacker.name} used ${skill.skill_name} and healed ${actualHeal} HP!`
-          : `Your ${attacker.name} used ${skill.skill_name}.`;
+      const requestedHeal = resolveRequestedSkillHealAmount(skill, attacker);
+      const followUpEvents = this.buildBattleResolutionNarrationEvents(
+        attacker.name,
+        attackingTeam,
+        requestedHeal,
+        [...(skill.effectIds ?? [])],
+      );
+      const message = `Your ${attacker.name} used ${skill.skill_name}.`;
       return {
-        narration: {
-          message,
-          attacker: attackingTeam,
-        },
+        narrationEvents: [
+          {
+            message,
+            attacker: attackingTeam,
+            followUpEvents,
+          },
+        ],
         defenderFainted: false,
       };
     }
@@ -5388,12 +5555,15 @@ export class GameRuntime {
       Math.floor(baseForCrit * typeMult * stab * critMult * guardMult * variance),
     );
     const damageDealt = Math.min(damage, Math.max(0, defender.currentHp));
-    const actualHeal = resolveSkillHealAmount(skill, attacker, damageDealt);
-    if (actualHeal > 0) {
-      attacker.currentHp = Math.min(attacker.maxHp, attacker.currentHp + actualHeal);
-    }
-
-    this.applySkillEffectsToAttacker(attacker, skill);
+    const plannedHeal = resolveRequestedSkillHealAmount(skill, attacker, damageDealt);
+    const attackerEffectIds = [...(skill.effectIds ?? [])];
+    const wouldFaint = defender.currentHp <= damage;
+    const followUpEvents = this.buildBattleResolutionNarrationEvents(
+      attacker.name,
+      attackingTeam,
+      plannedHeal,
+      attackerEffectIds,
+    );
 
     const guardSuffix =
       defenderGuarded && guardSucceeded
@@ -5419,30 +5589,51 @@ export class GameRuntime {
       defender.name,
       skill.skill_name,
     );
-    let message = `${attackPrefix} dealt ${damage} damage.${critSuffix}${typeEffectSuffix}${guardSuffix}`.trim();
-    if (actualHeal > 0) {
-      message = `${message} ${attacker.name} restored ${actualHeal} HP.`.trim();
-    }
-    if (defender.fainted) {
-      const knockoutSuffix = this.buildKnockoutMessage(battle, applyDamageDefender, defenderActiveIndex ?? -1);
-      message = `${message} ${knockoutSuffix}`.trim();
-    }
+    const message = `${attackPrefix} dealt ${damage} damage.${critSuffix}${typeEffectSuffix}${guardSuffix}`.trim();
 
-    const wouldFaint = defender.currentHp <= damage;
     return {
-      narration: {
-        message,
-        attacker: attackingTeam,
-        applyDamageDefender,
-        applyDamageAmount: damage,
-      },
+      narrationEvents: [
+        {
+          message,
+          attacker: attackingTeam,
+          applyDamageDefender,
+          applyDamageAmount: damage,
+          followUpEvents,
+          pendingKnockoutResolution:
+            wouldFaint && defenderActiveIndex !== null
+              ? {
+                  defenderTeam: applyDamageDefender,
+                  playerAttackerCritterId:
+                    applyDamageDefender === 'opponent' && battle.playerActiveIndex !== null
+                      ? battle.playerTeam[battle.playerActiveIndex]?.critterId ?? null
+                      : null,
+                }
+              : undefined,
+        },
+      ],
       defenderFainted: wouldFaint,
       damageToDefender: damage,
     };
   }
 
-  private applySkillEffectsToAttacker(attacker: BattleCritterState, skill: SkillDefinition): void {
-    const effectIds = skill.effectIds ?? [];
+  private applyBattleHeal(
+    target: Pick<BattleCritterState, 'currentHp' | 'maxHp'>,
+    requestedHeal: number,
+  ): number {
+    const safeRequestedHeal = Number.isFinite(requestedHeal) ? Math.max(0, Math.floor(requestedHeal)) : 0;
+    if (safeRequestedHeal <= 0) {
+      return 0;
+    }
+    const missingHp = Math.max(0, target.maxHp - target.currentHp);
+    if (missingHp <= 0) {
+      return 0;
+    }
+    const actualHeal = Math.min(missingHp, safeRequestedHeal);
+    target.currentHp += actualHeal;
+    return actualHeal;
+  }
+
+  private applySkillEffectIdsToAttacker(attacker: BattleCritterState, effectIds: string[]): void {
     for (const effectId of effectIds) {
       const effect = this.skillEffectLookupById[effectId];
       if (!effect) continue;
@@ -5459,92 +5650,74 @@ export class GameRuntime {
     }
   }
 
-  /** Build knockout follow-up message without mutating battle state (for deferred damage narration). */
-  private buildKnockoutMessage(
+  private applyBattlePostDamageResolution(
     battle: BattleRuntimeState,
-    defenderTeam: 'player' | 'opponent',
-    defeatedIndex: number,
-  ): string {
-    const team = defenderTeam === 'player' ? battle.playerTeam : battle.opponentTeam;
-    const defeated = defeatedIndex >= 0 && defeatedIndex < team.length ? team[defeatedIndex] : null;
-    const nextIndex = this.findNextAliveTeamIndexExcluding(team, defeatedIndex);
-    if (defenderTeam === 'opponent') {
-      if (nextIndex < 0) {
-        return battle.source.type === 'wild'
-          ? `The wild ${defeated?.name ?? 'critter'} fainted. You won the battle.`
-          : `${battle.source.label}'s ${defeated?.name ?? 'critter'} fainted. You won the battle.`;
-      }
-      return `${battle.source.label}'s ${defeated?.name ?? 'critter'} fainted.`;
+    resolution: BattlePostDamageResolution,
+  ): number {
+    const attacker = this.getActiveBattleCritter(battle, resolution.attackingTeam);
+    if (!attacker || attacker.fainted || attacker.currentHp <= 0) {
+      return 0;
     }
-    if (nextIndex < 0) {
-      return `Your ${defeated?.name ?? 'critter'} fainted. You blacked out.`;
+
+    const actualHeal = this.applyBattleHeal(attacker, resolution.healToAttacker);
+    if (resolution.attackerEffectIds.length > 0) {
+      this.applySkillEffectIdsToAttacker(attacker, resolution.attackerEffectIds);
     }
-    return `Your ${defeated?.name ?? 'critter'} fainted. Choose another squad critter.`;
+    return actualHeal;
   }
 
-  private findNextAliveTeamIndexExcluding(team: BattleCritterState[], excludeIndex: number): number {
-    for (let index = 0; index < team.length; index += 1) {
-      if (index === excludeIndex) {
-        continue;
-      }
-      const entry = team[index];
-      if (!entry.fainted && entry.currentHp > 0) {
-        return index;
-      }
+  private buildBattleResolutionNarrationEvents(
+    attackerName: string,
+    attackingTeam: 'player' | 'opponent',
+    healToAttacker: number,
+    attackerEffectIds: string[],
+  ): BattleNarrationEvent[] {
+    const events: BattleNarrationEvent[] = [];
+
+    if (healToAttacker > 0) {
+      events.push({
+        message: `${attackerName} restored HP.`,
+        attacker: null,
+        postDamageResolution: {
+          attackingTeam,
+          healToAttacker,
+          attackerEffectIds: [],
+          healMessageAttackerName: attackerName,
+        },
+      });
     }
-    return -1;
+
+    if (attackerEffectIds.length > 0) {
+      events.push({
+        message: this.formatBattleEffectActivationMessage(attackerName, attackerEffectIds),
+        attacker: null,
+        postDamageResolution: {
+          attackingTeam,
+          healToAttacker: 0,
+          attackerEffectIds,
+        },
+      });
+    }
+
+    return events;
   }
 
-  private handleOpponentKnockout(battle: BattleRuntimeState, playerAttackerCritterId: number | null): string {
-    const defeatedIndex = battle.opponentActiveIndex;
-    if (defeatedIndex === null) {
-      return 'The opposing critter fainted.';
+  private formatBattleEffectActivationMessage(attackerName: string, attackerEffectIds: string[]): string {
+    const effectNames = attackerEffectIds
+      .map((effectId) => {
+        const effect = this.skillEffectLookupById[effectId];
+        return typeof effect?.effect_name === 'string' && effect.effect_name.trim()
+          ? effect.effect_name.trim()
+          : effectId;
+      })
+      .filter((name) => name.length > 0);
+    if (effectNames.length === 0) {
+      return `${attackerName} powered up.`;
     }
-
-    const defeated = battle.opponentTeam[defeatedIndex];
-    if (!defeated) {
-      return 'The opposing critter fainted.';
+    if (effectNames.length === 1) {
+      return `${attackerName} gained ${effectNames[0]}.`;
     }
-
-    if (!defeated.knockoutProgressCounted) {
-      this.recordOpposingKnockoutProgress(defeated.critterId, playerAttackerCritterId);
-      defeated.knockoutProgressCounted = true;
-    }
-
-    const nextIndex = this.findNextAliveTeamIndex(battle.opponentTeam, defeatedIndex);
-    if (nextIndex < 0) {
-      this.setBattleResult(battle, 'won', `The wild ${defeated.name} fainted. You won the battle!`);
-      return battle.source.type === 'wild'
-        ? `The wild ${defeated.name} fainted. You won the battle.`
-        : `${battle.source.label}'s ${defeated.name} fainted. You won the battle.`;
-    }
-    if (battle.source.type === 'npc') {
-      battle.pendingOpponentSwitchIndex = nextIndex;
-      battle.pendingOpponentSwitchDelayMs = 360;
-      battle.pendingOpponentSwitchAnnouncementShown = false;
-      return `${battle.source.label}'s ${defeated.name} fainted.`;
-    }
-    battle.opponentActiveIndex = nextIndex;
-    return `${battle.source.label} sent out ${battle.opponentTeam[nextIndex].name}.`;
-  }
-
-  private handlePlayerKnockout(battle: BattleRuntimeState): string {
-    const defeatedIndex = battle.playerActiveIndex;
-    if (defeatedIndex === null) {
-      this.setBattleResult(battle, 'lost', 'Your squad has no active critter.');
-      return 'Your critter fainted.';
-    }
-
-    const defeated = battle.playerTeam[defeatedIndex];
-    const nextIndex = this.findNextAliveTeamIndex(battle.playerTeam, defeatedIndex);
-    if (nextIndex < 0) {
-      this.setBattleResult(battle, 'lost', `${defeated?.name ?? 'Your critter'} fainted. You blacked out.`);
-      return `Your ${defeated?.name ?? 'critter'} fainted. You blacked out.`;
-    }
-
-    battle.phase = 'choose-swap';
-    battle.pendingForcedSwap = true;
-    return `Your ${defeated?.name ?? 'critter'} fainted. Choose another squad critter.`;
+    return `${attackerName} gained ${effectNames.slice(0, -1).join(', ')} and ${effectNames[effectNames.length - 1]}.`;
   }
 
   private formatBattleAttackPrefix(
@@ -5610,6 +5783,7 @@ export class GameRuntime {
 
     battle.activeNarration = next;
     battle.logLine = next.message;
+    this.applyBattleNarrationStateChange(battle, next);
 
     if (
       next.applyDamageDefender !== undefined &&
@@ -5622,17 +5796,48 @@ export class GameRuntime {
       if (defender) {
         defender.currentHp = Math.max(0, defender.currentHp - next.applyDamageAmount);
         defender.fainted = defender.currentHp <= 0;
-        if (defender.fainted) {
-          const playerAttackerCritterId =
-            next.applyDamageDefender === 'opponent' && battle.playerActiveIndex !== null
-              ? battle.playerTeam[battle.playerActiveIndex]?.critterId ?? null
-              : null;
-          battle.pendingKnockoutResolution = {
-            defenderTeam: next.applyDamageDefender,
-            remainingMs: BATTLE_KNOCKOUT_RESOLUTION_DELAY_MS,
-            playerAttackerCritterId,
-          };
-        }
+      }
+    }
+
+    const insertedEvents: BattleNarrationEvent[] = [];
+    if (next.followUpEvents && next.followUpEvents.length > 0) {
+      insertedEvents.push(...next.followUpEvents.map((event) => cloneBattleNarrationEvent(event)));
+    }
+
+    if (
+      next.pendingKnockoutResolution &&
+      next.applyDamageDefender !== undefined &&
+      next.applyDamageAmount !== undefined &&
+      next.applyDamageAmount > 0
+    ) {
+      const team =
+        next.pendingKnockoutResolution.defenderTeam === 'player' ? battle.playerTeam : battle.opponentTeam;
+      const activeIndex =
+        next.pendingKnockoutResolution.defenderTeam === 'player' ? battle.playerActiveIndex : battle.opponentActiveIndex;
+      const defender = activeIndex !== null ? team[activeIndex] : null;
+      if (defender?.fainted) {
+        insertedEvents.push(
+          ...this.buildBattleKnockoutNarrationEvents(
+            battle,
+            next.pendingKnockoutResolution.defenderTeam,
+            next.pendingKnockoutResolution.playerAttackerCritterId,
+          ),
+        );
+      }
+    }
+
+    if (insertedEvents.length > 0) {
+      battle.narrationQueue.unshift(...insertedEvents);
+    }
+
+    if (next.postDamageResolution) {
+      const actualHeal = this.applyBattlePostDamageResolution(battle, next.postDamageResolution);
+      if (next.postDamageResolution.healMessageAttackerName) {
+        next.message =
+          actualHeal > 0
+            ? `${next.postDamageResolution.healMessageAttackerName} restored ${actualHeal} HP.`
+            : `${next.postDamageResolution.healMessageAttackerName} could not restore any HP.`;
+        battle.logLine = next.message;
       }
     }
 
@@ -5647,6 +5852,138 @@ export class GameRuntime {
     } else {
       battle.activeAnimation = null;
     }
+  }
+
+  private applyBattleNarrationStateChange(battle: BattleRuntimeState, event: BattleNarrationEvent): void {
+    const stateChange = event.stateChange;
+    if (!stateChange) {
+      return;
+    }
+
+    if (typeof stateChange.opponentActiveIndex === 'number') {
+      battle.opponentActiveIndex = stateChange.opponentActiveIndex;
+      battle.pendingOpponentSwitchIndex = null;
+      battle.pendingOpponentSwitchDelayMs = 0;
+      battle.pendingOpponentSwitchAnnouncementShown = false;
+    }
+
+    if (stateChange.phase) {
+      battle.phase = stateChange.phase;
+    }
+
+    if (typeof stateChange.pendingForcedSwap === 'boolean') {
+      battle.pendingForcedSwap = stateChange.pendingForcedSwap;
+    }
+
+    if (stateChange.result) {
+      this.setBattleResult(battle, stateChange.result, stateChange.resultMessage ?? event.message, {
+        preserveLogLine: true,
+      });
+    }
+  }
+
+  private buildBattleKnockoutNarrationEvents(
+    battle: BattleRuntimeState,
+    defenderTeam: 'player' | 'opponent',
+    playerAttackerCritterId: number | null,
+  ): BattleNarrationEvent[] {
+    if (defenderTeam === 'opponent') {
+      const defeatedIndex = battle.opponentActiveIndex;
+      if (defeatedIndex === null) {
+        return [];
+      }
+      const defeated = battle.opponentTeam[defeatedIndex];
+      if (!defeated) {
+        return [];
+      }
+
+      if (!defeated.knockoutProgressCounted) {
+        this.recordOpposingKnockoutProgress(defeated.critterId, playerAttackerCritterId);
+        defeated.knockoutProgressCounted = true;
+      }
+
+      const events: BattleNarrationEvent[] = [
+        {
+          message:
+            battle.source.type === 'wild'
+              ? `The wild ${defeated.name} fainted.`
+              : `${battle.source.label}'s ${defeated.name} fainted.`,
+          attacker: null,
+        },
+      ];
+      const nextIndex = this.findNextAliveTeamIndex(battle.opponentTeam, defeatedIndex);
+      if (nextIndex < 0) {
+        events.push({
+          message: 'You won the battle.',
+          attacker: null,
+          stateChange: {
+            result: 'won',
+            resultMessage: 'You won the battle.',
+          },
+        });
+        return events;
+      }
+
+      const nextOpponent = battle.opponentTeam[nextIndex];
+      if (!nextOpponent) {
+        return events;
+      }
+      events.push({
+        message:
+          battle.source.type === 'wild'
+            ? `${battle.source.label} sent out ${nextOpponent.name}.`
+            : `${battle.source.label} selected ${nextOpponent.name}.`,
+        attacker: 'opponent',
+        stateChange: {
+          opponentActiveIndex: nextIndex,
+        },
+      });
+      return events;
+    }
+
+    const defeatedIndex = battle.playerActiveIndex;
+    if (defeatedIndex === null) {
+      return [
+        {
+          message: 'You blacked out.',
+          attacker: null,
+          stateChange: {
+            result: 'lost',
+            resultMessage: 'Your squad has no active critter.',
+          },
+        },
+      ];
+    }
+
+    const defeated = battle.playerTeam[defeatedIndex];
+    const events: BattleNarrationEvent[] = [
+      {
+        message: `Your ${defeated?.name ?? 'critter'} fainted.`,
+        attacker: null,
+      },
+    ];
+    const nextIndex = this.findNextAliveTeamIndex(battle.playerTeam, defeatedIndex);
+    if (nextIndex < 0) {
+      events.push({
+        message: 'You blacked out.',
+        attacker: null,
+        stateChange: {
+          result: 'lost',
+          resultMessage: `${defeated?.name ?? 'Your critter'} fainted. You blacked out.`,
+        },
+      });
+      return events;
+    }
+
+    events.push({
+      message: 'Choose another squad critter.',
+      attacker: null,
+      stateChange: {
+        phase: 'choose-swap',
+        pendingForcedSwap: true,
+      },
+    });
+    return events;
   }
 
   private findNextAliveTeamIndex(team: BattleCritterState[], excludeIndex: number): number {
@@ -5672,7 +6009,12 @@ export class GameRuntime {
     return -1;
   }
 
-  private setBattleResult(battle: BattleRuntimeState, result: BattleResult, message: string): void {
+  private setBattleResult(
+    battle: BattleRuntimeState,
+    result: BattleResult,
+    message: string,
+    options?: { preserveLogLine?: boolean },
+  ): void {
     battle.result = result;
     battle.phase = 'result';
     battle.pendingOpponentSwitchIndex = null;
@@ -5680,7 +6022,9 @@ export class GameRuntime {
     battle.pendingOpponentSwitchAnnouncementShown = false;
     battle.pendingForcedSwap = false;
     battle.pendingKnockoutResolution = null;
-    battle.logLine = message;
+    if (!options?.preserveLogLine) {
+      battle.logLine = message;
+    }
     const wasGuardBattle = this.pendingGuardDefeat !== null;
     if (this.pendingGuardDefeat) {
       if (result === 'won') {
@@ -8357,7 +8701,7 @@ export class GameRuntime {
     options?: {
       idleAnimationName?: string;
       moveAnimationName?: string;
-      /** When moving: progress 0–1 through current cell, stridePhase 0|1 for first/second leg. Half cycle per cell. */
+      /** When moving: progress 0–1 through current cell, stridePhase tracks completed walk steps in the loop. */
       moveProgressAndPhase?: { progress: number; stridePhase: number };
     },
   ): number {
@@ -8368,7 +8712,11 @@ export class GameRuntime {
 
     if (isMoving) {
       const { progress, stridePhase } = options?.moveProgressAndPhase ?? { progress: 0, stridePhase: 0 };
-      const cycleProgress = Math.min(1, stridePhase * 0.5 + progress * 0.5);
+      const normalizedStridePhase = Math.max(0, Math.floor(stridePhase)) % WALK_ANIMATION_STEPS_PER_CYCLE;
+      const cycleProgress = Math.min(
+        1,
+        (normalizedStridePhase + clamp(progress, 0, 1)) / WALK_ANIMATION_STEPS_PER_CYCLE,
+      );
 
       const moveFramesFromSet = this.getDirectionalAnimationFrames(sprite.animationSets, moveAnimationName, facing);
       if (moveFramesFromSet.length > 0) {
@@ -9166,7 +9514,30 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function resolveSkillHealAmount(
+function cloneBattleNarrationEvent(event: BattleNarrationEvent): BattleNarrationEvent {
+  return {
+    ...event,
+    postDamageResolution: event.postDamageResolution
+      ? {
+          ...event.postDamageResolution,
+          attackerEffectIds: [...event.postDamageResolution.attackerEffectIds],
+        }
+      : undefined,
+    followUpEvents: event.followUpEvents ? event.followUpEvents.map((entry) => cloneBattleNarrationEvent(entry)) : undefined,
+    pendingKnockoutResolution: event.pendingKnockoutResolution
+      ? {
+          ...event.pendingKnockoutResolution,
+        }
+      : undefined,
+    stateChange: event.stateChange
+      ? {
+          ...event.stateChange,
+        }
+      : undefined,
+  };
+}
+
+function resolveRequestedSkillHealAmount(
   skill: Pick<SkillDefinition, 'element' | 'healMode' | 'healValue'>,
   attacker: Pick<BattleCritterState, 'currentHp' | 'element' | 'maxHp'>,
   damageDealt = 0,
@@ -9177,10 +9548,6 @@ function resolveSkillHealAmount(
     typeof skill.healValue !== 'number' ||
     !Number.isFinite(skill.healValue)
   ) {
-    return 0;
-  }
-  const missingHp = Math.max(0, attacker.maxHp - attacker.currentHp);
-  if (missingHp <= 0) {
     return 0;
   }
 
@@ -9195,7 +9562,7 @@ function resolveSkillHealAmount(
     requestedHeal = Math.floor(Math.max(0, damageDealt) * clamp(skill.healValue, 0, 1));
   }
 
-  return Math.min(missingHp, Math.max(0, requestedHeal));
+  return Math.max(0, requestedHeal);
 }
 
 function sanitizeTileTransformValue(value: number): number {
