@@ -16,26 +16,32 @@ function createTestSprite() {
 }
 
 describe('GameRuntime walk animation pacing', () => {
-  it('spreads walk frames across multiple completed movement steps', () => {
+  it('selects walk frames based on animation time', () => {
     const runtime = Object.create(GameRuntime.prototype) as GameRuntime & { [key: string]: any };
     const sprite = createTestSprite();
 
     expect(
       (runtime as any).getSpriteFrameIndex(sprite, 'down', true, 0, {
-        moveProgressAndPhase: { progress: 0.99, stridePhase: 0 },
+        moveProgressAndPhase: { progress: 0.5, stridePhase: 0 },
       }),
     ).toBe(0);
 
     expect(
-      (runtime as any).getSpriteFrameIndex(sprite, 'down', true, 0, {
-        moveProgressAndPhase: { progress: 0.99, stridePhase: 1 },
+      (runtime as any).getSpriteFrameIndex(sprite, 'down', true, 60, {
+        moveProgressAndPhase: { progress: 0.5, stridePhase: 1 },
       }),
     ).toBe(1);
 
     expect(
-      (runtime as any).getSpriteFrameIndex(sprite, 'down', true, 0, {
-        moveProgressAndPhase: { progress: 0.99, stridePhase: 5 },
+      (runtime as any).getSpriteFrameIndex(sprite, 'down', true, 180, {
+        moveProgressAndPhase: { progress: 0.5, stridePhase: 2 },
       }),
     ).toBe(3);
+
+    expect(
+      (runtime as any).getSpriteFrameIndex(sprite, 'down', true, 240, {
+        moveProgressAndPhase: { progress: 0.5, stridePhase: 3 },
+      }),
+    ).toBe(0);
   });
 });

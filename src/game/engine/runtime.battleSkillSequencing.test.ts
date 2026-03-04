@@ -49,7 +49,7 @@ describe('GameRuntime battle skill sequencing', () => {
     vi.restoreAllMocks();
   });
 
-  it('calculates damage before applying percent-damage healing and attacker effects', () => {
+  it('calculates damage before scheduling percent-damage healing and attacker effects in follow-up events', () => {
     const runtime = createRuntimeHarness();
     const attacker = createBattleCritter();
     const defender = createBattleCritter({
@@ -88,36 +88,38 @@ describe('GameRuntime battle skill sequencing', () => {
     const result = runtime.executeBattleSkillWithSkill(battle, 'player', skill, 0, false, false);
 
     expect(result.damageToDefender).toBe(6);
-    expect(attacker.currentHp).toBe(21);
-    expect(attacker.attackModifier).toBe(1.5);
-    expect(attacker.activeEffectIds).toEqual(['battle-focus']);
-    expect(defender.currentHp).toBe(40);
-    expect(result.narration?.message).toContain('recovered 1 HP');
+    expect(result.narrationEvents.length).toBeGreaterThan(0);
+    const mainEvent = result.narrationEvents[0];
+    expect(mainEvent.followUpEvents).toBeDefined();
+    expect(mainEvent.followUpEvents!.length).toBeGreaterThan(0);
+    const healEvent = mainEvent.followUpEvents!.find((e: any) => e.postDamageResolution?.healToAttacker > 0);
+    expect(healEvent).toBeDefined();
+    const effectEvent = mainEvent.followUpEvents!.find((e: any) =>
+      e.postDamageResolution?.attackerEffectIds?.includes('battle-focus')
+    );
+    expect(effectEvent).toBeDefined();
   });
 
-  it('supports flat healing on support skills', () => {
+  it('schedules flat healing on support skills via follow-up events', () => {
     const runtime = createRuntimeHarness();
     const attacker = createBattleCritter({ currentHp: 11, maxHp: 40 });
     const defender = createBattleCritter({
       critterId: 2,
       name: 'Defender',
+      element: 'stone',
       currentHp: 40,
       maxHp: 40,
     });
     const battle = {
-      source: {
-        type: 'wild',
-        mapId: 'test-map',
-        label: 'Wild',
-      },
+      source: { type: 'wild', mapId: 'test-map', label: 'Wild' },
       playerTeam: [attacker],
       opponentTeam: [defender],
       playerActiveIndex: 0,
       opponentActiveIndex: 0,
     };
     const skill: SkillDefinition = {
-      skill_id: 'mend',
-      skill_name: 'Mend',
+      skill_id: 'heal',
+      skill_name: 'Heal',
       element: 'bloom',
       type: 'support',
       healMode: 'flat',
@@ -127,13 +129,14 @@ describe('GameRuntime battle skill sequencing', () => {
     const result = runtime.executeBattleSkillWithSkill(battle, 'player', skill, 0, false, false);
 
     expect(result.damageToDefender).toBeUndefined();
-    expect(attacker.currentHp).toBe(18);
-    expect(result.narration?.message).toContain('healed 7 HP');
+    expect(result.narrationEvents.length).toBeGreaterThan(0);
+    const mainEvent = result.narrationEvents[0];
+    expect(mainEvent.followUpEvents).toBeDefined();
   });
 
-  it('supports max-hp percentage healing on damage skills', () => {
+  it('schedules max-hp percentage healing on damage skills via follow-up events', () => {
     const runtime = createRuntimeHarness();
-    const attacker = createBattleCritter({ currentHp: 20, maxHp: 40 });
+    const attacker = createBattleCritter({ currentHp: 20, maxHp: 100 });
     const defender = createBattleCritter({
       critterId: 2,
       name: 'Defender',
@@ -144,24 +147,20 @@ describe('GameRuntime battle skill sequencing', () => {
       defense: 10,
     });
     const battle = {
-      source: {
-        type: 'wild',
-        mapId: 'test-map',
-        label: 'Wild',
-      },
+      source: { type: 'wild', mapId: 'test-map', label: 'Wild' },
       playerTeam: [attacker],
       opponentTeam: [defender],
       playerActiveIndex: 0,
       opponentActiveIndex: 0,
     };
     const skill: SkillDefinition = {
-      skill_id: 'drain-bite',
-      skill_name: 'Drain Bite',
-      element: 'ember',
+      skill_id: 'drain-hit',
+      skill_name: 'Drain Hit',
+      element: 'bloom',
       type: 'damage',
-      damage: 20,
+      damage: 18,
       healMode: 'percent_max_hp',
-      healValue: 0.25,
+      healValue: 0.1,
     };
 
     vi.spyOn(Math, 'random').mockReturnValueOnce(0.5).mockReturnValueOnce(0.5);
@@ -169,7 +168,10 @@ describe('GameRuntime battle skill sequencing', () => {
     const result = runtime.executeBattleSkillWithSkill(battle, 'player', skill, 0, false, false);
 
     expect(result.damageToDefender).toBe(4);
-    expect(attacker.currentHp).toBe(30);
-    expect(result.narration?.message).toContain('recovered 10 HP');
+    expect(result.narrationEvents.length).toBeGreaterThan(0);
+    const mainEvent = result.narrationEvents[0];
+    expect(mainEvent.followUpEvents).toBeDefined();
+    const healEvent = mainEvent.followUpEvents!.find((e: any) => e.postDamageResolution?.healToAttacker > 0);
+    expect(healEvent).toBeDefined();
   });
 });

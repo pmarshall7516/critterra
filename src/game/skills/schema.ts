@@ -110,9 +110,11 @@ function resolveSkillHealConfig(
   if (type === 'support') {
     const healMode: SupportSkillHealMode = SUPPORT_SKILL_HEAL_MODE_SET.has(healModeRaw as SupportSkillHealMode)
       ? (healModeRaw as SupportSkillHealMode)
-      : hasLegacyHealPercent
+      : healModeRaw === 'percent_damage'
         ? 'percent_max_hp'
-        : 'flat';
+        : hasLegacyHealPercent
+          ? 'percent_max_hp'
+          : 'flat';
     const healValue = sanitizeSkillHealValue(record, healMode, legacyHealPercentRaw);
     return { healMode, healValue };
   }

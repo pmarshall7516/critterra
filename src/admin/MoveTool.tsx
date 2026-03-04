@@ -77,23 +77,6 @@ function formatSkillValue(skill: Pick<SkillDefinition, 'type' | 'damage'>): stri
   return null;
 }
 
-function getDefaultHealValueForMode(mode: SkillDraftHealMode): string {
-  return mode === 'flat' ? '1' : '0';
-}
-
-function getHealValueLabel(mode: SkillDraftHealMode): string {
-  if (mode === 'flat') {
-    return 'Heal HP after use';
-  }
-  if (mode === 'percent_damage') {
-    return 'Heal % of damage dealt (0–1)';
-  }
-  if (mode === 'percent_max_hp') {
-    return 'Heal % of max HP after use (0–1)';
-  }
-  return 'Heal amount';
-}
-
 function getDefaultPersistentHealValueForMode(mode: SkillDraftPersistentHealMode): string {
   return mode === 'flat' ? '1' : '0';
 }

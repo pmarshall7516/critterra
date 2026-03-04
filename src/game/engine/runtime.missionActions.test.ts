@@ -139,7 +139,7 @@ function createRuntimeHarness(input: {
   runtime.getEquipmentEffectsFromAnchors = vi.fn(() => []);
   runtime.applyEquipmentEffectsToStats = vi.fn((stats) => ({ ...stats }));
   runtime.resolveItemSuccessText = vi.fn((_item, fallback) => fallback);
-  runtime.executeBattleSkill = vi.fn(() => ({ narration: null }));
+  runtime.executeBattleSkill = vi.fn(() => ({ narrationEvents: [], defenderFainted: false }));
   runtime.startBattleNarration = vi.fn();
   runtime.resolveOpponentCounterAfterSwap = vi.fn();
   return runtime;
