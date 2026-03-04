@@ -41,6 +41,8 @@ function createRuntimeHarness(input: {
   entry: ShopEntryDefinition;
   shopId?: string;
   critterLookup?: Record<number, { name: string }>;
+  flags?: Record<string, boolean>;
+  unlockedCritterIds?: number[];
 }) {
   const runtime = Object.create(GameRuntime.prototype) as any;
   const shopId = input.shopId ?? 'starter-shop';
@@ -61,7 +63,13 @@ function createRuntimeHarness(input: {
     return acc;
   }, {});
   runtime.playerItemInventory = input.inventory;
-  runtime.flags = {};
+  runtime.flags = input.flags ? { ...input.flags } : {};
+  runtime.playerCritterProgress = {
+    collection: (input.unlockedCritterIds ?? []).map((critterId) => ({
+      critterId,
+      unlocked: true,
+    })),
+  };
   runtime.critterLookup = input.critterLookup ?? {};
   runtime.markProgressDirty = vi.fn();
   runtime.showMessage = vi.fn();
@@ -207,5 +215,103 @@ describe('GameRuntime.purchaseShopEntry', () => {
     expect(getQuantity(runtime.playerItemInventory, 'lume')).toBe(15);
     expect(runtime.purchaseShopEntry('critter-entry')).toBe(false);
     expect(getQuantity(runtime.playerItemInventory, 'lume')).toBe(15);
+  });
+
+  it('treats critter entries as already purchased when unlock flag is already set', () => {
+    const items = [makeItem({ id: 'lume', name: 'Lume', maxStack: 9999 })];
+    const runtime = createRuntimeHarness({
+      items,
+      inventory: makeInventory([{ itemId: 'lume', quantity: 25 }]),
+      entry: {
+        id: 'critter-entry',
+        kind: 'critter',
+        critterId: 7,
+        unlockFlagId: 'mission-critter-7',
+        costs: [{ itemId: 'lume', quantity: 10 }],
+      },
+      critterLookup: {
+        7: { name: 'Seedling' },
+      },
+      flags: {
+        'mission-critter-7': true,
+      },
+    });
+
+    expect(runtime.purchaseShopEntry('critter-entry')).toBe(false);
+    expect(getQuantity(runtime.playerItemInventory, 'lume')).toBe(25);
+    const prompt = runtime.getShopPromptSnapshot();
+    expect(prompt?.entries[0]).toMatchObject({
+      oneTimePurchased: true,
+      ownedQuantity: 1,
+      ownedLimit: 1,
+      affordable: false,
+      disableReason: 'Already purchased.',
+    });
+  });
+
+  it('reports repeatable item ownership count from inventory in shop prompt snapshots', () => {
+    const items = [
+      makeItem({ id: 'lume', name: 'Lume', maxStack: 9999 }),
+      makeItem({ id: 'field-bandage', name: 'Field Bandage', maxStack: 20 }),
+    ];
+    const runtime = createRuntimeHarness({
+      items,
+      inventory: makeInventory([
+        { itemId: 'lume', quantity: 25 },
+        { itemId: 'field-bandage', quantity: 4 },
+      ]),
+      entry: {
+        id: 'bandage-entry',
+        kind: 'item',
+        itemId: 'field-bandage',
+        quantity: 1,
+        costs: [{ itemId: 'lume', quantity: 10 }],
+        repeatable: true,
+      },
+    });
+
+    const prompt = runtime.getShopPromptSnapshot();
+    expect(prompt?.entries[0]).toMatchObject({
+      oneTimePurchased: false,
+      ownedQuantity: 4,
+      ownedLimit: null,
+    });
+  });
+
+  it('reports one-time item ownership as 0/1 or 1/1 in shop prompt snapshots', () => {
+    const items = [
+      makeItem({ id: 'lume', name: 'Lume', maxStack: 9999 }),
+      makeItem({ id: 'field-bandage', name: 'Field Bandage', maxStack: 20 }),
+    ];
+    const runtime = createRuntimeHarness({
+      items,
+      inventory: makeInventory([
+        { itemId: 'lume', quantity: 25 },
+        { itemId: 'field-bandage', quantity: 4 },
+      ]),
+      entry: {
+        id: 'bandage-entry',
+        kind: 'item',
+        itemId: 'field-bandage',
+        quantity: 1,
+        costs: [{ itemId: 'lume', quantity: 10 }],
+        repeatable: false,
+      },
+    });
+
+    const beforePurchasePrompt = runtime.getShopPromptSnapshot();
+    expect(beforePurchasePrompt?.entries[0]).toMatchObject({
+      oneTimePurchased: false,
+      ownedQuantity: 0,
+      ownedLimit: 1,
+    });
+
+    runtime.flags['shop-purchase:starter-shop:bandage-entry'] = true;
+    const afterPurchasePrompt = runtime.getShopPromptSnapshot();
+    expect(afterPurchasePrompt?.entries[0]).toMatchObject({
+      oneTimePurchased: true,
+      ownedQuantity: 1,
+      ownedLimit: 1,
+    });
   });
 });

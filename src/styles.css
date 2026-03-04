@@ -476,6 +476,13 @@ button.secondary:hover:not(:disabled) {
   text-align: center;
 }
 
+.shop-overlay__owned {
+  margin: -0.1rem 0 0;
+  text-align: center;
+  font-size: 0.76rem;
+  color: #9ec7e5;
+}
+
 .shop-overlay__sprite-wrap {
   display: grid;
   place-items: center;

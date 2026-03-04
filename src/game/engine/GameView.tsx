@@ -129,6 +129,21 @@ export function getActionablePayMissions(
   );
 }
 
+export function formatPayMissionOwnedProgress(mission: {
+  targetValue: number;
+  requiredPaymentOwnedQuantity?: number;
+}): string {
+  const ownedQuantity =
+    typeof mission.requiredPaymentOwnedQuantity === 'number' && Number.isFinite(mission.requiredPaymentOwnedQuantity)
+      ? Math.max(0, Math.floor(mission.requiredPaymentOwnedQuantity))
+      : 0;
+  const targetValue =
+    typeof mission.targetValue === 'number' && Number.isFinite(mission.targetValue)
+      ? Math.max(1, Math.floor(mission.targetValue))
+      : 1;
+  return `${ownedQuantity}/${targetValue}`;
+}
+
 export type PinnedLockedKnockoutTrackerState = 'hidden' | 'no-target' | 'selected-target';
 
 export function resolvePinnedLockedKnockoutTrackerState(
@@ -2149,7 +2164,7 @@ function CritterCard({
                     {mission.type === 'pay_item' && mission.completed
                       ? 'Paid'
                       : mission.type === 'pay_item'
-                        ? `${Math.min(mission.requiredPaymentOwnedQuantity ?? 0, mission.targetValue)}/${mission.targetValue}`
+                        ? formatPayMissionOwnedProgress(mission)
                         : `${Math.min(mission.currentValue, mission.targetValue)}/${mission.targetValue}`}
                   </span>
                 </li>
@@ -2180,7 +2195,7 @@ function CritterCard({
               }
             >
               {(mission.requiredPaymentItemName ?? mission.requiredPaymentItemId ?? 'Pay')} {' '}
-              {Math.min(mission.requiredPaymentOwnedQuantity ?? 0, mission.targetValue)}/{mission.targetValue}
+              {formatPayMissionOwnedProgress(mission)}
             </button>
           ))}
           {showLockedKnockoutTargetButton && onSetLockedKnockoutTarget && (
@@ -2267,6 +2282,11 @@ function ShopOverlay({ prompt, onPurchase, onClose }: ShopOverlayProps) {
                 <p className="shop-overlay__card-title">
                   {entry.name}
                   {entry.kind === 'item' ? ` x${entry.quantity}` : ''}
+                </p>
+                <p className="shop-overlay__owned">
+                  {entry.ownedLimit === null
+                    ? `Owned ${entry.ownedQuantity}`
+                    : `Owned ${Math.min(entry.ownedQuantity, entry.ownedLimit)}/${entry.ownedLimit}`}
                 </p>
                 <div className="shop-overlay__sprite-wrap">
                   {entry.imageUrl ? (

@@ -44,11 +44,9 @@ export function TitleScreen({ userEmail, isAdmin, hasSave, onLogout, onContinue,
       </button>
 
       <div className="title-screen__card">
-        <p className="title-screen__tag">2.5D Creature Capture RPG</p>
+        <p className="title-screen__tag"></p>
         <h1>{GAME_TITLE}</h1>
-        <p className="title-screen__subtitle">
-          Build your region, capture your crew, and explore town by town.
-        </p>
+        <p className="title-screen__subtitle"></p>
         <p className="admin-note">Signed in as {userEmail}</p>
         <div className="title-screen__actions">
           {hasSave && (

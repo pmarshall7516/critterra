@@ -101,4 +101,46 @@ describe('sanitizeSkillDefinition', () => {
       healValue: 0.3,
     });
   });
+
+  it('preserves persistent healing fields', () => {
+    const skill = sanitizeSkillDefinition({
+      skill_id: 'aqua-ring',
+      skill_name: 'Aqua Ring',
+      element: 'tide',
+      type: 'support',
+      persistentHealMode: 'flat',
+      persistentHealValue: 3,
+      persistentHealDurationTurns: 3,
+    });
+
+    expect(skill).toMatchObject({
+      skill_id: 'aqua-ring',
+      type: 'support',
+      persistentHealMode: 'flat',
+      persistentHealValue: 3,
+      persistentHealDurationTurns: 3,
+    });
+  });
+
+  it('drops invalid persistent healing modes when no percent fallback applies', () => {
+    const skill = sanitizeSkillDefinition({
+      skill_id: 'broken-ring',
+      skill_name: 'Broken Ring',
+      element: 'tide',
+      type: 'damage',
+      damage: 20,
+      persistentHealMode: 'percent_damage',
+      persistentHealValue: 3,
+      persistentHealDurationTurns: 2,
+    });
+
+    expect(skill).toMatchObject({
+      skill_id: 'broken-ring',
+      type: 'damage',
+      damage: 20,
+    });
+    expect(skill).not.toHaveProperty('persistentHealMode');
+    expect(skill).not.toHaveProperty('persistentHealValue');
+    expect(skill).not.toHaveProperty('persistentHealDurationTurns');
+  });
 });

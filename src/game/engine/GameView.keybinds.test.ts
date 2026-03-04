@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatPayMissionOwnedProgress,
   getActionablePayMissions,
   resolveFixedStepAdvance,
   resolveGameViewKeyIntent,
@@ -240,5 +241,22 @@ describe('pay mission UI helpers', () => {
         },
       } as any).map((mission: any) => mission.id),
     ).toEqual(['pay-1']);
+  });
+
+  it('formats pay mission progress using total owned quantity without clamping', () => {
+    expect(
+      formatPayMissionOwnedProgress({
+        targetValue: 500,
+        requiredPaymentOwnedQuantity: 1000,
+      }),
+    ).toBe('1000/500');
+  });
+
+  it('formats pay mission progress with safe defaults', () => {
+    expect(
+      formatPayMissionOwnedProgress({
+        targetValue: 0,
+      }),
+    ).toBe('0/1');
   });
 });

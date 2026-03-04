@@ -81,14 +81,14 @@ export function describeSkillHealForTooltip(
 }
 
 export function getSkillValueDisplayNumber(
-  skill: Pick<SkillDefinition, 'type' | 'damage' | 'healMode' | 'healValue'>,
+  skill: Pick<SkillDefinition, 'type' | 'damage'>,
 ): number | null {
   if (skill.type === 'damage') {
     return typeof skill.damage === 'number' && Number.isFinite(skill.damage)
       ? Math.max(1, Math.floor(skill.damage))
       : null;
   }
-  return getSkillHealDisplayNumber(skill.healMode, skill.healValue);
+  return null;
 }
 
 export interface ElementChartEntry {

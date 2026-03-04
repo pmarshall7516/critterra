@@ -489,4 +489,99 @@ describe('GameRuntime equipment integration', () => {
     expect(firstSlot.equipmentSlots[1]?.itemId).toBe('simple-helmet');
     expect((firstSlot.equipmentSlots[0] as any)?.effectIconUrls ?? []).toContain('https://example.com/def-icon.png');
   });
+
+  it('appends equipment source name to battle effect icon tooltips', () => {
+    const critter = createCritter({ id: 1, name: 'Buddo', level: 1 });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [
+        createProgressEntry(critter, {
+          level: 1,
+          equippedEquipmentAnchors: [{ itemId: 'basic-helmet', slotIndex: 0 }],
+        }),
+      ],
+      squad: [1, null, null, null, null, null, null, null],
+      items: [
+        createEquipmentItem({
+          id: 'basic-helmet',
+          name: 'Basic Helmet',
+          equipSize: 1,
+          effectIds: ['def-flat-2'],
+        }),
+      ],
+      itemInventory: inventory([{ itemId: 'basic-helmet', quantity: 1 }]),
+      equipmentEffects: [
+        {
+          effect_id: 'def-flat-2',
+          effect_name: 'Defense +2',
+          description: '+2 Defense',
+          iconUrl: 'https://example.com/def-flat-2.png',
+          modifiers: [{ stat: 'defense', mode: 'flat', value: 2 }],
+        },
+      ],
+    });
+
+    const team = (runtime as any).buildPlayerBattleTeam();
+    const snapshotEntry = (runtime as any).mapBattleTeamEntryToSnapshot(team[0]);
+    expect(snapshotEntry.activeEffectDescriptions).toContain('+2 Defense (Basic Helmet)');
+  });
+
+  it('appends skill source name to battle effect icon tooltips', () => {
+    const critter = createCritter({ id: 1, name: 'Buddo', level: 1 });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [createProgressEntry(critter, { level: 1 })],
+      squad: [1, null, null, null, null, null, null, null],
+      items: [],
+      itemInventory: inventory([]),
+    });
+    (runtime as any).skillEffectLookupById = {
+      'focus-def': {
+        effect_id: 'focus-def',
+        effect_name: 'Focus Defense',
+        effect_type: 'def_buff',
+        buffPercent: 0.2,
+        description: '+<buff> Defense',
+        iconUrl: 'https://example.com/focus-def.png',
+      },
+    };
+    (runtime as any).skillLookupById = {
+      'iron-wall': {
+        skill_id: 'iron-wall',
+        skill_name: 'Iron Wall',
+        element: 'stone',
+        type: 'support',
+        effectIds: ['focus-def'],
+      },
+    };
+
+    const snapshotEntry = (runtime as any).mapBattleTeamEntryToSnapshot({
+      slotIndex: 0,
+      critterId: 1,
+      name: 'Buddo',
+      element: 'bloom',
+      spriteUrl: '',
+      level: 1,
+      maxHp: 20,
+      currentHp: 20,
+      attack: 10,
+      defense: 8,
+      speed: 7,
+      fainted: false,
+      knockoutProgressCounted: false,
+      attackModifier: 1,
+      defenseModifier: 1,
+      speedModifier: 1,
+      activeEffectIds: ['focus-def'],
+      activeEffectSourceById: {
+        'focus-def': 'Iron Wall',
+      },
+      equipmentEffectIds: [],
+      equipmentEffectSourceById: {},
+      persistentHeal: null,
+      consecutiveSuccessfulGuardCount: 0,
+      equippedSkillIds: ['iron-wall', null, null, null],
+    });
+    expect(snapshotEntry.activeEffectDescriptions).toContain('+20 Defense (Iron Wall)');
+  });
 });

@@ -53,11 +53,12 @@ function createBattleState(attacker: Record<string, unknown>, defender: Record<s
     activeNarration: null,
     activeAnimation: null,
     pendingKnockoutResolution: null,
+    pendingEndTurnResolution: false,
     nextAnimationToken: 1,
     logLine: '',
     result: 'ongoing',
     phase: 'player-turn',
-  };
+  } as any;
 }
 
 describe('GameRuntime skill healing', () => {
@@ -262,5 +263,143 @@ describe('GameRuntime skill healing', () => {
     } finally {
       randomSpy.mockRestore();
     }
+  });
+
+  it('guarantees at least 1 HP for percent-damage healing on low-damage knockouts', () => {
+    const attacker = {
+      name: 'Buddo',
+      element: 'bloom',
+      currentHp: 9,
+      maxHp: 40,
+      attack: 6,
+      attackModifier: 1,
+      level: 5,
+      fainted: false,
+      persistentHeal: null,
+      activeEffectIds: [] as string[],
+    };
+    const defender = {
+      name: 'Target',
+      element: 'stone',
+      currentHp: 1,
+      maxHp: 20,
+      defense: 999,
+      defenseModifier: 1,
+      fainted: false,
+      persistentHeal: null,
+      activeEffectIds: [] as string[],
+    };
+    const runtime = createRuntimeHarness(attacker, defender);
+    const battle = createBattleState(attacker, defender);
+    const skill: SkillDefinition = {
+      skill_id: 'sap',
+      skill_name: 'Sap',
+      element: 'bloom',
+      type: 'damage',
+      damage: 10,
+      healMode: 'percent_damage',
+      healValue: 0.2,
+    };
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    try {
+      const result = (runtime as any).executeBattleSkillWithSkill(
+        battle,
+        'player',
+        skill,
+        0,
+        false,
+        false,
+      );
+
+      expect(result.defenderFainted).toBe(true);
+      (runtime as any).activeBattle = battle;
+      (runtime as any).startBattleNarration(battle, result.narrationEvents);
+      expect(attacker.currentHp).toBe(9);
+      expect((runtime as any).battleAdvanceNarration()).toBe(true);
+      expect(attacker.currentHp).toBe(10);
+      expect(battle.logLine).toContain('restored 1 HP');
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('applies persistent end-of-turn healing after a completed turn and clears when duration ends', () => {
+    const attacker = {
+      name: 'Buddo',
+      element: 'tide',
+      currentHp: 20,
+      maxHp: 40,
+      fainted: false,
+      persistentHeal: null as { mode: 'flat' | 'percent_max_hp'; value: number; remainingTurns: number } | null,
+      activeEffectIds: [] as string[],
+    };
+    const defender = {
+      name: 'Target',
+      element: 'stone',
+      currentHp: 40,
+      maxHp: 40,
+      fainted: false,
+      persistentHeal: null,
+      activeEffectIds: [] as string[],
+    };
+    const runtime = createRuntimeHarness(attacker, defender);
+    const battle = createBattleState(attacker, defender);
+    const skill: SkillDefinition = {
+      skill_id: 'aqua-ring',
+      skill_name: 'Aqua Ring',
+      element: 'tide',
+      type: 'support',
+      healMode: 'flat',
+      healValue: 0,
+      persistentHealMode: 'flat',
+      persistentHealValue: 3,
+      persistentHealDurationTurns: 2,
+    };
+
+    const result = (runtime as any).executeBattleSkillWithSkill(
+      battle,
+      'player',
+      skill,
+      0,
+      false,
+      false,
+    );
+
+    battle.pendingEndTurnResolution = true;
+    (runtime as any).activeBattle = battle;
+    (runtime as any).startBattleNarration(battle, result.narrationEvents);
+    expect(attacker.persistentHeal).toBeNull();
+
+    expect((runtime as any).battleAdvanceNarration()).toBe(true);
+    expect(attacker.persistentHeal).toEqual({
+      mode: 'flat',
+      value: 3,
+      remainingTurns: 2,
+    });
+    expect(battle.logLine).toContain('gained end-of-turn healing');
+
+    expect((runtime as any).battleAdvanceNarration()).toBe(true);
+    expect(attacker.currentHp).toBe(23);
+    expect(attacker.persistentHeal).toEqual({
+      mode: 'flat',
+      value: 3,
+      remainingTurns: 1,
+    });
+    expect(battle.logLine).toContain('restored 3 HP at the end of the turn');
+
+    expect((runtime as any).battleAdvanceNarration()).toBe(true);
+    expect(battle.logLine).toBe('Choose your move.');
+
+    battle.pendingEndTurnResolution = true;
+    battle.activeNarration = {
+      message: 'Turn resolved.',
+      attacker: null,
+    };
+    battle.narrationQueue = [];
+    expect((runtime as any).battleAdvanceNarration()).toBe(true);
+    expect(attacker.currentHp).toBe(26);
+    expect(attacker.persistentHeal).toBeNull();
+    expect(battle.logLine).toContain('restored 3 HP at the end of the turn');
   });
 });

@@ -260,8 +260,12 @@ interface BattleCritterState {
   speedModifier: number;
   /** Effect IDs currently applied to this critter (e.g. stat buffs from skills they used). Cleared on switch/KO. */
   activeEffectIds: string[];
+  /** Last-known source label for active skill effects (for tooltip context). */
+  activeEffectSourceById: Record<string, string>;
   /** Passive equipment effect IDs active for this critter in battle. */
   equipmentEffectIds: string[];
+  /** Source equipment item names keyed by effect id (for tooltip context). */
+  equipmentEffectSourceById: Record<string, string[]>;
   /** Active Aqua Ring-style end-of-turn healing. Cleared on switch, KO, or battle end. */
   persistentHeal: {
     mode: 'flat' | 'percent_max_hp';
@@ -357,7 +361,13 @@ interface BattlePostDamageResolution {
   attackingTeam: 'player' | 'opponent';
   healToAttacker: number;
   attackerEffectIds: string[];
+  attackerEffectSourceName?: string;
   healMessageAttackerName?: string;
+  persistentHeal?: {
+    mode: 'flat' | 'percent_max_hp';
+    value: number;
+    remainingTurns: number;
+  };
 }
 
 interface BattleNarrationKnockoutResolution {
@@ -516,6 +526,8 @@ export interface RuntimeSnapshot {
         quantity: number;
         imageUrl: string;
         repeatable: boolean;
+        ownedQuantity: number;
+        ownedLimit: number | null;
         oneTimePurchased: boolean;
         affordable: boolean;
         disableReason: string | null;
@@ -2460,6 +2472,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       prev.defenseModifier = 1;
       prev.speedModifier = 1;
       prev.activeEffectIds = [];
+      prev.activeEffectSourceById = {};
       prev.persistentHeal = null;
     }
     battle.playerActiveIndex = teamIndex;
@@ -5372,6 +5385,20 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       const effectiveStats = progress.effectiveStats ?? derived.effectiveStats;
       const equipmentState = this.resolveEquipmentStateForCritter(progress, critter, true);
       const equipmentEffects = this.getEquipmentEffectsFromAnchors(equipmentState.anchors);
+      const equipmentEffectSourceById: Record<string, string[]> = {};
+      for (const anchor of equipmentState.anchors) {
+        const item = this.getEquipmentItemById(anchor.itemId);
+        if (!item) {
+          continue;
+        }
+        for (const effectId of this.getEquipmentEffectIdsForItem(item)) {
+          const sourceNames = equipmentEffectSourceById[effectId] ?? [];
+          if (!sourceNames.includes(item.name)) {
+            sourceNames.push(item.name);
+          }
+          equipmentEffectSourceById[effectId] = sourceNames;
+        }
+      }
       const equipmentAdjustedStats = this.applyEquipmentEffectsToStats(effectiveStats, equipmentEffects);
       const equipmentEffectIds = equipmentEffects
         .map((effect) => effect.effect_id)
@@ -5396,7 +5423,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         defenseModifier: 1,
         speedModifier: 1,
         activeEffectIds: [],
+        activeEffectSourceById: {},
         equipmentEffectIds,
+        equipmentEffectSourceById,
         persistentHeal: null,
         consecutiveSuccessfulGuardCount: 0,
         equippedSkillIds: progress.equippedSkillIds,
@@ -5478,7 +5507,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       defenseModifier: 1,
       speedModifier: 1,
       activeEffectIds: [],
+      activeEffectSourceById: {},
       equipmentEffectIds: [],
+      equipmentEffectSourceById: {},
       persistentHeal: null,
       consecutiveSuccessfulGuardCount: 0,
       equippedSkillIds,
@@ -5691,6 +5722,8 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         attackingTeam,
         requestedHeal,
         [...(skill.effectIds ?? [])],
+        skill.skill_name,
+        this.buildPersistentHealResolution(skill),
       );
       const message = `Your ${attacker.name} used ${skill.skill_name}.`;
       return {
@@ -5738,6 +5771,8 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       attackingTeam,
       plannedHeal,
       attackerEffectIds,
+      skill.skill_name,
+      this.buildPersistentHealResolution(skill),
     );
 
     const guardSuffix =
@@ -5808,7 +5843,37 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     return actualHeal;
   }
 
-  private applySkillEffectIdsToAttacker(attacker: BattleCritterState, effectIds: string[]): void {
+  private buildPersistentHealResolution(
+    skill: Pick<SkillDefinition, 'persistentHealMode' | 'persistentHealValue' | 'persistentHealDurationTurns'>,
+  ): BattlePostDamageResolution['persistentHeal'] {
+    if (
+      !skill.persistentHealMode ||
+      typeof skill.persistentHealValue !== 'number' ||
+      !Number.isFinite(skill.persistentHealValue) ||
+      typeof skill.persistentHealDurationTurns !== 'number' ||
+      !Number.isFinite(skill.persistentHealDurationTurns)
+    ) {
+      return undefined;
+    }
+    const normalizedValue =
+      skill.persistentHealMode === 'flat'
+        ? Math.max(0, Math.floor(skill.persistentHealValue))
+        : clamp(skill.persistentHealValue, 0, 1);
+    if (normalizedValue <= 0) {
+      return undefined;
+    }
+    return {
+      mode: skill.persistentHealMode,
+      value: normalizedValue,
+      remainingTurns: Math.max(1, Math.floor(skill.persistentHealDurationTurns)),
+    };
+  }
+
+  private applySkillEffectIdsToAttacker(
+    attacker: BattleCritterState,
+    effectIds: string[],
+    sourceName?: string,
+  ): void {
     for (const effectId of effectIds) {
       const effect = this.skillEffectLookupById[effectId];
       if (!effect) continue;
@@ -5821,6 +5886,11 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       }
       if (!attacker.activeEffectIds.includes(effectId)) {
         attacker.activeEffectIds.push(effectId);
+      }
+      const normalizedSourceName = typeof sourceName === 'string' ? sourceName.trim() : '';
+      if (normalizedSourceName) {
+        attacker.activeEffectSourceById = attacker.activeEffectSourceById ?? {};
+        attacker.activeEffectSourceById[effectId] = normalizedSourceName;
       }
     }
   }
@@ -5835,8 +5905,15 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     }
 
     const actualHeal = this.applyBattleHeal(attacker, resolution.healToAttacker);
+    if (resolution.persistentHeal) {
+      attacker.persistentHeal = { ...resolution.persistentHeal };
+    }
     if (resolution.attackerEffectIds.length > 0) {
-      this.applySkillEffectIdsToAttacker(attacker, resolution.attackerEffectIds);
+      this.applySkillEffectIdsToAttacker(
+        attacker,
+        resolution.attackerEffectIds,
+        resolution.attackerEffectSourceName,
+      );
     }
     return actualHeal;
   }
@@ -5846,6 +5923,8 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     attackingTeam: 'player' | 'opponent',
     healToAttacker: number,
     attackerEffectIds: string[],
+    attackerEffectSourceName?: string,
+    persistentHeal?: BattlePostDamageResolution['persistentHeal'],
   ): BattleNarrationEvent[] {
     const events: BattleNarrationEvent[] = [];
 
@@ -5862,6 +5941,22 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       });
     }
 
+    if (persistentHeal) {
+      events.push({
+        message:
+          attackingTeam === 'player'
+            ? `Your ${attackerName} gained end-of-turn healing for ${persistentHeal.remainingTurns} turns.`
+            : `${attackerName} gained end-of-turn healing for ${persistentHeal.remainingTurns} turns.`,
+        attacker: null,
+        postDamageResolution: {
+          attackingTeam,
+          healToAttacker: 0,
+          attackerEffectIds: [],
+          persistentHeal,
+        },
+      });
+    }
+
     if (attackerEffectIds.length > 0) {
       events.push({
         message: this.formatBattleEffectActivationMessage(attackerName, attackerEffectIds),
@@ -5870,10 +5965,46 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
           attackingTeam,
           healToAttacker: 0,
           attackerEffectIds,
+          attackerEffectSourceName,
         },
       });
     }
 
+    return events;
+  }
+
+  private buildEndTurnHealingNarrationEvents(battle: BattleRuntimeState): BattleNarrationEvent[] {
+    const events: BattleNarrationEvent[] = [];
+    for (const team of ['player', 'opponent'] as const) {
+      const critter = this.getActiveBattleCritter(battle, team);
+      if (!critter || critter.fainted || critter.currentHp <= 0 || !critter.persistentHeal) {
+        continue;
+      }
+      const requestedHeal =
+        critter.persistentHeal.mode === 'flat'
+          ? Math.max(1, Math.floor(critter.persistentHeal.value))
+          : Math.max(0, Math.floor(critter.maxHp * clamp(critter.persistentHeal.value, 0, 1)));
+      const actualHeal = Math.min(requestedHeal, Math.max(0, critter.maxHp - critter.currentHp));
+      critter.persistentHeal.remainingTurns = Math.max(0, critter.persistentHeal.remainingTurns - 1);
+      if (critter.persistentHeal.remainingTurns <= 0) {
+        critter.persistentHeal = null;
+      }
+      if (actualHeal <= 0) {
+        continue;
+      }
+      events.push({
+        message:
+          team === 'player'
+            ? `Your ${critter.name} restored ${actualHeal} HP at the end of the turn.`
+            : `${critter.name} restored ${actualHeal} HP at the end of the turn.`,
+        attacker: null,
+        postDamageResolution: {
+          attackingTeam: team,
+          healToAttacker: actualHeal,
+          attackerEffectIds: [],
+        },
+      });
+    }
     return events;
   }
 
@@ -5950,6 +6081,21 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     if (!next) {
       battle.activeNarration = null;
       battle.activeAnimation = null;
+      if (
+        battle.pendingEndTurnResolution &&
+        battle.result === 'ongoing' &&
+        battle.phase === 'player-turn' &&
+        battle.pendingKnockoutResolution === null &&
+        battle.pendingOpponentSwitchIndex === null &&
+        !battle.pendingOpponentSwitchAnnouncementShown
+      ) {
+        battle.pendingEndTurnResolution = false;
+        const endTurnEvents = this.buildEndTurnHealingNarrationEvents(battle);
+        if (endTurnEvents.length > 0) {
+          this.startBattleNarration(battle, endTurnEvents);
+          return;
+        }
+      }
       if (battle.result === 'ongoing' && battle.phase === 'player-turn') {
         battle.logLine = 'Choose your move.';
       }
@@ -5971,6 +6117,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       if (defender) {
         defender.currentHp = Math.max(0, defender.currentHp - next.applyDamageAmount);
         defender.fainted = defender.currentHp <= 0;
+        if (defender.fainted) {
+          defender.persistentHeal = null;
+        }
       }
     }
 
@@ -6197,6 +6346,10 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     battle.pendingOpponentSwitchAnnouncementShown = false;
     battle.pendingForcedSwap = false;
     battle.pendingKnockoutResolution = null;
+    battle.pendingEndTurnResolution = false;
+    for (const entry of [...battle.playerTeam, ...battle.opponentTeam]) {
+      entry.persistentHeal = null;
+    }
     if (!options?.preserveLogLine) {
       battle.logLine = message;
     }
@@ -6340,6 +6493,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         ...(skill.type === 'damage' && skill.damage != null && { damage: skill.damage }),
         ...(skill.healMode && { healMode: skill.healMode }),
         ...(typeof skill.healValue === 'number' && { healValue: skill.healValue }),
+        ...(skill.persistentHealMode && { persistentHealMode: skill.persistentHealMode }),
+        ...(typeof skill.persistentHealValue === 'number' && { persistentHealValue: skill.persistentHealValue }),
+        ...(typeof skill.persistentHealDurationTurns === 'number' && { persistentHealDurationTurns: skill.persistentHealDurationTurns }),
         ...(effectDescriptions && { effectDescriptions }),
         ...(effectIconUrls.length > 0 && { effectIconUrls }),
       };
@@ -6348,6 +6504,26 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
   }
 
   private mapBattleTeamEntryToSnapshot(entry: BattleCritterState): RuntimeBattleSnapshot['playerTeam'][number] {
+    const skillEffectSourcesById: Record<string, string[]> = {};
+    if (Array.isArray(entry.equippedSkillIds)) {
+      for (const skillId of entry.equippedSkillIds) {
+        if (!skillId) {
+          continue;
+        }
+        const skill = this.skillLookupById[skillId];
+        if (!skill) {
+          continue;
+        }
+        for (const effectId of skill.effectIds ?? []) {
+          const sourceNames = skillEffectSourcesById[effectId] ?? [];
+          if (!sourceNames.includes(skill.skill_name)) {
+            sourceNames.push(skill.skill_name);
+          }
+          skillEffectSourcesById[effectId] = sourceNames;
+        }
+      }
+    }
+
     const activeEffectIds = [...(entry.equipmentEffectIds ?? []), ...(entry.activeEffectIds ?? [])]
       .filter((id, index, values) => values.indexOf(id) === index);
     const activeEffectIconUrls: string[] = [];
@@ -6359,8 +6535,14 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         if (typeof url === 'string' && url.length > 0) {
           activeEffectIconUrls.push(url);
           const buffLabel = Math.round((skillEffect.buffPercent ?? 0) * 100);
+          const effectDescription = skillEffect.description
+            ? skillEffect.description.replace(/<buff>/g, String(buffLabel))
+            : '';
+          const sourceNames = entry.activeEffectSourceById[id]
+            ? [entry.activeEffectSourceById[id]]
+            : (skillEffectSourcesById[id] ?? []);
           activeEffectDescriptions.push(
-            skillEffect.description ? skillEffect.description.replace(/<buff>/g, String(buffLabel)) : '',
+            this.formatBattleEffectTooltip(effectDescription, sourceNames),
           );
         }
         continue;
@@ -6372,14 +6554,13 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       const url = equipmentEffect.iconUrl;
       if (typeof url === 'string' && url.length > 0) {
         activeEffectIconUrls.push(url);
+        activeEffectDescriptions.push(
+          this.formatBattleEffectTooltip(
+            this.summarizeEquipmentEffect(equipmentEffect),
+            entry.equipmentEffectSourceById[id] ?? [],
+          ),
+        );
       }
-      activeEffectDescriptions.push(this.summarizeEquipmentEffect(equipmentEffect));
-    }
-    while (activeEffectDescriptions.length < activeEffectIconUrls.length) {
-      activeEffectDescriptions.push('');
-    }
-    if (activeEffectDescriptions.length > activeEffectIconUrls.length) {
-      activeEffectDescriptions.length = activeEffectIconUrls.length;
     }
     return {
       slotIndex: entry.slotIndex,
@@ -6398,6 +6579,24 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       activeEffectIconUrls,
       activeEffectDescriptions,
     };
+  }
+
+  private formatBattleEffectTooltip(effectDescription: string, sourceNames: string[]): string {
+    const description = effectDescription.trim();
+    const normalizedSourceNames = sourceNames
+      .map((entry) => entry.trim())
+      .filter((entry): entry is string => entry.length > 0)
+      .filter((entry, index, values) => values.indexOf(entry) === index);
+    if (!description && normalizedSourceNames.length === 0) {
+      return '';
+    }
+    if (normalizedSourceNames.length === 0) {
+      return description;
+    }
+    if (!description) {
+      return `Source: ${normalizedSourceNames.join(', ')}`;
+    }
+    return `${description} (${normalizedSourceNames.join(', ')})`;
   }
 
   private getBattleSnapshot(): RuntimeBattleSnapshot | null {
@@ -6656,6 +6855,8 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
           if (!item || !item.isActive) {
             return null;
           }
+          const oneTimePurchased = this.isShopEntryOneTimePurchased(shop.id, entry);
+          const isOneTime = this.isShopEntryOneTime(entry);
           const affordability = this.getShopEntryAffordability(entry);
           return {
             entryId: entry.id,
@@ -6664,7 +6865,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
             quantity: entry.quantity,
             imageUrl: item.imageUrl,
             repeatable: entry.repeatable !== false,
-            oneTimePurchased: this.isShopEntryOneTimePurchased(shop.id, entry),
+            ownedQuantity: isOneTime ? (oneTimePurchased ? 1 : 0) : getItemInventoryQuantity(this.playerItemInventory, item.id),
+            ownedLimit: isOneTime ? 1 : null,
+            oneTimePurchased,
             affordable: affordability.canAfford,
             disableReason: affordability.reason,
             costs: entry.costs.map((cost) => ({
@@ -6678,6 +6881,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         }
 
         const critter = this.critterLookup[entry.critterId];
+        const oneTimePurchased = this.isShopEntryOneTimePurchased(shop.id, entry);
         const affordability = this.getShopEntryAffordability(entry);
         return {
           entryId: entry.id,
@@ -6686,7 +6890,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
           quantity: 1,
           imageUrl: critter?.spriteUrl ?? '',
           repeatable: false,
-          oneTimePurchased: this.isShopEntryOneTimePurchased(shop.id, entry),
+          ownedQuantity: oneTimePurchased ? 1 : 0,
+          ownedLimit: 1,
+          oneTimePurchased,
           affordable: affordability.canAfford,
           disableReason: affordability.reason,
           costs: entry.costs.map((cost) => ({
@@ -6698,7 +6904,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
           })),
         };
       })
-      .filter((entry): entry is NonNullable<RuntimeSnapshot['story']['shopPrompt']>['entries'][number] => Boolean(entry));
+      .filter(Boolean) as NonNullable<RuntimeSnapshot['story']['shopPrompt']>['entries'];
 
     return {
       npcName: this.shopPrompt.npcName,
@@ -6720,7 +6926,20 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     if (!this.isShopEntryOneTime(entry)) {
       return false;
     }
-    return Boolean(this.flags[this.getShopPurchaseFlagKey(shopId, entry.id)]);
+    if (this.flags[this.getShopPurchaseFlagKey(shopId, entry.id)]) {
+      return true;
+    }
+    if (entry.kind === 'critter') {
+      if (this.flags[entry.unlockFlagId]) {
+        return true;
+      }
+      return Boolean(
+        this.playerCritterProgress?.collection?.some(
+          (progressEntry) => progressEntry.critterId === entry.critterId && progressEntry.unlocked,
+        ),
+      );
+    }
+    return false;
   }
 
   private getShopEntryAffordability(entry: ShopEntryDefinition): { canAfford: boolean; reason: string | null } {
@@ -7720,6 +7939,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         ...(skill.type === 'damage' && skill.damage != null && { damage: skill.damage }),
         ...(skill.healMode && { healMode: skill.healMode }),
         ...(typeof skill.healValue === 'number' && { healValue: skill.healValue }),
+        ...(skill.persistentHealMode && { persistentHealMode: skill.persistentHealMode }),
+        ...(typeof skill.persistentHealValue === 'number' && { persistentHealValue: skill.persistentHealValue }),
+        ...(typeof skill.persistentHealDurationTurns === 'number' && { persistentHealDurationTurns: skill.persistentHealDurationTurns }),
         ...(effectDescriptions && { effectDescriptions }),
         ...(effectIconUrls.length > 0 && { effectIconUrls }),
       };
@@ -9720,6 +9942,11 @@ function cloneBattleNarrationEvent(event: BattleNarrationEvent): BattleNarration
       ? {
           ...event.postDamageResolution,
           attackerEffectIds: [...event.postDamageResolution.attackerEffectIds],
+          persistentHeal: event.postDamageResolution.persistentHeal
+            ? {
+                ...event.postDamageResolution.persistentHeal,
+              }
+            : undefined,
         }
       : undefined,
     followUpEvents: event.followUpEvents ? event.followUpEvents.map((entry) => cloneBattleNarrationEvent(entry)) : undefined,
@@ -9737,8 +9964,8 @@ function cloneBattleNarrationEvent(event: BattleNarrationEvent): BattleNarration
 }
 
 function resolveRequestedSkillHealAmount(
-  skill: Pick<SkillDefinition, 'element' | 'healMode' | 'healValue'>,
-  attacker: Pick<BattleCritterState, 'currentHp' | 'element' | 'maxHp'>,
+  skill: Pick<SkillDefinition, 'element' | 'healMode' | 'healValue' | 'type'>,
+  attacker: Pick<BattleCritterState, 'element' | 'maxHp'>,
   damageDealt = 0,
 ): number {
   if (
@@ -9750,15 +9977,20 @@ function resolveRequestedSkillHealAmount(
     return 0;
   }
 
+  const healMode =
+    skill.type !== 'damage' && skill.healMode === 'percent_damage'
+      ? 'percent_max_hp'
+      : skill.healMode;
   let requestedHeal = 0;
-  if (skill.healMode === 'flat') {
+  if (healMode === 'flat') {
     requestedHeal = Math.max(0, Math.floor(skill.healValue));
-  } else if (skill.healMode === 'percent_max_hp') {
-    const normalizedPercent = Math.max(0, skill.healValue);
-    const sameElementBonus = skill.element === attacker.element && normalizedPercent > 0 ? 0.03 : 0;
-    requestedHeal = Math.floor(attacker.maxHp * (normalizedPercent + sameElementBonus));
-  } else if (skill.healMode === 'percent_damage') {
-    requestedHeal = Math.floor(Math.max(0, damageDealt) * clamp(skill.healValue, 0, 1));
+  } else if (healMode === 'percent_max_hp') {
+    requestedHeal = Math.floor(attacker.maxHp * clamp(skill.healValue, 0, 1));
+  } else if (healMode === 'percent_damage') {
+    const percent = clamp(skill.healValue, 0, 1);
+    if (percent > 0 && damageDealt > 0) {
+      requestedHeal = Math.max(1, Math.floor(Math.max(0, damageDealt) * percent));
+    }
   }
 
   return Math.max(0, requestedHeal);
