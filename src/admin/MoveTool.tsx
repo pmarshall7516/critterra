@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CRITTER_ELEMENTS } from '@/game/critters/types';
-import type { SkillDefinition, SkillHealMode, SkillPersistentHealMode } from '@/game/skills/types';
+import type {
+  SkillDefinition,
+  SkillEffectAttachment,
+  SkillHealMode,
+  SkillPersistentHealMode,
+} from '@/game/skills/types';
 import {
   DAMAGE_SKILL_HEAL_MODES,
   ELEMENT_SKILL_COLORS,
@@ -120,7 +125,7 @@ function formatPersistentHealTooltip(
   return `End of turn: ${Math.round(skill.persistentHealValue * 100)}% HP for ${Math.max(1, Math.floor(skill.persistentHealDurationTurns))} turns`;
 }
 
-function buildSkillTooltip(skill: SkillDefinition): string {
+function buildSkillTooltip(skill: SkillDefinition, effectList: EffectOption[]): string {
   const lines = [skill.skill_name, `${skill.type === 'damage' ? 'Damage' : 'Support'} • ${skill.element}`];
   if (skill.type === 'damage' && skill.damage != null) {
     lines.push(`Power: ${skill.damage}`);
@@ -133,6 +138,34 @@ function buildSkillTooltip(skill: SkillDefinition): string {
   if (persistentHealLine) {
     lines.push(persistentHealLine);
   }
+  const effectById = new Map(effectList.map((effect) => [effect.id, effect]));
+  const effectAttachments =
+    Array.isArray(skill.effectAttachments) && skill.effectAttachments.length > 0
+      ? skill.effectAttachments
+      : (skill.effectIds ?? []).map((effectId) => ({
+          effectId,
+          buffPercent: effectById.get(effectId)?.buffPercent ?? 0.1,
+          procChance: 1,
+        }));
+  const effectLines = effectAttachments
+    .map((attachment) => {
+      const effect = effectById.get(attachment.effectId);
+      const procLabel = Math.round((attachment.procChance ?? 1) * 100);
+      if (!effect) {
+        return `${attachment.effectId} (${procLabel}% chance)`;
+      }
+      const effectDescription = typeof effect.description === 'string' ? effect.description.trim() : '';
+      if (effectDescription) {
+        const buffLabel = Math.round((attachment.buffPercent ?? 0) * 100);
+        return `${effectDescription.replace(/<buff>/g, String(buffLabel))} (${procLabel}% chance)`;
+      }
+      return `${effect.name} (${procLabel}% chance)`;
+    });
+  for (const effectLine of effectLines) {
+    if (effectLine.trim()) {
+      lines.push(`Effect: ${effectLine.trim()}`);
+    }
+  }
   return lines.join('\n');
 }
 
@@ -140,9 +173,13 @@ function AdminSkillCellContent({ skill, effectList, iconsBucketRoot }: AdminSkil
   const elementLogoUrl = buildElementLogoUrlFromIconsBucket(skill.element, iconsBucketRoot);
   const typeLabel = skill.type === 'damage' ? 'D' : 'S';
   const value = getSkillValueDisplayNumber(skill);
-  const effectIconUrls = (skill.effectIds ?? [])
-    .map((id) => {
-      const effect = effectList.find((e) => e.id === id);
+  const effectAttachments =
+    Array.isArray(skill.effectAttachments) && skill.effectAttachments.length > 0
+      ? skill.effectAttachments
+      : (skill.effectIds ?? []).map((effectId) => ({ effectId, buffPercent: 0.1, procChance: 1 }));
+  const effectIconUrls = effectAttachments
+    .map((attachment) => {
+      const effect = effectList.find((e) => e.id === attachment.effectId);
       return effect?.iconUrl;
     })
     .filter((url): url is string => typeof url === 'string' && url.length > 0);
@@ -189,7 +226,13 @@ interface SkillDraft {
   persistentHealMode: SkillDraftPersistentHealMode;
   persistentHealValue: string;
   persistentHealDurationTurns: string;
-  effectIds: string[];
+  effectAttachments: SkillEffectAttachmentDraft[];
+}
+
+interface SkillEffectAttachmentDraft {
+  effectId: string;
+  buffPercent: string;
+  procChance: string;
 }
 
 const emptyDraft: SkillDraft = {
@@ -203,14 +246,14 @@ const emptyDraft: SkillDraft = {
   persistentHealMode: 'none',
   persistentHealValue: '0',
   persistentHealDurationTurns: '1',
-  effectIds: [],
+  effectAttachments: [],
 };
 
 function normalizeDraftHealMode(type: SkillDraftType, healMode: string): SkillHealMode {
   if (type === 'support') {
     return SUPPORT_SKILL_HEAL_MODES.includes(healMode as (typeof SUPPORT_SKILL_HEAL_MODES)[number])
       ? (healMode as SkillHealMode)
-      : 'flat';
+      : 'none';
   }
   return DAMAGE_SKILL_HEAL_MODES.includes(healMode as (typeof DAMAGE_SKILL_HEAL_MODES)[number])
     ? (healMode as SkillHealMode)
@@ -224,19 +267,6 @@ function parseDraftHealValue(healMode: SkillHealMode, rawValue: string): number 
   return Math.max(0, Math.min(1, parseFloat(rawValue) || 0));
 }
 
-function getHealModeLabel(healMode: SkillHealMode): string {
-  if (healMode === 'flat') {
-    return 'Flat HP';
-  }
-  if (healMode === 'percent_damage') {
-    return '% of damage dealt';
-  }
-  if (healMode === 'percent_max_hp') {
-    return '% of max HP';
-  }
-  return 'No heal';
-}
-
 function getHealValueLabel(type: SkillDraftType, healMode: SkillHealMode): string {
   if (healMode === 'flat') {
     return type === 'damage' ? 'Heal amount (HP)' : 'Support heal amount (HP)';
@@ -247,8 +277,54 @@ function getHealValueLabel(type: SkillDraftType, healMode: SkillHealMode): strin
   return 'Heal % of max HP (0-1)';
 }
 
-function skillToDraft(skill: SkillDefinition, effectIds: string[]): SkillDraft {
-  const healMode = normalizeDraftHealMode(skill.type, skill.healMode ?? (skill.type === 'support' ? 'flat' : 'none'));
+function sanitizeAttachmentNumber(rawValue: string, fallback: number): number {
+  const parsed = parseFloat(rawValue);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(1, parsed));
+}
+
+function normalizeSkillAttachmentDrafts(
+  skill: SkillDefinition,
+  effectList: EffectOption[],
+): SkillEffectAttachmentDraft[] {
+  const effectById = new Map(effectList.map((effect) => [effect.id, effect]));
+  const normalized = new Map<string, SkillEffectAttachmentDraft>();
+  const skillAttachments = Array.isArray(skill.effectAttachments) ? skill.effectAttachments : [];
+  if (skillAttachments.length > 0) {
+    for (const attachment of skillAttachments) {
+      const id = typeof attachment.effectId === 'string' ? attachment.effectId.trim() : '';
+      if (!id || normalized.has(id)) {
+        continue;
+      }
+      const fallbackBuff = typeof effectById.get(id)?.buffPercent === 'number' ? effectById.get(id)!.buffPercent! : 0.1;
+      normalized.set(id, {
+        effectId: id,
+        buffPercent: String(Math.max(0, Math.min(1, attachment.buffPercent ?? fallbackBuff))),
+        procChance: String(Math.max(0, Math.min(1, attachment.procChance ?? 1))),
+      });
+    }
+  }
+  if (normalized.size === 0) {
+    for (const effectId of skill.effectIds ?? []) {
+      const id = effectId.trim();
+      if (!id || normalized.has(id)) {
+        continue;
+      }
+      const fallbackBuff = typeof effectById.get(id)?.buffPercent === 'number' ? effectById.get(id)!.buffPercent! : 0.1;
+      normalized.set(id, {
+        effectId: id,
+        buffPercent: String(Math.max(0, Math.min(1, fallbackBuff))),
+        procChance: '1',
+      });
+    }
+  }
+  return Array.from(normalized.values());
+}
+
+function skillToDraft(skill: SkillDefinition, effectList: EffectOption[]): SkillDraft {
+  const healMode = normalizeDraftHealMode(skill.type, skill.healMode ?? 'none');
   const persistentHealMode = skill.persistentHealMode ?? 'none';
   return {
     skill_id: skill.skill_id,
@@ -265,19 +341,49 @@ function skillToDraft(skill: SkillDefinition, effectIds: string[]): SkillDraft {
         : getDefaultPersistentHealValueForMode(persistentHealMode),
     persistentHealDurationTurns:
       skill.persistentHealDurationTurns != null ? String(skill.persistentHealDurationTurns) : '1',
-    effectIds: skill.effectIds ?? effectIds.filter((id) => (skill.effectIds ?? []).includes(id)),
+    effectAttachments: normalizeSkillAttachmentDrafts(skill, effectList),
+  };
+}
+
+function buildSkillEffectAttachmentsFromDraft(
+  draftAttachments: SkillEffectAttachmentDraft[],
+): SkillEffectAttachment[] {
+  const deduped = new Map<string, SkillEffectAttachment>();
+  for (const entry of draftAttachments) {
+    const effectId = entry.effectId.trim();
+    if (!effectId) {
+      continue;
+    }
+    deduped.set(effectId, {
+      effectId,
+      buffPercent: sanitizeAttachmentNumber(entry.buffPercent, 0.1),
+      procChance: sanitizeAttachmentNumber(entry.procChance, 1),
+    });
+  }
+  return Array.from(deduped.values());
+}
+
+function buildAttachmentDraftFromEffectOption(effect: EffectOption): SkillEffectAttachmentDraft {
+  const defaultBuff = typeof effect.buffPercent === 'number' && Number.isFinite(effect.buffPercent)
+    ? Math.max(0, Math.min(1, effect.buffPercent))
+    : 0.1;
+  return {
+    effectId: effect.id,
+    buffPercent: String(defaultBuff),
+    procChance: '1',
   };
 }
 
 interface EffectOption {
   id: string;
   name: string;
+  description?: string;
+  buffPercent?: number;
   iconUrl?: string;
 }
 
 export function MoveTool() {
   const [skills, setSkills] = useState<SkillDefinition[]>([]);
-  const [effectIds, setEffectIds] = useState<string[]>([]);
   const [effectList, setEffectList] = useState<EffectOption[]>([]);
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
   const [draft, setDraft] = useState<SkillDraft>(emptyDraft);
@@ -295,7 +401,7 @@ export function MoveTool() {
     [skills, selectedSkillId],
   );
   const activeHealMode = normalizeDraftHealMode(draft.type, draft.healMode);
-  const showHealValueInput = draft.type === 'support' || activeHealMode !== 'none';
+  const showHealValueInput = activeHealMode !== 'none';
   const usesPercentHealValue = activeHealMode === 'percent_damage' || activeHealMode === 'percent_max_hp';
 
   const filteredSkills = useMemo(() => {
@@ -309,7 +415,7 @@ export function MoveTool() {
 
   const filteredEffectOptions = useMemo(() => {
     const query = effectSearchInput.trim().toLowerCase();
-    const selected = new Set(draft.effectIds);
+    const selected = new Set(draft.effectAttachments.map((attachment) => attachment.effectId));
     return effectList
       .filter((e) => !selected.has(e.id))
       .filter(
@@ -318,7 +424,7 @@ export function MoveTool() {
       )
       .sort((a, b) => a.id.localeCompare(b.id))
       .slice(0, 12);
-  }, [effectList, draft.effectIds, effectSearchInput]);
+  }, [effectList, draft.effectAttachments, effectSearchInput]);
 
   const iconsBucketRoot = useMemo(() => {
     // Get icons bucket root from any effect icon URL
@@ -346,24 +452,56 @@ export function MoveTool() {
         .map((e: { effect_id?: string }) => e?.effect_id)
         .filter((id): id is string => typeof id === 'string' && id.length > 0);
       const list: EffectOption[] = effects
-        .map((e: { effect_id?: string; effect_name?: string; iconUrl?: string }) => ({
+        .map(
+          (e: {
+            effect_id?: string;
+            effect_name?: string;
+            description?: string;
+            effect_description?: string;
+            buffPercent?: number;
+            buff_percent?: number;
+            iconUrl?: string;
+            icon_url?: string;
+          }) => ({
           id: typeof e?.effect_id === 'string' ? e.effect_id : '',
           name: typeof e?.effect_name === 'string' ? e.effect_name : String(e?.effect_id ?? ''),
-          iconUrl: typeof e?.iconUrl === 'string' && e.iconUrl.trim() ? e.iconUrl.trim() : undefined,
-        }))
+          description:
+            typeof e?.description === 'string' && e.description.trim()
+              ? e.description.trim()
+              : typeof e?.effect_description === 'string' && e.effect_description.trim()
+                ? e.effect_description.trim()
+                : undefined,
+          buffPercent:
+            typeof e?.buffPercent === 'number' && Number.isFinite(e.buffPercent)
+              ? e.buffPercent
+              : typeof e?.buff_percent === 'number' && Number.isFinite(e.buff_percent)
+                ? e.buff_percent
+                : undefined,
+          iconUrl:
+            typeof e?.iconUrl === 'string' && e.iconUrl.trim()
+              ? e.iconUrl.trim()
+              : typeof e?.icon_url === 'string' && e.icon_url.trim()
+                ? e.icon_url.trim()
+                : undefined,
+        }),
+        )
         .filter((x) => x.id.length > 0);
-      setEffectIds(effectIdList);
       setEffectList(list);
       const rawSkills = result.data?.critterSkills;
       const knownEffectIds = new Set(effectIdList);
-      const loaded = sanitizeSkillLibrary(rawSkills, knownEffectIds);
+      const legacyEffectBuffPercentById = new Map(
+        list
+          .filter((effect) => typeof effect.buffPercent === 'number' && Number.isFinite(effect.buffPercent))
+          .map((effect) => [effect.id, effect.buffPercent as number]),
+      );
+      const loaded = sanitizeSkillLibrary(rawSkills, knownEffectIds, legacyEffectBuffPercentById);
       setSkills(loaded);
       if (loaded.length > 0 && !selectedSkillId) {
         setSelectedSkillId(loaded[0].skill_id);
-        setDraft(skillToDraft(loaded[0], effectIdList));
+        setDraft(skillToDraft(loaded[0], list));
       } else if (selectedSkillId && loaded.find((s) => s.skill_id === selectedSkillId)) {
         const sel = loaded.find((s) => s.skill_id === selectedSkillId)!;
-        setDraft(skillToDraft(sel, effectIdList));
+        setDraft(skillToDraft(sel, list));
       } else {
         setSelectedSkillId(null);
         setDraft(emptyDraft);
@@ -382,7 +520,7 @@ export function MoveTool() {
 
   const applyDraft = () => {
     if (selectedSkill) {
-      setDraft(skillToDraft(selectedSkill, effectIds));
+      setDraft(skillToDraft(selectedSkill, effectList));
     } else {
       setDraft(emptyDraft);
     }
@@ -404,7 +542,12 @@ export function MoveTool() {
         persistentHealMode: s.persistentHealMode,
         persistentHealValue: s.persistentHealValue,
         persistentHealDurationTurns: s.persistentHealDurationTurns,
-        effectIds: s.effectIds?.length ? s.effectIds : undefined,
+        effectAttachments: s.effectAttachments?.length ? s.effectAttachments : undefined,
+        effectIds: s.effectAttachments?.length
+          ? s.effectAttachments.map((attachment) => attachment.effectId)
+          : s.effectIds?.length
+            ? s.effectIds
+            : undefined,
       }));
       const result = await apiFetchJson<SkillsSaveResponse>('/api/admin/skills/save', {
         method: 'POST',
@@ -453,18 +596,21 @@ export function MoveTool() {
       resolvedPersistentHealMode
         ? Math.max(1, Math.min(999, parseInt(draft.persistentHealDurationTurns, 10) || 1))
         : undefined;
+    const effectAttachments = buildSkillEffectAttachmentsFromDraft(draft.effectAttachments);
+    const effectIds = effectAttachments.map((attachment) => attachment.effectId);
     const newSkill: SkillDefinition = {
       skill_id: id,
       skill_name: name,
       element: draft.element as SkillDefinition['element'],
       type: draft.type,
       ...(draft.type === 'damage' && { damage: damageNum }),
-      ...(draft.type === 'support' && { healMode: activeHealMode, healValue }),
+      ...(draft.type === 'support' && activeHealMode !== 'none' && { healMode: activeHealMode, healValue }),
       ...(draft.type === 'damage' && activeHealMode !== 'none' && { healMode: activeHealMode, healValue }),
       ...(resolvedPersistentHealMode && { persistentHealMode: resolvedPersistentHealMode }),
       ...(persistentHealNum != null && { persistentHealValue: persistentHealNum }),
       ...(persistentHealDurationTurns != null && { persistentHealDurationTurns }),
-      ...(draft.effectIds.length > 0 && { effectIds: draft.effectIds }),
+      ...(effectAttachments.length > 0 && { effectAttachments }),
+      ...(effectIds.length > 0 && { effectIds }),
     };
     const existingIndex = skills.findIndex((s) => s.skill_id === id);
     let next: SkillDefinition[];
@@ -475,7 +621,7 @@ export function MoveTool() {
     }
     setSkills(next);
     setSelectedSkillId(id);
-    setDraft(skillToDraft(newSkill, effectIds));
+    setDraft(skillToDraft(newSkill, effectList));
     setStatus(existingIndex >= 0 ? 'Updated skill.' : 'Added skill.');
   };
 
@@ -485,7 +631,7 @@ export function MoveTool() {
     const next = skills.filter((s) => s.skill_id !== selectedSkillId);
     if (next.length > 0) {
       setSelectedSkillId(next[0].skill_id);
-      setDraft(skillToDraft(next[0], effectIds));
+      setDraft(skillToDraft(next[0], effectList));
     } else {
       setSelectedSkillId(null);
       setDraft(emptyDraft);
@@ -537,10 +683,10 @@ export function MoveTool() {
                   type="button"
                   className={`secondary admin-skill-list-item ${elementColor ? 'admin-skill-list-item--colored' : ''} ${selectedSkillId === skill.skill_id ? 'is-selected' : ''}`}
                   style={style}
-                  title={buildSkillTooltip(skill)}
+                  title={buildSkillTooltip(skill, effectList)}
                   onClick={() => {
                     setSelectedSkillId(skill.skill_id);
-                    setDraft(skillToDraft(skill, effectIds));
+                    setDraft(skillToDraft(skill, effectList));
                   }}
                 >
                   <AdminSkillCellContent skill={skill} effectList={effectList} iconsBucketRoot={iconsBucketRoot} />
@@ -620,9 +766,9 @@ export function MoveTool() {
               value={activeHealMode}
               onChange={(e) => setDraft((d) => ({ ...d, healMode: normalizeDraftHealMode(d.type, e.target.value) }))}
             >
-              {(draft.type === 'damage' ? DAMAGE_SKILL_HEAL_MODES : SUPPORT_SKILL_HEAL_MODES).map((mode) => (
-                <option key={mode} value={mode}>
-                  {getHealModeLabel(mode)}
+              {(draft.type === 'damage' ? DAMAGE_HEAL_MODE_OPTIONS : SUPPORT_HEAL_MODE_OPTIONS).map((mode) => (
+                <option key={mode.value} value={mode.value}>
+                  {mode.label}
                 </option>
               ))}
             </select>
@@ -708,10 +854,11 @@ export function MoveTool() {
                 className="admin-effect-picker"
                 onClick={() => effectSearchInputRef.current?.focus()}
               >
-                {draft.effectIds.map((id) => {
-                  const opt = effectList.find((e) => e.id === id);
+                {draft.effectAttachments.map((attachment) => {
+                  const opt = effectList.find((e) => e.id === attachment.effectId);
+                  const id = attachment.effectId;
                   return (
-                    <span key={id} className="admin-effect-picker__chip">
+                    <span key={id} className="admin-effect-picker__chip" title={`${id}: buff ${Math.round(sanitizeAttachmentNumber(attachment.buffPercent, 0.1) * 100)}%, proc ${Math.round(sanitizeAttachmentNumber(attachment.procChance, 1) * 100)}%`}>
                       {opt ? `${opt.id} – ${opt.name}` : id}
                       <button
                         type="button"
@@ -721,7 +868,7 @@ export function MoveTool() {
                           e.stopPropagation();
                           setDraft((d) => ({
                             ...d,
-                            effectIds: d.effectIds.filter((x) => x !== id),
+                            effectAttachments: d.effectAttachments.filter((entry) => entry.effectId !== id),
                           }));
                         }}
                       >
@@ -746,19 +893,22 @@ export function MoveTool() {
                         const exact = effectList.find(
                           (x) => x.id.toLowerCase() === q || x.name.toLowerCase() === q,
                         );
-                        if (exact && !draft.effectIds.includes(exact.id)) {
-                          setDraft((d) => ({ ...d, effectIds: [...d.effectIds, exact.id] }));
+                        if (exact && !draft.effectAttachments.some((entry) => entry.effectId === exact.id)) {
+                          setDraft((d) => ({
+                            ...d,
+                            effectAttachments: [...d.effectAttachments, buildAttachmentDraftFromEffectOption(exact)],
+                          }));
                         }
                         setEffectSearchInput('');
                       }
-                    } else if (e.key === 'Backspace' && !effectSearchInput && draft.effectIds.length > 0) {
+                    } else if (e.key === 'Backspace' && !effectSearchInput && draft.effectAttachments.length > 0) {
                       setDraft((d) => ({
                         ...d,
-                        effectIds: d.effectIds.slice(0, -1),
+                        effectAttachments: d.effectAttachments.slice(0, -1),
                       }));
                     }
                   }}
-                  placeholder={draft.effectIds.length === 0 ? 'Search effects…' : 'Add another (type or comma)'}
+                  placeholder={draft.effectAttachments.length === 0 ? 'Search effects…' : 'Add another (type or comma)'}
                 />
                 {effectDropdownOpen && (
                   <div
@@ -778,7 +928,9 @@ export function MoveTool() {
                           onMouseDown={() => {
                             setDraft((d) => ({
                               ...d,
-                              effectIds: d.effectIds.includes(opt.id) ? d.effectIds : [...d.effectIds, opt.id],
+                              effectAttachments: d.effectAttachments.some((entry) => entry.effectId === opt.id)
+                                ? d.effectAttachments
+                                : [...d.effectAttachments, buildAttachmentDraftFromEffectOption(opt)],
                             }));
                             setEffectSearchInput('');
                             setEffectDropdownOpen(false);
@@ -792,6 +944,66 @@ export function MoveTool() {
                 )}
               </div>
             </label>
+          )}
+          {draft.effectAttachments.length > 0 && (
+            <section className="admin-panel" style={{ marginTop: '0.5rem' }}>
+              <h4>Effect Values</h4>
+              <p className="admin-note" style={{ marginBottom: '0.5rem' }}>
+                Configure each attached effect per skill. `0.1 = 10%`.
+              </p>
+              <div className="admin-grid-2">
+                {draft.effectAttachments.map((attachment) => {
+                  const effect = effectList.find((entry) => entry.id === attachment.effectId);
+                  return (
+                    <div key={attachment.effectId} className="admin-panel" style={{ margin: 0 }}>
+                      <h5 style={{ marginTop: 0, marginBottom: '0.4rem' }}>
+                        {effect ? `${effect.id} – ${effect.name}` : attachment.effectId}
+                      </h5>
+                      <label>
+                        Buff % (0–1)
+                        <input
+                          type="number"
+                          min={0}
+                          max={1}
+                          step={0.01}
+                          value={attachment.buffPercent}
+                          onChange={(e) =>
+                            setDraft((d) => ({
+                              ...d,
+                              effectAttachments: d.effectAttachments.map((entry) =>
+                                entry.effectId === attachment.effectId
+                                  ? { ...entry, buffPercent: e.target.value }
+                                  : entry,
+                              ),
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        Proc Chance (0–1)
+                        <input
+                          type="number"
+                          min={0}
+                          max={1}
+                          step={0.01}
+                          value={attachment.procChance}
+                          onChange={(e) =>
+                            setDraft((d) => ({
+                              ...d,
+                              effectAttachments: d.effectAttachments.map((entry) =>
+                                entry.effectId === attachment.effectId
+                                  ? { ...entry, procChance: e.target.value }
+                                  : entry,
+                              ),
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
           )}
           <div className="admin-row">
             <button type="button" className="primary" onClick={createOrUpdateFromDraft}>

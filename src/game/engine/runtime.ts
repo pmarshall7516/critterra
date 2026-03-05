@@ -68,7 +68,13 @@ import type {
   WorldMap,
 } from '@/game/world/types';
 import { readStoredWorldContent } from '@/game/content/worldContentStore';
-import type { ElementChart, SkillDefinition, SkillEffectDefinition, SkillHealMode } from '@/game/skills/types';
+import type {
+  ElementChart,
+  SkillDefinition,
+  SkillEffectAttachment,
+  SkillEffectDefinition,
+  SkillHealMode,
+} from '@/game/skills/types';
 import { DEFAULT_TACKLE_SKILL } from '@/game/skills/types';
 import {
   buildDefaultElementChart,
@@ -260,6 +266,8 @@ interface BattleCritterState {
   speedModifier: number;
   /** Effect IDs currently applied to this critter (e.g. stat buffs from skills they used). Cleared on switch/KO. */
   activeEffectIds: string[];
+  /** Total applied skill-buff value per effect id for tooltip/summary rendering. */
+  activeEffectValueById?: Record<string, number>;
   /** Last-known source label for active skill effects (for tooltip context). */
   activeEffectSourceById: Record<string, string>;
   /** Passive equipment effect IDs active for this critter in battle. */
@@ -361,6 +369,7 @@ interface BattlePostDamageResolution {
   attackingTeam: 'player' | 'opponent';
   healToAttacker: number;
   attackerEffectIds: string[];
+  attackerEffectBuffPercentById?: Record<string, number>;
   attackerEffectSourceName?: string;
   healMessageAttackerName?: string;
   persistentHeal?: {
@@ -988,7 +997,16 @@ export class GameRuntime {
         {} as Record<string, EquipmentEffectDefinition>,
       );
       const knownEffectIds = new Set(this.skillEffectLibrary.map((e) => e.effect_id));
-      this.skillDatabase = sanitizeSkillLibrary(storedWorldContent.critterSkills, knownEffectIds);
+      const legacyEffectBuffPercentById = new Map(
+        this.skillEffectLibrary
+          .filter((effect) => typeof effect.buffPercent === 'number' && Number.isFinite(effect.buffPercent))
+          .map((effect) => [effect.effect_id, effect.buffPercent as number]),
+      );
+      this.skillDatabase = sanitizeSkillLibrary(
+        storedWorldContent.critterSkills,
+        knownEffectIds,
+        legacyEffectBuffPercentById,
+      );
       this.skillLookupById = (this.skillDatabase as SkillDefinition[]).reduce(
         (acc, s) => {
           acc[s.skill_id] = s;
@@ -2472,6 +2490,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       prev.defenseModifier = 1;
       prev.speedModifier = 1;
       prev.activeEffectIds = [];
+      prev.activeEffectValueById = {};
       prev.activeEffectSourceById = {};
       prev.persistentHeal = null;
     }
@@ -5423,6 +5442,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         defenseModifier: 1,
         speedModifier: 1,
         activeEffectIds: [],
+        activeEffectValueById: {},
         activeEffectSourceById: {},
         equipmentEffectIds,
         equipmentEffectSourceById,
@@ -5507,6 +5527,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       defenseModifier: 1,
       speedModifier: 1,
       activeEffectIds: [],
+      activeEffectValueById: {},
       activeEffectSourceById: {},
       equipmentEffectIds: [],
       equipmentEffectSourceById: {},
@@ -5717,11 +5738,18 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
 
     if (skill.type === 'support') {
       const requestedHeal = resolveRequestedSkillHealAmount(skill, attacker);
+      const resolvedAttachments = resolveSkillEffectAttachmentsForRuntime(skill, this.skillEffectLookupById);
+      const appliedAttachments = resolvedAttachments.filter((attachment) =>
+        attachment.procChance >= 1 || Math.random() < attachment.procChance,
+      );
+      const attackerEffectIds = appliedAttachments.map((attachment) => attachment.effectId);
+      const attackerEffectBuffPercentById = buildSkillEffectBuffPercentById(appliedAttachments);
       const followUpEvents = this.buildBattleResolutionNarrationEvents(
         attacker.name,
         attackingTeam,
         requestedHeal,
-        [...(skill.effectIds ?? [])],
+        attackerEffectIds,
+        attackerEffectBuffPercentById,
         skill.skill_name,
         this.buildPersistentHealResolution(skill),
       );
@@ -5764,13 +5792,19 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     );
     const damageDealt = Math.min(damage, Math.max(0, defender.currentHp));
     const plannedHeal = resolveRequestedSkillHealAmount(skill, attacker, damageDealt);
-    const attackerEffectIds = [...(skill.effectIds ?? [])];
+    const resolvedAttachments = resolveSkillEffectAttachmentsForRuntime(skill, this.skillEffectLookupById);
+    const appliedAttachments = resolvedAttachments.filter((attachment) =>
+      attachment.procChance >= 1 || Math.random() < attachment.procChance,
+    );
+    const attackerEffectIds = appliedAttachments.map((attachment) => attachment.effectId);
+    const attackerEffectBuffPercentById = buildSkillEffectBuffPercentById(appliedAttachments);
     const wouldFaint = defender.currentHp <= damage;
     const followUpEvents = this.buildBattleResolutionNarrationEvents(
       attacker.name,
       attackingTeam,
       plannedHeal,
       attackerEffectIds,
+      attackerEffectBuffPercentById,
       skill.skill_name,
       this.buildPersistentHealResolution(skill),
     );
@@ -5872,21 +5906,36 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
   private applySkillEffectIdsToAttacker(
     attacker: BattleCritterState,
     effectIds: string[],
+    effectBuffPercentById: Record<string, number> | undefined,
     sourceName?: string,
   ): void {
     for (const effectId of effectIds) {
       const effect = this.skillEffectLookupById[effectId];
       if (!effect) continue;
+      const buffPercent = clamp(
+        typeof effectBuffPercentById?.[effectId] === 'number'
+          ? effectBuffPercentById[effectId]
+          : typeof effect.buffPercent === 'number'
+            ? effect.buffPercent
+            : 0.1,
+        0,
+        1,
+      );
+      if (buffPercent <= 0) {
+        continue;
+      }
       if (effect.effect_type === 'atk_buff') {
-        attacker.attackModifier += effect.buffPercent;
+        attacker.attackModifier += buffPercent;
       } else if (effect.effect_type === 'def_buff') {
-        attacker.defenseModifier += effect.buffPercent;
+        attacker.defenseModifier += buffPercent;
       } else if (effect.effect_type === 'speed_buff') {
-        attacker.speedModifier += effect.buffPercent;
+        attacker.speedModifier += buffPercent;
       }
       if (!attacker.activeEffectIds.includes(effectId)) {
         attacker.activeEffectIds.push(effectId);
       }
+      attacker.activeEffectValueById = attacker.activeEffectValueById ?? {};
+      attacker.activeEffectValueById[effectId] = (attacker.activeEffectValueById[effectId] ?? 0) + buffPercent;
       const normalizedSourceName = typeof sourceName === 'string' ? sourceName.trim() : '';
       if (normalizedSourceName) {
         attacker.activeEffectSourceById = attacker.activeEffectSourceById ?? {};
@@ -5912,6 +5961,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       this.applySkillEffectIdsToAttacker(
         attacker,
         resolution.attackerEffectIds,
+        resolution.attackerEffectBuffPercentById,
         resolution.attackerEffectSourceName,
       );
     }
@@ -5923,6 +5973,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     attackingTeam: 'player' | 'opponent',
     healToAttacker: number,
     attackerEffectIds: string[],
+    attackerEffectBuffPercentById: Record<string, number> | undefined,
     attackerEffectSourceName?: string,
     persistentHeal?: BattlePostDamageResolution['persistentHeal'],
   ): BattleNarrationEvent[] {
@@ -5965,6 +6016,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
           attackingTeam,
           healToAttacker: 0,
           attackerEffectIds,
+          attackerEffectBuffPercentById,
           attackerEffectSourceName,
         },
       });
@@ -6473,17 +6525,17 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       if (!skillId) continue;
       const skill = this.skillLookupById[skillId];
       if (!skill) continue;
-      const effectDescriptions = (skill.effectIds ?? [])
-        .map((id) => {
-          const effect = this.skillEffectLookupById[id];
-          if (!effect?.description) return null;
-          const buffLabel = Math.round((effect.buffPercent ?? 0) * 100);
-          return effect.description.replace(/<buff>/g, String(buffLabel));
+      const effectAttachments = resolveSkillEffectAttachmentsForRuntime(skill, this.skillEffectLookupById);
+      const effectDescriptions = effectAttachments
+        .map((attachment) => {
+          const effect = this.skillEffectLookupById[attachment.effectId];
+          if (!effect) return null;
+          return formatSkillEffectDescription(effect, attachment.buffPercent);
         })
         .filter(Boolean)
         .join(' ');
-      const effectIconUrls = (skill.effectIds ?? [])
-        .map((id) => this.skillEffectLookupById[id]?.iconUrl)
+      const effectIconUrls = effectAttachments
+        .map((attachment) => this.skillEffectLookupById[attachment.effectId]?.iconUrl)
         .filter((url): url is string => typeof url === 'string' && url.length > 0);
       slots[i] = {
         skillId: skill.skill_id,
@@ -6505,6 +6557,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
 
   private mapBattleTeamEntryToSnapshot(entry: BattleCritterState): RuntimeBattleSnapshot['playerTeam'][number] {
     const skillEffectSourcesById: Record<string, string[]> = {};
+    const skillEffectBuffPercentById: Record<string, number> = {};
     if (Array.isArray(entry.equippedSkillIds)) {
       for (const skillId of entry.equippedSkillIds) {
         if (!skillId) {
@@ -6514,12 +6567,16 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         if (!skill) {
           continue;
         }
-        for (const effectId of skill.effectIds ?? []) {
+        const effectAttachments = resolveSkillEffectAttachmentsForRuntime(skill, this.skillEffectLookupById);
+        for (const attachment of effectAttachments) {
+          const effectId = attachment.effectId;
           const sourceNames = skillEffectSourcesById[effectId] ?? [];
           if (!sourceNames.includes(skill.skill_name)) {
             sourceNames.push(skill.skill_name);
           }
           skillEffectSourcesById[effectId] = sourceNames;
+          skillEffectBuffPercentById[effectId] =
+            (skillEffectBuffPercentById[effectId] ?? 0) + attachment.buffPercent;
         }
       }
     }
@@ -6534,10 +6591,15 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         const url = skillEffect.iconUrl;
         if (typeof url === 'string' && url.length > 0) {
           activeEffectIconUrls.push(url);
-          const buffLabel = Math.round((skillEffect.buffPercent ?? 0) * 100);
-          const effectDescription = skillEffect.description
-            ? skillEffect.description.replace(/<buff>/g, String(buffLabel))
-            : '';
+          const appliedBuffPercent = entry.activeEffectValueById?.[id];
+          const buffPercent = typeof appliedBuffPercent === 'number'
+            ? appliedBuffPercent
+            : typeof skillEffectBuffPercentById[id] === 'number'
+              ? skillEffectBuffPercentById[id]
+            : typeof skillEffect.buffPercent === 'number'
+              ? skillEffect.buffPercent
+              : 0.1;
+          const effectDescription = formatSkillEffectDescription(skillEffect, buffPercent);
           const sourceNames = entry.activeEffectSourceById[id]
             ? [entry.activeEffectSourceById[id]]
             : (skillEffectSourcesById[id] ?? []);
@@ -7919,17 +7981,17 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       if (!skillId) continue;
       const skill = this.skillLookupById[skillId];
       if (!skill) continue;
-      const effectDescriptions = (skill.effectIds ?? [])
-        .map((id) => {
-          const effect = this.skillEffectLookupById[id];
-          if (!effect?.description) return null;
-          const buffLabel = Math.round((effect.buffPercent ?? 0) * 100);
-          return effect.description.replace(/<buff>/g, String(buffLabel));
+      const effectAttachments = resolveSkillEffectAttachmentsForRuntime(skill, this.skillEffectLookupById);
+      const effectDescriptions = effectAttachments
+        .map((attachment) => {
+          const effect = this.skillEffectLookupById[attachment.effectId];
+          if (!effect) return null;
+          return formatSkillEffectDescription(effect, attachment.buffPercent);
         })
         .filter(Boolean)
         .join(' ');
-      const effectIconUrls = (skill.effectIds ?? [])
-        .map((id) => this.skillEffectLookupById[id]?.iconUrl)
+      const effectIconUrls = effectAttachments
+        .map((attachment) => this.skillEffectLookupById[attachment.effectId]?.iconUrl)
         .filter((url): url is string => typeof url === 'string' && url.length > 0);
       slots[i] = {
         skillId: skill.skill_id,
@@ -9942,6 +10004,9 @@ function cloneBattleNarrationEvent(event: BattleNarrationEvent): BattleNarration
       ? {
           ...event.postDamageResolution,
           attackerEffectIds: [...event.postDamageResolution.attackerEffectIds],
+          attackerEffectBuffPercentById: event.postDamageResolution.attackerEffectBuffPercentById
+            ? { ...event.postDamageResolution.attackerEffectBuffPercentById }
+            : undefined,
           persistentHeal: event.postDamageResolution.persistentHeal
             ? {
                 ...event.postDamageResolution.persistentHeal,
@@ -9994,6 +10059,81 @@ function resolveRequestedSkillHealAmount(
   }
 
   return Math.max(0, requestedHeal);
+}
+
+function resolveSkillEffectAttachmentsForRuntime(
+  skill: Pick<SkillDefinition, 'effectAttachments' | 'effectIds'>,
+  skillEffectLookupById: Record<string, SkillEffectDefinition>,
+): SkillEffectAttachment[] {
+  const normalized: SkillEffectAttachment[] = [];
+  const seen = new Set<string>();
+  const pushAttachment = (effectIdRaw: unknown, buffPercentRaw: unknown, procChanceRaw: unknown): void => {
+    if (typeof effectIdRaw !== 'string') {
+      return;
+    }
+    const effectId = effectIdRaw.trim();
+    if (!effectId || seen.has(effectId)) {
+      return;
+    }
+    if (!skillEffectLookupById[effectId]) {
+      return;
+    }
+    const effectFallback = skillEffectLookupById[effectId];
+    const buffFallback = typeof effectFallback?.buffPercent === 'number' ? effectFallback.buffPercent : 0.1;
+    normalized.push({
+      effectId,
+      buffPercent: clamp(
+        typeof buffPercentRaw === 'number' && Number.isFinite(buffPercentRaw) ? buffPercentRaw : buffFallback,
+        0,
+        1,
+      ),
+      procChance: clamp(
+        typeof procChanceRaw === 'number' && Number.isFinite(procChanceRaw) ? procChanceRaw : 1,
+        0,
+        1,
+      ),
+    });
+    seen.add(effectId);
+  };
+
+  if (Array.isArray(skill.effectAttachments) && skill.effectAttachments.length > 0) {
+    for (const attachment of skill.effectAttachments) {
+      if (!attachment || typeof attachment !== 'object') {
+        continue;
+      }
+      pushAttachment(attachment.effectId, attachment.buffPercent, attachment.procChance);
+    }
+    return normalized;
+  }
+
+  for (const effectId of skill.effectIds ?? []) {
+    pushAttachment(effectId, undefined, 1);
+  }
+  return normalized;
+}
+
+function buildSkillEffectBuffPercentById(
+  attachments: SkillEffectAttachment[],
+): Record<string, number> | undefined {
+  if (attachments.length === 0) {
+    return undefined;
+  }
+  const result: Record<string, number> = {};
+  for (const attachment of attachments) {
+    result[attachment.effectId] = (result[attachment.effectId] ?? 0) + attachment.buffPercent;
+  }
+  return result;
+}
+
+function formatSkillEffectDescription(
+  effect: Pick<SkillEffectDefinition, 'description' | 'effect_name'>,
+  buffPercent: number,
+): string {
+  const effectDescription = typeof effect.description === 'string' ? effect.description.trim() : '';
+  if (effectDescription) {
+    return effectDescription.replace(/<buff>/g, String(Math.round(clamp(buffPercent, 0, 1) * 100)));
+  }
+  return effect.effect_name;
 }
 
 function sanitizeTileTransformValue(value: number): number {

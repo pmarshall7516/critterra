@@ -62,6 +62,39 @@ describe('sanitizeSkillDefinition', () => {
     });
   });
 
+  it('allows support skills to explicitly disable direct healing', () => {
+    const skill = sanitizeSkillDefinition({
+      skill_id: 'iron-wall',
+      skill_name: 'Iron Wall',
+      element: 'stone',
+      type: 'support',
+      healMode: 'none',
+    });
+
+    expect(skill).toEqual({
+      skill_id: 'iron-wall',
+      skill_name: 'Iron Wall',
+      element: 'stone',
+      type: 'support',
+    });
+  });
+
+  it('defaults support skills without heal config to no direct healing', () => {
+    const skill = sanitizeSkillDefinition({
+      skill_id: 'focus-shout',
+      skill_name: 'Focus Shout',
+      element: 'spark',
+      type: 'support',
+    });
+
+    expect(skill).toEqual({
+      skill_id: 'focus-shout',
+      skill_name: 'Focus Shout',
+      element: 'spark',
+      type: 'support',
+    });
+  });
+
   it('preserves explicit damage heal modes', () => {
     const skill = sanitizeSkillDefinition({
       skill_id: 'drain-bite',
@@ -142,5 +175,53 @@ describe('sanitizeSkillDefinition', () => {
     expect(skill).not.toHaveProperty('persistentHealMode');
     expect(skill).not.toHaveProperty('persistentHealValue');
     expect(skill).not.toHaveProperty('persistentHealDurationTurns');
+  });
+
+  it('preserves explicit effect attachments and clamps buff/proc values', () => {
+    const skill = sanitizeSkillDefinition(
+      {
+        skill_id: 'focus-claw',
+        skill_name: 'Focus Claw',
+        element: 'normal',
+        type: 'support',
+        effectAttachments: [
+          { effectId: 'atk-buff', buffPercent: 2, procChance: -1 },
+          { effectId: 'speed-buff', buffPercent: 0.15, procChance: 0.4 },
+        ],
+      },
+      0,
+      new Set(['atk-buff', 'speed-buff']),
+    );
+
+    expect(skill).toMatchObject({
+      skill_id: 'focus-claw',
+      effectAttachments: [
+        { effectId: 'atk-buff', buffPercent: 1, procChance: 0 },
+        { effectId: 'speed-buff', buffPercent: 0.15, procChance: 0.4 },
+      ],
+      effectIds: ['atk-buff', 'speed-buff'],
+    });
+  });
+
+  it('derives effect attachments from legacy effectIds using effect buff fallback values', () => {
+    const skill = sanitizeSkillDefinition(
+      {
+        skill_id: 'flutter',
+        skill_name: 'Flutter',
+        element: 'bloom',
+        type: 'damage',
+        damage: 10,
+        effectIds: ['speed-buff'],
+      },
+      0,
+      new Set(['speed-buff']),
+      new Map([['speed-buff', 0.12]]),
+    );
+
+    expect(skill).toMatchObject({
+      skill_id: 'flutter',
+      effectAttachments: [{ effectId: 'speed-buff', buffPercent: 0.12, procChance: 1 }],
+      effectIds: ['speed-buff'],
+    });
   });
 });

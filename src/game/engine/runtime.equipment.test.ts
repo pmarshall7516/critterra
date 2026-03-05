@@ -551,6 +551,13 @@ describe('GameRuntime equipment integration', () => {
         skill_name: 'Iron Wall',
         element: 'stone',
         type: 'support',
+        effectAttachments: [
+          {
+            effectId: 'focus-def',
+            buffPercent: 0.35,
+            procChance: 1,
+          },
+        ],
         effectIds: ['focus-def'],
       },
     };
@@ -582,6 +589,6 @@ describe('GameRuntime equipment integration', () => {
       consecutiveSuccessfulGuardCount: 0,
       equippedSkillIds: ['iron-wall', null, null, null],
     });
-    expect(snapshotEntry.activeEffectDescriptions).toContain('+20 Defense (Iron Wall)');
+    expect(snapshotEntry.activeEffectDescriptions).toContain('+35 Defense (Iron Wall)');
   });
 });

@@ -134,6 +134,87 @@ describe('GameRuntime battle skill sequencing', () => {
     expect(mainEvent.followUpEvents).toBeDefined();
   });
 
+  it('supports support skills that only apply effects without direct healing', () => {
+    const runtime = createRuntimeHarness();
+    const attacker = createBattleCritter({ currentHp: 11, maxHp: 40 });
+    const defender = createBattleCritter({
+      critterId: 2,
+      name: 'Defender',
+      element: 'stone',
+      currentHp: 40,
+      maxHp: 40,
+    });
+    const battle = {
+      source: { type: 'wild', mapId: 'test-map', label: 'Wild' },
+      playerTeam: [attacker],
+      opponentTeam: [defender],
+      playerActiveIndex: 0,
+      opponentActiveIndex: 0,
+    };
+    const skill: SkillDefinition = {
+      skill_id: 'battle-focus',
+      skill_name: 'Battle Focus',
+      element: 'bloom',
+      type: 'support',
+      effectIds: ['battle-focus'],
+    };
+
+    const result = runtime.executeBattleSkillWithSkill(battle, 'player', skill, 0, false, false);
+
+    expect(result.damageToDefender).toBeUndefined();
+    expect(result.narrationEvents.length).toBeGreaterThan(0);
+    const mainEvent = result.narrationEvents[0];
+    expect(mainEvent.followUpEvents).toBeDefined();
+    const healEvent = mainEvent.followUpEvents!.find((event: any) => event.postDamageResolution?.healToAttacker > 0);
+    expect(healEvent).toBeUndefined();
+    const effectEvent = mainEvent.followUpEvents!.find((event: any) =>
+      event.postDamageResolution?.attackerEffectIds?.includes('battle-focus'),
+    );
+    expect(effectEvent).toBeDefined();
+    expect(effectEvent?.postDamageResolution?.attackerEffectBuffPercentById).toEqual({
+      'battle-focus': 0.5,
+    });
+  });
+
+  it('does not schedule skill effects when proc chance fails', () => {
+    const runtime = createRuntimeHarness();
+    const attacker = createBattleCritter({ currentHp: 11, maxHp: 40 });
+    const defender = createBattleCritter({
+      critterId: 2,
+      name: 'Defender',
+      element: 'stone',
+      currentHp: 40,
+      maxHp: 40,
+    });
+    const battle = {
+      source: { type: 'wild', mapId: 'test-map', label: 'Wild' },
+      playerTeam: [attacker],
+      opponentTeam: [defender],
+      playerActiveIndex: 0,
+      opponentActiveIndex: 0,
+    };
+    const skill: SkillDefinition = {
+      skill_id: 'battle-focus',
+      skill_name: 'Battle Focus',
+      element: 'bloom',
+      type: 'support',
+      effectAttachments: [{ effectId: 'battle-focus', buffPercent: 0.5, procChance: 0.25 }],
+      effectIds: ['battle-focus'],
+    };
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.8);
+
+    try {
+      const result = runtime.executeBattleSkillWithSkill(battle, 'player', skill, 0, false, false);
+      const mainEvent = result.narrationEvents[0];
+      const effectEvent = mainEvent.followUpEvents!.find((event: any) =>
+        event.postDamageResolution?.attackerEffectIds?.includes('battle-focus'),
+      );
+      expect(effectEvent).toBeUndefined();
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
   it('schedules max-hp percentage healing on damage skills via follow-up events', () => {
     const runtime = createRuntimeHarness();
     const attacker = createBattleCritter({ currentHp: 20, maxHp: 100 });

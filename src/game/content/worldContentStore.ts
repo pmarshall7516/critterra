@@ -180,7 +180,12 @@ function sanitizeStoredSkills(
 ): SkillDefinition[] {
   const effects = sanitizeSkillEffectLibrary(rawEffects);
   const knownEffectIds = new Set(effects.map((e) => e.effect_id));
-  return sanitizeSkillLibrary(rawSkills, knownEffectIds);
+  const legacyEffectBuffPercentById = new Map(
+    effects
+      .filter((effect) => typeof effect.buffPercent === 'number' && Number.isFinite(effect.buffPercent))
+      .map((effect) => [effect.effect_id, effect.buffPercent as number]),
+  );
+  return sanitizeSkillLibrary(rawSkills, knownEffectIds, legacyEffectBuffPercentById);
 }
 
 export function persistWorldContent(content: StoredWorldContent): void {
@@ -212,6 +217,11 @@ export async function hydrateWorldContentFromServer(): Promise<void> {
   const content = result.data.content;
   const skillEffects = sanitizeSkillEffectLibrary(content.skillEffects);
   const knownEffectIds = new Set(skillEffects.map((e) => e.effect_id));
+  const legacyEffectBuffPercentById = new Map(
+    skillEffects
+      .filter((effect) => typeof effect.buffPercent === 'number' && Number.isFinite(effect.buffPercent))
+      .map((effect) => [effect.effect_id, effect.buffPercent as number]),
+  );
   const rawTiles = Array.isArray(content.savedPaintTiles) ? content.savedPaintTiles : [];
   const savedPaintTiles = rawTiles.map((t) => {
     const entry = t as Record<string, unknown>;
@@ -247,7 +257,7 @@ export async function hydrateWorldContentFromServer(): Promise<void> {
       : [],
     critters: sanitizeCritterDatabase(content.critters),
     encounterTables: sanitizeEncounterTableLibrary(content.encounterTables),
-    critterSkills: sanitizeSkillLibrary(content.critterSkills, knownEffectIds),
+    critterSkills: sanitizeSkillLibrary(content.critterSkills, knownEffectIds, legacyEffectBuffPercentById),
     skillEffects,
     elementChart: sanitizeElementChart(content.elementChart),
     items: sanitizeItemCatalog(content.items),

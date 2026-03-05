@@ -194,7 +194,6 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
   const [backpackTargetSelection, setBackpackTargetSelection] = useState<BackpackTargetSelection | null>(null);
   const [squadPickerSlotIndex, setSquadPickerSlotIndex] = useState<number | null>(null);
   const [squadSearchInput, setSquadSearchInput] = useState('');
-  const [squadUniformCardHeight, setSquadUniformCardHeight] = useState<number | null>(null);
   const [expandedStatsByCritterId, setExpandedStatsByCritterId] = useState<Record<number, boolean>>({});
   const [hoveredStarterCritterId, setHoveredStarterCritterId] = useState<number | null>(null);
 
@@ -812,78 +811,98 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
   const backpackItems = backpackState?.items ?? [];
   const backpackCategories = backpackState?.categories ?? [];
   useEffect(() => {
-    if (!menuOpen || menuView !== 'squad') {
-      setSquadUniformCardHeight(null);
-      return;
-    }
-
     const grid = squadGridRef.current;
     if (!grid) {
-      setSquadUniformCardHeight(null);
+      return;
+    }
+    const cards = Array.from(grid.querySelectorAll<HTMLElement>(':scope > .collection-card'));
+    for (const card of cards) {
+      card.style.minHeight = '';
+      card.style.height = '';
+    }
+
+    if (!menuOpen || menuView !== 'squad' || cards.length === 0) {
       return;
     }
 
     let frameId = 0;
-    const measure = () => {
-      const cards = Array.from(grid.querySelectorAll<HTMLElement>(':scope > .collection-card'));
-      if (cards.length === 0) {
-        setSquadUniformCardHeight(null);
+    let settleTimerShort = 0;
+    let settleTimerLong = 0;
+    const applyUniformHeights = () => {
+      const liveCards = Array.from(grid.querySelectorAll<HTMLElement>(':scope > .collection-card'));
+      if (liveCards.length === 0) {
         return;
       }
 
-      let tallest = 0;
-      for (const card of cards) {
-        const body = card.querySelector<HTMLElement>('.collection-card__body');
-        const bodyHeight = body ? body.getBoundingClientRect().height : card.getBoundingClientRect().height;
-        const styles = window.getComputedStyle(card);
-        const chromeHeight =
-          parseCssPixelValue(styles.paddingTop) +
-          parseCssPixelValue(styles.paddingBottom) +
-          parseCssPixelValue(styles.borderTopWidth) +
-          parseCssPixelValue(styles.borderBottomWidth);
-        tallest = Math.max(tallest, Math.ceil(bodyHeight + chromeHeight));
+      for (const card of liveCards) {
+        card.style.minHeight = '';
+        card.style.height = '';
       }
-      setSquadUniformCardHeight((current) => (current === tallest ? current : tallest));
+
+      let tallest = 0;
+      for (const card of liveCards) {
+        const styles = window.getComputedStyle(card);
+        const borderHeight = parseCssPixelValue(styles.borderTopWidth) + parseCssPixelValue(styles.borderBottomWidth);
+        // Use rendered card box height only; absolute popups (equip/skill chooser) should not drive card sizing.
+        const renderedHeight = Math.ceil(card.getBoundingClientRect().height);
+        tallest = Math.max(tallest, renderedHeight + borderHeight);
+      }
+
+      if (tallest <= 0) {
+        return;
+      }
+      const targetHeight = tallest + 8;
+      for (const card of liveCards) {
+        card.style.minHeight = `${targetHeight}px`;
+        card.style.height = '';
+      }
     };
-    const scheduleMeasure = () => {
+
+    const scheduleApply = () => {
       if (frameId !== 0) {
         window.cancelAnimationFrame(frameId);
       }
       frameId = window.requestAnimationFrame(() => {
         frameId = 0;
-        measure();
+        applyUniformHeights();
       });
     };
 
-    scheduleMeasure();
-    let observer: ResizeObserver | null = null;
-    if (typeof ResizeObserver === 'function') {
-      observer = new ResizeObserver(scheduleMeasure);
-      observer.observe(grid);
-      for (const card of Array.from(grid.querySelectorAll<HTMLElement>(':scope > .collection-card'))) {
-        observer.observe(card);
-        const body = card.querySelector<HTMLElement>('.collection-card__body');
-        if (body) {
-          observer.observe(body);
-        }
-      }
+    scheduleApply();
+    // Re-run after initial layout settles (fonts/images) without introducing observer feedback loops.
+    settleTimerShort = window.setTimeout(scheduleApply, 80);
+    settleTimerLong = window.setTimeout(scheduleApply, 260);
+    let mutationObserver: MutationObserver | null = null;
+    if (typeof MutationObserver === 'function') {
+      mutationObserver = new MutationObserver(() => {
+        scheduleApply();
+      });
+      mutationObserver.observe(grid, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
     }
-    window.addEventListener('resize', scheduleMeasure);
+    window.addEventListener('resize', scheduleApply);
     return () => {
       if (frameId !== 0) {
         window.cancelAnimationFrame(frameId);
       }
-      observer?.disconnect();
-      window.removeEventListener('resize', scheduleMeasure);
+      if (settleTimerShort !== 0) {
+        window.clearTimeout(settleTimerShort);
+      }
+      if (settleTimerLong !== 0) {
+        window.clearTimeout(settleTimerLong);
+      }
+      mutationObserver?.disconnect();
+      window.removeEventListener('resize', scheduleApply);
+      const cleanupCards = Array.from(grid.querySelectorAll<HTMLElement>(':scope > .collection-card'));
+      for (const card of cleanupCards) {
+        card.style.minHeight = '';
+        card.style.height = '';
+      }
     };
-  }, [menuOpen, menuView, squadSlots, collection, expandedStatsByCritterId]);
-  const squadGridStyle = useMemo(
-    () =>
-      squadUniformCardHeight
-        ? ({ '--squad-uniform-card-height': `${squadUniformCardHeight}px` } as CSSProperties)
-        : undefined,
-    [squadUniformCardHeight],
-  );
+  }, [menuOpen, menuView]);
   useEffect(() => {
     if (backpackCategoryFilter === 'all') {
       return;
@@ -1210,7 +1229,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
               </p>
               <p className="side-menu__meta">Click cards to assign or swap. Right-click a filled card to remove.</p>
               {snapshot?.message && <p className="side-menu__notice">{snapshot.message}</p>}
-              <div ref={squadGridRef} className="collection-grid squad-grid" style={squadGridStyle}>
+              <div ref={squadGridRef} className="collection-grid squad-grid">
                 {squadSlots.map((slot) => {
                   const slottedCritter = slot.critterId ? collectionById.get(slot.critterId) ?? null : null;
                   if (!slot.unlocked || !slottedCritter) {
@@ -1639,18 +1658,10 @@ function SquadSlotPlaceholderCard({ slotIndex, locked, onClick }: SquadSlotPlace
         !locked && onClick ? 'collection-card--selectable' : ''
       }`}
       onClick={onClick}
+      aria-label={`Squad slot ${slotIndex + 1}: ${locked ? 'Locked' : 'Add Critter to Squad'}`}
     >
       <div className="collection-card__body">
-        <header className="collection-card__head">
-          <span className="collection-card__id">Slot {slotIndex + 1}</span>
-          <span className="collection-card__name">{locked ? 'Locked' : 'Empty'}</span>
-        </header>
-        <section className="collection-card__missions">
-          <h3>{locked ? 'Unlock Required' : 'Awaiting Assignment'}</h3>
-          <p className="collection-card__mission-summary">
-            {locked ? 'Unlock more squad slots to use this position.' : 'Click this card to assign an unlocked critter.'}
-          </p>
-        </section>
+        <p className="squad-slot__placeholder-text">{locked ? 'Locked' : 'Add Critter to Squad'}</p>
       </div>
     </article>
   );

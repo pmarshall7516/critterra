@@ -9,21 +9,28 @@ export type SkillType = (typeof SKILL_TYPES)[number];
 export const DAMAGE_SKILL_HEAL_MODES = ['none', 'flat', 'percent_max_hp', 'percent_damage'] as const;
 export type DamageSkillHealMode = (typeof DAMAGE_SKILL_HEAL_MODES)[number];
 
-export const SUPPORT_SKILL_HEAL_MODES = ['flat', 'percent_max_hp'] as const;
+export const SUPPORT_SKILL_HEAL_MODES = ['none', 'flat', 'percent_max_hp'] as const;
 export type SupportSkillHealMode = (typeof SUPPORT_SKILL_HEAL_MODES)[number];
 
 export type SkillHealMode = DamageSkillHealMode;
 
-export const SKILL_HEAL_MODES = ['flat', 'percent_max_hp', 'percent_damage'] as const;
+export const SKILL_HEAL_MODES = ['none', 'flat', 'percent_max_hp', 'percent_damage'] as const;
 
 export const SKILL_PERSISTENT_HEAL_MODES = ['flat', 'percent_max_hp'] as const;
 export type SkillPersistentHealMode = (typeof SKILL_PERSISTENT_HEAL_MODES)[number];
+
+export interface SkillEffectAttachment {
+  effectId: string;
+  buffPercent: number;
+  procChance: number;
+}
 
 export interface SkillEffectDefinition {
   effect_id: string;
   effect_name: string;
   effect_type: SkillEffectType;
-  buffPercent: number;
+  /** Legacy fallback value. New behavior stores buff amount per skill attachment. */
+  buffPercent?: number;
   description: string;
   /** Optional icon URL (e.g. from Supabase storage) for display on afflicted critter. */
   iconUrl?: string;
@@ -46,7 +53,9 @@ export interface SkillDefinition {
   persistentHealValue?: number;
   /** Number of completed turns the persistent heal lasts, including the turn used. */
   persistentHealDurationTurns?: number;
-  /** Optional effect IDs from skill-effects table. */
+  /** Canonical effect attachments with per-skill behavior. */
+  effectAttachments?: SkillEffectAttachment[];
+  /** Legacy effect IDs from skill-effects table (kept for rollout compatibility). */
   effectIds?: string[];
 }
 

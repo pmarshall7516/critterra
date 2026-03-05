@@ -35,7 +35,6 @@ interface EffectDraft {
   effect_id: string;
   effect_name: string;
   effect_type: 'atk_buff' | 'def_buff' | 'speed_buff';
-  buffPercent: string;
   description: string;
   iconUrl: string;
 }
@@ -44,7 +43,6 @@ const emptyDraft: EffectDraft = {
   effect_id: '',
   effect_name: '',
   effect_type: 'atk_buff',
-  buffPercent: '0.1',
   description: '',
   iconUrl: '',
 };
@@ -54,7 +52,6 @@ function effectToDraft(e: SkillEffectDefinition): EffectDraft {
     effect_id: e.effect_id,
     effect_name: e.effect_name,
     effect_type: e.effect_type,
-    buffPercent: String(e.buffPercent),
     description: e.description ?? '',
     iconUrl: e.iconUrl ?? '',
   };
@@ -147,7 +144,6 @@ export function SkillEffectsTool() {
         effect_id: e.effect_id,
         effect_name: e.effect_name,
         effect_type: e.effect_type,
-        buffPercent: e.buffPercent,
         description: e.description,
         ...(e.iconUrl && { iconUrl: e.iconUrl }),
       }));
@@ -179,12 +175,10 @@ export function SkillEffectsTool() {
       setError('Effect ID and name are required.');
       return;
     }
-    const buff = Math.max(0, Math.min(1, parseFloat(draft.buffPercent) || 0.1));
     const newEffect: SkillEffectDefinition = {
       effect_id: id,
       effect_name: name,
       effect_type: draft.effect_type,
-      buffPercent: buff,
       description: draft.description.trim(),
       ...(draft.iconUrl.trim() && { iconUrl: draft.iconUrl.trim() }),
     };
@@ -283,17 +277,6 @@ export function SkillEffectsTool() {
                 ))}
               </select>
             </label>
-            <label>
-              Buff % (0–1)
-              <input
-                type="number"
-                min={0}
-                max={1}
-                step={0.01}
-                value={draft.buffPercent}
-                onChange={(e) => setDraft((d) => ({ ...d, buffPercent: e.target.value }))}
-              />
-            </label>
           </div>
           <label>
             Description (tooltip)
@@ -303,6 +286,9 @@ export function SkillEffectsTool() {
               placeholder="Raises the user's Attack."
             />
           </label>
+          <p className="admin-note">
+            Buff values and proc chances are configured per skill attachment in the Skills editor.
+          </p>
           <section className="admin-panel" style={{ marginTop: '0.5rem' }}>
             <h4>Icon (Supabase bucket: {ICONS_BUCKET})</h4>
             <p className="admin-note" style={{ marginBottom: '0.4rem' }}>

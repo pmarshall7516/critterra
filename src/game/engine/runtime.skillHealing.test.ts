@@ -324,6 +324,122 @@ describe('GameRuntime skill healing', () => {
     }
   });
 
+  it('does not apply stat buffs when effect proc chance fails', () => {
+    const attacker = {
+      name: 'Buddo',
+      element: 'bloom',
+      currentHp: 20,
+      maxHp: 40,
+      attackModifier: 1,
+      defenseModifier: 1,
+      speedModifier: 1,
+      fainted: false,
+      activeEffectIds: [] as string[],
+      activeEffectSourceById: {} as Record<string, string>,
+      activeEffectValueById: {} as Record<string, number>,
+    };
+    const defender = {
+      name: 'Target',
+      element: 'stone',
+      currentHp: 40,
+      maxHp: 40,
+      fainted: false,
+      activeEffectIds: [] as string[],
+    };
+    const runtime = createRuntimeHarness(attacker, defender);
+    (runtime as any).skillEffectLookupById = {
+      'battle-focus': {
+        effect_id: 'battle-focus',
+        effect_name: 'Battle Focus',
+        effect_type: 'atk_buff',
+        description: 'Attack up',
+      },
+    };
+    const skill: SkillDefinition = {
+      skill_id: 'battle-focus',
+      skill_name: 'Battle Focus',
+      element: 'bloom',
+      type: 'support',
+      effectAttachments: [{ effectId: 'battle-focus', buffPercent: 0.2, procChance: 0.25 }],
+      effectIds: ['battle-focus'],
+    };
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.9);
+
+    try {
+      const result = (runtime as any).executeBattleSkillWithSkill(
+        { playerTeam: [attacker], opponentTeam: [defender], playerActiveIndex: 0, opponentActiveIndex: 0 },
+        'player',
+        skill,
+        0,
+        false,
+        false,
+      );
+      const effectEvent = result.narrationEvents[0]?.followUpEvents?.find((event: any) =>
+        event.postDamageResolution?.attackerEffectIds?.includes('battle-focus'),
+      );
+      expect(effectEvent).toBeUndefined();
+      expect(attacker.attackModifier).toBe(1);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('keeps additive stacking for repeated successful procs of the same effect', () => {
+    const attacker = {
+      name: 'Buddo',
+      element: 'bloom',
+      currentHp: 20,
+      maxHp: 40,
+      attackModifier: 1,
+      defenseModifier: 1,
+      speedModifier: 1,
+      fainted: false,
+      activeEffectIds: [] as string[],
+      activeEffectSourceById: {} as Record<string, string>,
+      activeEffectValueById: {} as Record<string, number>,
+    };
+    const defender = {
+      name: 'Target',
+      element: 'stone',
+      currentHp: 40,
+      maxHp: 40,
+      fainted: false,
+      activeEffectIds: [] as string[],
+    };
+    const runtime = createRuntimeHarness(attacker, defender);
+    (runtime as any).skillEffectLookupById = {
+      'battle-focus': {
+        effect_id: 'battle-focus',
+        effect_name: 'Battle Focus',
+        effect_type: 'atk_buff',
+        description: 'Attack up',
+      },
+    };
+    const battle = createBattleState(attacker, defender);
+    const skill: SkillDefinition = {
+      skill_id: 'battle-focus',
+      skill_name: 'Battle Focus',
+      element: 'bloom',
+      type: 'support',
+      effectAttachments: [{ effectId: 'battle-focus', buffPercent: 0.2, procChance: 1 }],
+      effectIds: ['battle-focus'],
+    };
+
+    const first = (runtime as any).executeBattleSkillWithSkill(battle, 'player', skill, 0, false, false);
+    (runtime as any).activeBattle = battle;
+    (runtime as any).startBattleNarration(battle, first.narrationEvents);
+    expect((runtime as any).battleAdvanceNarration()).toBe(true);
+    expect(attacker.attackModifier).toBeCloseTo(1.2, 5);
+    expect(attacker.activeEffectValueById['battle-focus']).toBeCloseTo(0.2, 5);
+    expect((runtime as any).battleAdvanceNarration()).toBe(true);
+
+    const second = (runtime as any).executeBattleSkillWithSkill(battle, 'player', skill, 0, false, false);
+    (runtime as any).startBattleNarration(battle, second.narrationEvents);
+    expect((runtime as any).battleAdvanceNarration()).toBe(true);
+    expect(attacker.attackModifier).toBeCloseTo(1.4, 5);
+    expect(attacker.activeEffectValueById['battle-focus']).toBeCloseTo(0.4, 5);
+  });
+
   it('applies persistent end-of-turn healing after a completed turn and clears when duration ends', () => {
     const attacker = {
       name: 'Buddo',

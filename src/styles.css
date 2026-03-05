@@ -1381,6 +1381,7 @@ button.secondary:hover:not(:disabled) {
   max-width: 100vw;
   border-left: none;
   padding: clamp(0.6rem, 2vw, 1rem);
+  overflow-y: auto;
 }
 
 .side-menu h2 {
@@ -1484,16 +1485,32 @@ button.secondary:hover:not(:disabled) {
 }
 
 .collection-grid.squad-grid {
+  --collection-card-min-height: 0;
   display: grid;
-  grid-template-columns: repeat(2, minmax(320px, 420px));
-  gap: 0.7rem;
-  justify-content: center;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  column-gap: 0.8rem;
+  row-gap: 1rem;
+  justify-content: stretch;
+  align-items: stretch;
   align-content: start;
-  padding-right: 0.22rem;
+  padding: 0.15rem 0.32rem 0.48rem 0;
+  flex: 0 0 auto;
+  min-height: auto;
+  overflow: visible;
 }
 
 .collection-grid.squad-grid > .collection-card {
-  min-height: var(--squad-uniform-card-height, clamp(30rem, 72cqw, 42rem));
+  min-height: var(--collection-card-min-height);
+  height: auto;
+  align-self: stretch;
+  padding: clamp(0.42rem, 2cqw, 0.72rem) clamp(0.36rem, 1.7cqw, 0.58rem)
+    clamp(0.78rem, 2.8cqw, 1.15rem);
+}
+
+.collection-grid.squad-grid > .collection-card .collection-card__body {
+  align-content: start;
+  gap: clamp(0.2rem, 1.1cqw, 0.42rem);
+  padding-bottom: clamp(0.32rem, 1.2cqw, 0.6rem);
 }
 
 .squad-picker-modal {
@@ -1589,6 +1606,21 @@ button.secondary:hover:not(:disabled) {
   color: #d6f8e1;
 }
 
+.squad-slot__placeholder-card .collection-card__body {
+  display: grid;
+  place-items: center;
+  min-height: 100%;
+}
+
+.squad-slot__placeholder-text {
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+  text-align: center;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: inherit;
+}
+
 .collection-toolbar {
   display: flex;
   flex-wrap: nowrap;
@@ -1677,7 +1709,7 @@ button.secondary:hover:not(:disabled) {
   container-type: inline-size;
   width: 100%;
   justify-self: stretch;
-  min-height: clamp(30rem, 72cqw, 42rem);
+  min-height: var(--collection-card-min-height, clamp(30rem, 72cqw, 42rem));
   max-height: none;
   padding: clamp(0.42rem, 2.2cqw, 0.7rem) clamp(0.36rem, 1.8cqw, 0.58rem)
     clamp(0.52rem, 2.6cqw, 0.9rem);
