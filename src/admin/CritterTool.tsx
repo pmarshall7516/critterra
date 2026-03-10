@@ -175,6 +175,7 @@ export function CritterTool() {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [critterSearchInput, setCritterSearchInput] = useState('');
   const [spriteBucketInput, setSpriteBucketInput] = useState(DEFAULT_CRITTER_SPRITE_BUCKET);
   const [spritePrefixInput, setSpritePrefixInput] = useState('');
   const [spriteSearchInput, setSpriteSearchInput] = useState('');
@@ -193,6 +194,15 @@ export function CritterTool() {
   const skillSearchInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const sortedCritters = useMemo(() => [...critters].sort((left, right) => left.id - right.id), [critters]);
+  const filteredCritters = useMemo(() => {
+    const query = critterSearchInput.trim().toLowerCase();
+    if (!query) {
+      return sortedCritters;
+    }
+    return sortedCritters.filter(
+      (critter) => critter.name.toLowerCase().includes(query) || String(critter.id).includes(query),
+    );
+  }, [sortedCritters, critterSearchInput]);
 
   const selectedCritter = useMemo(
     () => critters.find((critter) => critter.id === selectedCritterId) ?? null,
@@ -569,7 +579,7 @@ export function CritterTool() {
           <option key={`critter-flag-option-${flagId}`} value={flagId} />
         ))}
       </datalist>
-      <section className="admin-panel critter-database-panel">
+      <section className="admin-panel critter-database-panel critter-database-panel--critter">
         <h3>Critter Database</h3>
         <div className="admin-row">
           <button type="button" className="secondary" onClick={() => void loadCritters()} disabled={isLoading}>
@@ -585,6 +595,14 @@ export function CritterTool() {
             {isSaving ? 'Saving...' : 'Save Critter Database'}
           </button>
         </div>
+        <label className="admin-row critter-database-search">
+          Search
+          <input
+            value={critterSearchInput}
+            onChange={(event) => setCritterSearchInput(event.target.value)}
+            placeholder="Search critter name or #"
+          />
+        </label>
         <p className="admin-note">Critter IDs must be unique numeric dex entries.</p>
         {pendingRemovalIds.size > 0 && (
           <p className="admin-note">{pendingRemovalIds.size} critter(s) marked for removal. Save to commit.</p>
@@ -596,8 +614,8 @@ export function CritterTool() {
           </p>
         )}
 
-        <div className="critter-database-list">
-          {sortedCritters.map((critter) => {
+        <div className="critter-database-list critter-database-list--critter">
+          {filteredCritters.map((critter) => {
             const isSelected = selectedCritterId === critter.id;
             const isPendingRemoval = pendingRemovalIds.has(critter.id);
             return (
@@ -631,6 +649,10 @@ export function CritterTool() {
               </article>
             );
           })}
+          {sortedCritters.length === 0 && <p className="admin-note">No critters yet.</p>}
+          {sortedCritters.length > 0 && filteredCritters.length === 0 && (
+            <p className="admin-note">No matching critters.</p>
+          )}
         </div>
       </section>
 

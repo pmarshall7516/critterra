@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { SkillEffectDefinition } from '@/game/skills/types';
+import type { SkillEffectDefinition, SkillEffectType } from '@/game/skills/types';
 import { SKILL_EFFECT_TYPES } from '@/game/skills/types';
 import { sanitizeSkillEffectLibrary } from '@/game/skills/schema';
 import { apiFetchJson } from '@/shared/apiClient';
@@ -34,7 +34,7 @@ interface LoadSupabaseIconsResponse {
 interface EffectDraft {
   effect_id: string;
   effect_name: string;
-  effect_type: 'atk_buff' | 'def_buff' | 'speed_buff';
+  effect_type: SkillEffectType;
   description: string;
   iconUrl: string;
 }
@@ -67,9 +67,18 @@ export function SkillEffectsTool() {
   const [isSaving, setIsSaving] = useState(false);
   const [iconEntries, setIconEntries] = useState<SupabaseIconEntry[]>([]);
   const [iconSearchInput, setIconSearchInput] = useState('');
+  const [searchInput, setSearchInput] = useState('');
   const [isLoadingIcons, setIsLoadingIcons] = useState(false);
 
   const selected = useMemo(() => effects.find((e) => e.effect_id === selectedId) ?? null, [effects, selectedId]);
+  const filteredEffects = useMemo(() => {
+    const query = searchInput.trim().toLowerCase();
+    const sorted = [...effects].sort((a, b) => a.effect_name.localeCompare(b.effect_name));
+    if (!query) {
+      return sorted;
+    }
+    return sorted.filter((effect) => effect.effect_name.toLowerCase().includes(query));
+  }, [effects, searchInput]);
 
   const filteredIconEntries = useMemo(() => {
     const query = iconSearchInput.trim().toLowerCase();
@@ -226,10 +235,18 @@ export function SkillEffectsTool() {
               {isSaving ? 'Saving...' : 'Save Effects'}
             </button>
           </div>
+          <label className="admin-row">
+            Search
+            <input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Effect name"
+            />
+          </label>
           {status && <p className="admin-note">{status}</p>}
           {error && <p className="admin-note" style={{ color: '#f7b9b9' }}>{error}</p>}
           <div className="admin-item-grid">
-            {effects.map((e) => (
+            {filteredEffects.map((e) => (
               <button
                 key={e.effect_id}
                 type="button"
@@ -239,10 +256,13 @@ export function SkillEffectsTool() {
                   setDraft(effectToDraft(e));
                 }}
               >
-                {e.effect_id} – {e.effect_name}
+                {e.effect_name}
               </button>
             ))}
             {effects.length === 0 && <p className="admin-note">No effects yet.</p>}
+            {effects.length > 0 && filteredEffects.length === 0 && (
+              <p className="admin-note">No matching effects.</p>
+            )}
           </div>
         </section>
       </section>
@@ -288,6 +308,9 @@ export function SkillEffectsTool() {
           </label>
           <p className="admin-note">
             Buff values and proc chances are configured per skill attachment in the Skills editor.
+          </p>
+          <p className="admin-note">
+            Description placeholders: <code>{'<buff>'}</code> for percent values, <code>{'<recoil>'}</code> for recoil percent, and <code>{'<mode>'}</code> for recoil source label.
           </p>
           <section className="admin-panel" style={{ marginTop: '0.5rem' }}>
             <h4>Icon (Supabase bucket: {ICONS_BUCKET})</h4>

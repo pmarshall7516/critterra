@@ -10,7 +10,8 @@
     "test": "vitest run",
     "db:backfill-tiles": "node scripts/backfill-game-tiles-tileset.mjs",
     "db:migrate-skill-heal-modes": "node scripts/migrate-skill-heal-modes.mjs",
-    "db:migrate-skill-effect-attachments": "node scripts/migrate-skill-effect-attachments.mjs"
+    "db:migrate-skill-effect-attachments": "node scripts/migrate-skill-effect-attachments.mjs",
+    "db:migrate-skill-effects-v2": "node scripts/migrate-skill-effects-v2.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

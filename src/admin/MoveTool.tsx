@@ -3,12 +3,16 @@ import { CRITTER_ELEMENTS } from '@/game/critters/types';
 import type {
   SkillDefinition,
   SkillEffectAttachment,
+  SkillEffectType,
   SkillHealMode,
   SkillPersistentHealMode,
+  SkillRecoilMode,
 } from '@/game/skills/types';
 import {
   DAMAGE_SKILL_HEAL_MODES,
   ELEMENT_SKILL_COLORS,
+  SKILL_EFFECT_TYPES,
+  SKILL_RECOIL_MODES,
   SKILL_TYPES,
   SUPPORT_SKILL_HEAL_MODES,
   getSkillValueDisplayNumber,
@@ -55,6 +59,18 @@ interface AdminSkillCellContentProps {
 
 type SkillDraftHealMode = SkillHealMode | 'none';
 type SkillDraftPersistentHealMode = SkillPersistentHealMode | 'none';
+const STAT_OR_CRIT_EFFECT_TYPES = new Set<SkillEffectType>([
+  'atk_buff',
+  'def_buff',
+  'speed_buff',
+  'self_atk_debuff',
+  'self_def_debuff',
+  'self_speed_debuff',
+  'target_atk_debuff',
+  'target_def_debuff',
+  'target_speed_debuff',
+  'crit_buff',
+]);
 
 const DAMAGE_HEAL_MODE_OPTIONS: Array<{ value: SkillDraftHealMode; label: string }> = [
   { value: 'none', label: 'None' },
@@ -74,6 +90,14 @@ const PERSISTENT_HEAL_MODE_OPTIONS: Array<{ value: SkillDraftPersistentHealMode;
   { value: 'flat', label: 'Flat HP' },
   { value: 'percent_max_hp', label: '% Max HP' },
 ];
+
+function effectUsesBuffPercent(effectType: SkillEffectType | undefined): boolean {
+  return effectType == null || STAT_OR_CRIT_EFFECT_TYPES.has(effectType);
+}
+
+function effectUsesRecoilConfig(effectType: SkillEffectType | undefined): boolean {
+  return effectType === 'recoil';
+}
 
 function formatSkillValue(skill: Pick<SkillDefinition, 'type' | 'damage'>): string | null {
   if (skill.type === 'damage' && skill.damage != null) {
@@ -126,7 +150,10 @@ function formatPersistentHealTooltip(
 }
 
 function buildSkillTooltip(skill: SkillDefinition, effectList: EffectOption[]): string {
-  const lines = [skill.skill_name, `${skill.type === 'damage' ? 'Damage' : 'Support'} • ${skill.element}`];
+  const lines = [
+    skill.skill_name,
+    `${skill.type === 'damage' ? 'Damage' : 'Support'} • ${skill.element} • Priority ${Math.max(1, Math.floor(skill.priority ?? 1))}`,
+  ];
   if (skill.type === 'damage' && skill.damage != null) {
     lines.push(`Power: ${skill.damage}`);
   }
@@ -142,11 +169,22 @@ function buildSkillTooltip(skill: SkillDefinition, effectList: EffectOption[]): 
   const effectAttachments =
     Array.isArray(skill.effectAttachments) && skill.effectAttachments.length > 0
       ? skill.effectAttachments
-      : (skill.effectIds ?? []).map((effectId) => ({
-          effectId,
-          buffPercent: effectById.get(effectId)?.buffPercent ?? 0.1,
-          procChance: 1,
-        }));
+      : (skill.effectIds ?? []).map((effectId) => {
+          const effect = effectById.get(effectId);
+          if (effect?.effectType === 'recoil') {
+            return {
+              effectId,
+              procChance: 1,
+              recoilMode: 'percent_max_hp' as const,
+              recoilPercent: 0.1,
+            };
+          }
+          return {
+            effectId,
+            buffPercent: effectById.get(effectId)?.buffPercent ?? 0.1,
+            procChance: 1,
+          };
+        });
   const effectLines = effectAttachments
     .map((attachment) => {
       const effect = effectById.get(attachment.effectId);
@@ -156,8 +194,13 @@ function buildSkillTooltip(skill: SkillDefinition, effectList: EffectOption[]): 
       }
       const effectDescription = typeof effect.description === 'string' ? effect.description.trim() : '';
       if (effectDescription) {
-        const buffLabel = Math.round((attachment.buffPercent ?? 0) * 100);
-        return `${effectDescription.replace(/<buff>/g, String(buffLabel))} (${procLabel}% chance)`;
+        const buffLabel = Math.round(((attachment.buffPercent ?? effect.buffPercent ?? 0.1) ?? 0) * 100);
+        const recoilLabel = Math.round(((attachment.recoilPercent ?? 0.1) ?? 0) * 100);
+        const recoilModeLabel = attachment.recoilMode === 'percent_damage_dealt' ? 'damage dealt' : 'max HP';
+        return `${effectDescription
+          .replace(/<buff>/g, String(buffLabel))
+          .replace(/<recoil>/g, String(recoilLabel))
+          .replace(/<mode>/g, recoilModeLabel)} (${procLabel}% chance)`;
       }
       return `${effect.name} (${procLabel}% chance)`;
     });
@@ -176,7 +219,7 @@ function AdminSkillCellContent({ skill, effectList, iconsBucketRoot }: AdminSkil
   const effectAttachments =
     Array.isArray(skill.effectAttachments) && skill.effectAttachments.length > 0
       ? skill.effectAttachments
-      : (skill.effectIds ?? []).map((effectId) => ({ effectId, buffPercent: 0.1, procChance: 1 }));
+      : (skill.effectIds ?? []).map((effectId) => ({ effectId, procChance: 1, buffPercent: 0.1 }));
   const effectIconUrls = effectAttachments
     .map((attachment) => {
       const effect = effectList.find((e) => e.id === attachment.effectId);
@@ -220,6 +263,7 @@ interface SkillDraft {
   skill_name: string;
   element: string;
   type: SkillDraftType;
+  priority: string;
   damage: string;
   healMode: SkillHealMode;
   healValue: string;
@@ -233,6 +277,8 @@ interface SkillEffectAttachmentDraft {
   effectId: string;
   buffPercent: string;
   procChance: string;
+  recoilMode: SkillRecoilMode;
+  recoilPercent: string;
 }
 
 const emptyDraft: SkillDraft = {
@@ -240,6 +286,7 @@ const emptyDraft: SkillDraft = {
   skill_name: '',
   element: 'normal',
   type: 'damage',
+  priority: '1',
   damage: '20',
   healMode: 'none',
   healValue: '0',
@@ -299,11 +346,23 @@ function normalizeSkillAttachmentDrafts(
         continue;
       }
       const fallbackBuff = typeof effectById.get(id)?.buffPercent === 'number' ? effectById.get(id)!.buffPercent! : 0.1;
+      const effectType = effectById.get(id)?.effectType;
       normalized.set(id, {
         effectId: id,
         buffPercent: String(Math.max(0, Math.min(1, attachment.buffPercent ?? fallbackBuff))),
         procChance: String(Math.max(0, Math.min(1, attachment.procChance ?? 1))),
+        recoilMode:
+          attachment.recoilMode && SKILL_RECOIL_MODES.includes(attachment.recoilMode)
+            ? attachment.recoilMode
+            : 'percent_max_hp',
+        recoilPercent: String(Math.max(0, Math.min(1, attachment.recoilPercent ?? 0.1))),
       });
+      if (effectType === 'recoil') {
+        const existing = normalized.get(id);
+        if (existing) {
+          existing.buffPercent = String(fallbackBuff);
+        }
+      }
     }
   }
   if (normalized.size === 0) {
@@ -313,10 +372,13 @@ function normalizeSkillAttachmentDrafts(
         continue;
       }
       const fallbackBuff = typeof effectById.get(id)?.buffPercent === 'number' ? effectById.get(id)!.buffPercent! : 0.1;
+      const effectType = effectById.get(id)?.effectType;
       normalized.set(id, {
         effectId: id,
         buffPercent: String(Math.max(0, Math.min(1, fallbackBuff))),
         procChance: '1',
+        recoilMode: 'percent_max_hp',
+        recoilPercent: effectType === 'recoil' ? '0.1' : '0',
       });
     }
   }
@@ -331,6 +393,7 @@ function skillToDraft(skill: SkillDefinition, effectList: EffectOption[]): Skill
     skill_name: skill.skill_name,
     element: skill.element,
     type: skill.type,
+    priority: String(Math.max(1, Math.floor(skill.priority ?? 1))),
     damage: skill.type === 'damage' && skill.damage != null ? String(skill.damage) : '20',
     healMode,
     healValue: typeof skill.healValue === 'number' ? String(skill.healValue) : '0',
@@ -347,6 +410,7 @@ function skillToDraft(skill: SkillDefinition, effectList: EffectOption[]): Skill
 
 function buildSkillEffectAttachmentsFromDraft(
   draftAttachments: SkillEffectAttachmentDraft[],
+  effectById: Map<string, EffectOption>,
 ): SkillEffectAttachment[] {
   const deduped = new Map<string, SkillEffectAttachment>();
   for (const entry of draftAttachments) {
@@ -354,11 +418,20 @@ function buildSkillEffectAttachmentsFromDraft(
     if (!effectId) {
       continue;
     }
-    deduped.set(effectId, {
+    const effectType = effectById.get(effectId)?.effectType;
+    const normalized: SkillEffectAttachment = {
       effectId,
-      buffPercent: sanitizeAttachmentNumber(entry.buffPercent, 0.1),
       procChance: sanitizeAttachmentNumber(entry.procChance, 1),
-    });
+    };
+    if (effectType === 'recoil') {
+      normalized.recoilMode = SKILL_RECOIL_MODES.includes(entry.recoilMode)
+        ? entry.recoilMode
+        : 'percent_max_hp';
+      normalized.recoilPercent = sanitizeAttachmentNumber(entry.recoilPercent, 0.1);
+    } else {
+      normalized.buffPercent = sanitizeAttachmentNumber(entry.buffPercent, 0.1);
+    }
+    deduped.set(effectId, normalized);
   }
   return Array.from(deduped.values());
 }
@@ -371,12 +444,15 @@ function buildAttachmentDraftFromEffectOption(effect: EffectOption): SkillEffect
     effectId: effect.id,
     buffPercent: String(defaultBuff),
     procChance: '1',
+    recoilMode: 'percent_max_hp',
+    recoilPercent: effect.effectType === 'recoil' ? '0.1' : '0',
   };
 }
 
 interface EffectOption {
   id: string;
   name: string;
+  effectType: SkillEffectType;
   description?: string;
   buffPercent?: number;
   iconUrl?: string;
@@ -456,15 +532,28 @@ export function MoveTool() {
           (e: {
             effect_id?: string;
             effect_name?: string;
+            effect_type?: string;
+            effectType?: string;
             description?: string;
             effect_description?: string;
             buffPercent?: number;
             buff_percent?: number;
             iconUrl?: string;
             icon_url?: string;
-          }) => ({
+          }) => {
+          const effectTypeRaw =
+            typeof e?.effect_type === 'string'
+              ? e.effect_type
+              : typeof e?.effectType === 'string'
+                ? e.effectType
+                : '';
+          const effectType = SKILL_EFFECT_TYPES.includes(effectTypeRaw as SkillEffectType)
+            ? (effectTypeRaw as SkillEffectType)
+            : 'atk_buff';
+          return ({
           id: typeof e?.effect_id === 'string' ? e.effect_id : '',
           name: typeof e?.effect_name === 'string' ? e.effect_name : String(e?.effect_id ?? ''),
+          effectType,
           description:
             typeof e?.description === 'string' && e.description.trim()
               ? e.description.trim()
@@ -483,18 +572,20 @@ export function MoveTool() {
               : typeof e?.icon_url === 'string' && e.icon_url.trim()
                 ? e.icon_url.trim()
                 : undefined,
-        }),
+        });
+        },
         )
         .filter((x) => x.id.length > 0);
       setEffectList(list);
       const rawSkills = result.data?.critterSkills;
       const knownEffectIds = new Set(effectIdList);
+      const effectTypeById = new Map(list.map((effect) => [effect.id, effect.effectType] as const));
       const legacyEffectBuffPercentById = new Map(
         list
           .filter((effect) => typeof effect.buffPercent === 'number' && Number.isFinite(effect.buffPercent))
           .map((effect) => [effect.id, effect.buffPercent as number]),
       );
-      const loaded = sanitizeSkillLibrary(rawSkills, knownEffectIds, legacyEffectBuffPercentById);
+      const loaded = sanitizeSkillLibrary(rawSkills, knownEffectIds, legacyEffectBuffPercentById, effectTypeById);
       setSkills(loaded);
       if (loaded.length > 0 && !selectedSkillId) {
         setSelectedSkillId(loaded[0].skill_id);
@@ -536,6 +627,7 @@ export function MoveTool() {
         skill_name: s.skill_name,
         element: s.element,
         type: s.type,
+        priority: s.priority,
         damage: s.type === 'damage' ? s.damage : undefined,
         healMode: s.healMode,
         healValue: s.healMode ? s.healValue : undefined,
@@ -582,6 +674,8 @@ export function MoveTool() {
       setError('Skill ID and name are required.');
       return;
     }
+    const effectById = new Map(effectList.map((effect) => [effect.id, effect]));
+    const priority = Math.max(1, Math.min(999, parseInt(draft.priority, 10) || 1));
     const damageNum = draft.type === 'damage' ? Math.max(1, parseInt(draft.damage, 10) || 20) : undefined;
     const healValue = parseDraftHealValue(activeHealMode, draft.healValue);
     const resolvedPersistentHealMode: SkillPersistentHealMode | undefined =
@@ -596,13 +690,14 @@ export function MoveTool() {
       resolvedPersistentHealMode
         ? Math.max(1, Math.min(999, parseInt(draft.persistentHealDurationTurns, 10) || 1))
         : undefined;
-    const effectAttachments = buildSkillEffectAttachmentsFromDraft(draft.effectAttachments);
+    const effectAttachments = buildSkillEffectAttachmentsFromDraft(draft.effectAttachments, effectById);
     const effectIds = effectAttachments.map((attachment) => attachment.effectId);
     const newSkill: SkillDefinition = {
       skill_id: id,
       skill_name: name,
       element: draft.element as SkillDefinition['element'],
       type: draft.type,
+      priority,
       ...(draft.type === 'damage' && { damage: damageNum }),
       ...(draft.type === 'support' && activeHealMode !== 'none' && { healMode: activeHealMode, healValue }),
       ...(draft.type === 'damage' && activeHealMode !== 'none' && { healMode: activeHealMode, healValue }),
@@ -748,6 +843,17 @@ export function MoveTool() {
                 ))}
               </select>
             </label>
+            <label>
+              Priority
+              <input
+                type="number"
+                min={1}
+                max={999}
+                step={1}
+                value={draft.priority}
+                onChange={(e) => setDraft((d) => ({ ...d, priority: e.target.value }))}
+              />
+            </label>
           </div>
           {draft.type === 'damage' && (
             <label>
@@ -857,8 +963,15 @@ export function MoveTool() {
                 {draft.effectAttachments.map((attachment) => {
                   const opt = effectList.find((e) => e.id === attachment.effectId);
                   const id = attachment.effectId;
+                  const usesRecoil = effectUsesRecoilConfig(opt?.effectType);
+                  const usesBuff = effectUsesBuffPercent(opt?.effectType);
+                  const valueLabel = usesRecoil
+                    ? `recoil ${Math.round(sanitizeAttachmentNumber(attachment.recoilPercent, 0.1) * 100)}% (${attachment.recoilMode})`
+                    : usesBuff
+                      ? `buff ${Math.round(sanitizeAttachmentNumber(attachment.buffPercent, 0.1) * 100)}%`
+                      : 'config';
                   return (
-                    <span key={id} className="admin-effect-picker__chip" title={`${id}: buff ${Math.round(sanitizeAttachmentNumber(attachment.buffPercent, 0.1) * 100)}%, proc ${Math.round(sanitizeAttachmentNumber(attachment.procChance, 1) * 100)}%`}>
+                    <span key={id} className="admin-effect-picker__chip" title={`${id}: ${valueLabel}, proc ${Math.round(sanitizeAttachmentNumber(attachment.procChance, 1) * 100)}%`}>
                       {opt ? `${opt.id} – ${opt.name}` : id}
                       <button
                         type="button"
@@ -954,31 +1067,81 @@ export function MoveTool() {
               <div className="admin-grid-2">
                 {draft.effectAttachments.map((attachment) => {
                   const effect = effectList.find((entry) => entry.id === attachment.effectId);
+                  const usesRecoil = effectUsesRecoilConfig(effect?.effectType);
+                  const usesBuff = effectUsesBuffPercent(effect?.effectType);
                   return (
                     <div key={attachment.effectId} className="admin-panel" style={{ margin: 0 }}>
                       <h5 style={{ marginTop: 0, marginBottom: '0.4rem' }}>
                         {effect ? `${effect.id} – ${effect.name}` : attachment.effectId}
                       </h5>
-                      <label>
-                        Buff % (0–1)
-                        <input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.01}
-                          value={attachment.buffPercent}
-                          onChange={(e) =>
-                            setDraft((d) => ({
-                              ...d,
-                              effectAttachments: d.effectAttachments.map((entry) =>
-                                entry.effectId === attachment.effectId
-                                  ? { ...entry, buffPercent: e.target.value }
-                                  : entry,
-                              ),
-                            }))
-                          }
-                        />
-                      </label>
+                      {usesBuff && (
+                        <label>
+                          Buff % (0–1)
+                          <input
+                            type="number"
+                            min={0}
+                            max={1}
+                            step={0.01}
+                            value={attachment.buffPercent}
+                            onChange={(e) =>
+                              setDraft((d) => ({
+                                ...d,
+                                effectAttachments: d.effectAttachments.map((entry) =>
+                                  entry.effectId === attachment.effectId
+                                    ? { ...entry, buffPercent: e.target.value }
+                                    : entry,
+                                ),
+                              }))
+                            }
+                          />
+                        </label>
+                      )}
+                      {usesRecoil && (
+                        <>
+                          <label>
+                            Recoil Mode
+                            <select
+                              value={attachment.recoilMode}
+                              onChange={(e) =>
+                                setDraft((d) => ({
+                                  ...d,
+                                  effectAttachments: d.effectAttachments.map((entry) =>
+                                    entry.effectId === attachment.effectId
+                                      ? { ...entry, recoilMode: e.target.value as SkillRecoilMode }
+                                      : entry,
+                                  ),
+                                }))
+                              }
+                            >
+                              {SKILL_RECOIL_MODES.map((mode) => (
+                                <option key={mode} value={mode}>
+                                  {mode}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            Recoil % (0–1)
+                            <input
+                              type="number"
+                              min={0}
+                              max={1}
+                              step={0.01}
+                              value={attachment.recoilPercent}
+                              onChange={(e) =>
+                                setDraft((d) => ({
+                                  ...d,
+                                  effectAttachments: d.effectAttachments.map((entry) =>
+                                    entry.effectId === attachment.effectId
+                                      ? { ...entry, recoilPercent: e.target.value }
+                                      : entry,
+                                  ),
+                                }))
+                              }
+                            />
+                          </label>
+                        </>
+                      )}
                       <label>
                         Proc Chance (0–1)
                         <input

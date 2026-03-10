@@ -3,6 +3,30 @@ import { GameRuntime } from '@/game/engine/runtime';
 import type { SkillDefinition } from '@/game/skills/types';
 
 function createRuntimeHarness(attacker: Record<string, unknown>, defender: Record<string, unknown>) {
+  if (typeof attacker.pendingCritChanceBonus !== 'number') {
+    attacker.pendingCritChanceBonus = 0;
+  }
+  if (typeof defender.pendingCritChanceBonus !== 'number') {
+    defender.pendingCritChanceBonus = 0;
+  }
+  if (typeof attacker.equipmentDefensePositiveBonus !== 'number') {
+    attacker.equipmentDefensePositiveBonus = 0;
+  }
+  if (typeof defender.equipmentDefensePositiveBonus !== 'number') {
+    defender.equipmentDefensePositiveBonus = 0;
+  }
+  if (!Array.isArray(attacker.activeEffectIds)) {
+    attacker.activeEffectIds = [];
+  }
+  if (!Array.isArray(defender.activeEffectIds)) {
+    defender.activeEffectIds = [];
+  }
+  if (!attacker.activeEffectSourceById || typeof attacker.activeEffectSourceById !== 'object') {
+    attacker.activeEffectSourceById = {};
+  }
+  if (!defender.activeEffectSourceById || typeof defender.activeEffectSourceById !== 'object') {
+    defender.activeEffectSourceById = {};
+  }
   const runtime: any = Object.create(GameRuntime.prototype);
   runtime.elementChart = [];
   runtime.skillEffectLookupById = {};
@@ -83,6 +107,7 @@ describe('GameRuntime skill healing', () => {
       skill_name: 'Field Patch',
       element: 'bloom',
       type: 'support',
+      priority: 1,
       healMode: 'flat',
       healValue: 12,
     };
@@ -136,6 +161,7 @@ describe('GameRuntime skill healing', () => {
       skill_name: 'Drain Bite',
       element: 'bloom',
       type: 'damage',
+      priority: 1,
       damage: 40,
       healMode: 'percent_damage',
       healValue: 0.5,
@@ -217,6 +243,7 @@ describe('GameRuntime skill healing', () => {
       skill_name: 'Drain Burst',
       element: 'bloom',
       type: 'damage',
+      priority: 1,
       damage: 40,
       healMode: 'percent_damage',
       healValue: 0.5,
@@ -296,6 +323,7 @@ describe('GameRuntime skill healing', () => {
       skill_name: 'Sap',
       element: 'bloom',
       type: 'damage',
+      priority: 1,
       damage: 10,
       healMode: 'percent_damage',
       healValue: 0.2,
@@ -360,6 +388,7 @@ describe('GameRuntime skill healing', () => {
       skill_name: 'Battle Focus',
       element: 'bloom',
       type: 'support',
+      priority: 1,
       effectAttachments: [{ effectId: 'battle-focus', buffPercent: 0.2, procChance: 0.25 }],
       effectIds: ['battle-focus'],
     };
@@ -421,6 +450,7 @@ describe('GameRuntime skill healing', () => {
       skill_name: 'Battle Focus',
       element: 'bloom',
       type: 'support',
+      priority: 1,
       effectAttachments: [{ effectId: 'battle-focus', buffPercent: 0.2, procChance: 1 }],
       effectIds: ['battle-focus'],
     };
@@ -466,6 +496,7 @@ describe('GameRuntime skill healing', () => {
       skill_name: 'Aqua Ring',
       element: 'tide',
       type: 'support',
+      priority: 1,
       healMode: 'flat',
       healValue: 0,
       persistentHealMode: 'flat',

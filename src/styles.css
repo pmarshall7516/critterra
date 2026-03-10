@@ -3252,11 +3252,31 @@ button.secondary:hover:not(:disabled) {
   max-width: 380px;
 }
 
+.critter-database-panel--critter {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .critter-database-list {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
   margin-top: 0.5rem;
+}
+
+.critter-database-list--critter {
+  max-height: clamp(16rem, 56vh, 36rem);
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
+
+.critter-database-search {
+  align-items: flex-start;
+}
+
+.critter-database-search input {
+  width: 100%;
 }
 
 .critter-db-card {

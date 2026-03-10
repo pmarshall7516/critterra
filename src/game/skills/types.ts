@@ -1,7 +1,22 @@
 import type { CritterElement } from '@/game/critters/types';
 
-export const SKILL_EFFECT_TYPES = ['atk_buff', 'def_buff', 'speed_buff'] as const;
+export const SKILL_EFFECT_TYPES = [
+  'atk_buff',
+  'def_buff',
+  'speed_buff',
+  'self_atk_debuff',
+  'self_def_debuff',
+  'self_speed_debuff',
+  'target_atk_debuff',
+  'target_def_debuff',
+  'target_speed_debuff',
+  'crit_buff',
+  'recoil',
+] as const;
 export type SkillEffectType = (typeof SKILL_EFFECT_TYPES)[number];
+
+export const SKILL_RECOIL_MODES = ['percent_max_hp', 'percent_damage_dealt'] as const;
+export type SkillRecoilMode = (typeof SKILL_RECOIL_MODES)[number];
 
 export const SKILL_TYPES = ['damage', 'support'] as const;
 export type SkillType = (typeof SKILL_TYPES)[number];
@@ -21,8 +36,13 @@ export type SkillPersistentHealMode = (typeof SKILL_PERSISTENT_HEAL_MODES)[numbe
 
 export interface SkillEffectAttachment {
   effectId: string;
-  buffPercent: number;
   procChance: number;
+  /** Used by stat buffs/debuffs and crit buff. */
+  buffPercent?: number;
+  /** Recoil mode (recoil effects only). */
+  recoilMode?: SkillRecoilMode;
+  /** Recoil value in 0..1 (recoil effects only). */
+  recoilPercent?: number;
 }
 
 export interface SkillEffectDefinition {
@@ -41,6 +61,8 @@ export interface SkillDefinition {
   skill_name: string;
   element: CritterElement;
   type: SkillType;
+  /** Priority used for turn order. Higher acts first. Defaults to 1. */
+  priority: number;
   /** Present when type === 'damage'. Integer power (e.g. 10, 20, 40). */
   damage?: number;
   /** Optional heal behavior. Damage skills may omit this when no healing is attached. */
@@ -126,5 +148,6 @@ export const DEFAULT_TACKLE_SKILL: SkillDefinition = {
   skill_name: 'Tackle',
   element: 'normal',
   type: 'damage',
+  priority: 1,
   damage: 20,
 };

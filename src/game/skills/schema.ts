@@ -12,6 +12,7 @@ import type {
   SkillEffectType,
   SkillHealMode,
   SkillPersistentHealMode,
+  SkillRecoilMode,
   SkillType,
   SupportSkillHealMode,
 } from '@/game/skills/types';
@@ -19,6 +20,7 @@ import {
   DAMAGE_SKILL_HEAL_MODES,
   SKILL_EFFECT_TYPES,
   SKILL_PERSISTENT_HEAL_MODES,
+  SKILL_RECOIL_MODES,
   SKILL_TYPES,
   SUPPORT_SKILL_HEAL_MODES,
 } from '@/game/skills/types';
@@ -29,6 +31,19 @@ const PERSISTENT_HEAL_MODE_SET = new Set<SkillPersistentHealMode>(SKILL_PERSISTE
 const SKILL_TYPE_SET = new Set<SkillType>(SKILL_TYPES);
 const DAMAGE_SKILL_HEAL_MODE_SET = new Set<DamageSkillHealMode>(DAMAGE_SKILL_HEAL_MODES);
 const SUPPORT_SKILL_HEAL_MODE_SET = new Set<SupportSkillHealMode>(SUPPORT_SKILL_HEAL_MODES);
+const SKILL_RECOIL_MODE_SET = new Set<SkillRecoilMode>(SKILL_RECOIL_MODES);
+const STAT_OR_CRIT_EFFECT_TYPE_SET = new Set<SkillEffectType>([
+  'atk_buff',
+  'def_buff',
+  'speed_buff',
+  'self_atk_debuff',
+  'self_def_debuff',
+  'self_speed_debuff',
+  'target_atk_debuff',
+  'target_def_debuff',
+  'target_speed_debuff',
+  'crit_buff',
+]);
 
 function clampInt(value: unknown, min: number, max: number, fallback: number): number {
   const parsed = typeof value === 'number' && Number.isFinite(value)
@@ -165,6 +180,7 @@ function sanitizeSkillEffectAttachments(
   raw: unknown,
   knownEffectIds?: Set<string>,
   legacyEffectBuffPercentById?: ReadonlyMap<string, number>,
+  effectTypeById?: ReadonlyMap<string, SkillEffectType>,
 ): SkillEffectAttachment[] | undefined {
   if (!Array.isArray(raw)) {
     return undefined;
@@ -187,19 +203,52 @@ function sanitizeSkillEffectAttachments(
     if (knownEffectIds && !knownEffectIds.has(effectId)) {
       continue;
     }
+    const effectType = effectTypeById?.get(effectId);
+    const hasRecoilConfig =
+      record.recoilMode !== undefined ||
+      record.recoil_mode !== undefined ||
+      record.recoilPercent !== undefined ||
+      record.recoil_percent !== undefined;
     const legacyBuffFallback = legacyEffectBuffPercentById?.get(effectId);
-    const buffPercent = clampFloat(
-      record.buffPercent ?? record.buff_percent,
-      0,
-      1,
-      typeof legacyBuffFallback === 'number' ? legacyBuffFallback : 0.1,
-    );
     const procChance = clampFloat(record.procChance ?? record.proc_chance, 0, 1, 1);
-    parsed.push({
+    const normalized: SkillEffectAttachment = {
       effectId,
-      buffPercent,
       procChance,
-    });
+    };
+    if (effectType === 'recoil' || hasRecoilConfig) {
+      const recoilModeRaw = typeof record.recoilMode === 'string'
+        ? record.recoilMode
+        : typeof record.recoil_mode === 'string'
+          ? record.recoil_mode
+          : '';
+      const recoilMode = SKILL_RECOIL_MODE_SET.has(recoilModeRaw as SkillRecoilMode)
+        ? (recoilModeRaw as SkillRecoilMode)
+        : 'percent_max_hp';
+      normalized.recoilMode = recoilMode;
+      normalized.recoilPercent = clampFloat(
+        record.recoilPercent ?? record.recoil_percent,
+        0,
+        1,
+        0.1,
+      );
+    }
+    if (effectType !== 'recoil' || !hasRecoilConfig) {
+      normalized.buffPercent = clampFloat(
+        record.buffPercent ?? record.buff_percent,
+        0,
+        1,
+        typeof legacyBuffFallback === 'number' ? legacyBuffFallback : 0.1,
+      );
+    }
+    if (
+      effectType === 'recoil' &&
+      normalized.recoilMode == null &&
+      normalized.recoilPercent == null
+    ) {
+      normalized.recoilMode = 'percent_max_hp';
+      normalized.recoilPercent = 0.1;
+    }
+    parsed.push(normalized);
     seen.add(effectId);
   }
   return parsed.length > 0 ? parsed : undefined;
@@ -273,6 +322,7 @@ export function sanitizeSkillDefinition(
   fallbackIndex = 0,
   knownEffectIds?: Set<string>,
   legacyEffectBuffPercentById?: ReadonlyMap<string, number>,
+  effectTypeById?: ReadonlyMap<string, SkillEffectType>,
 ): SkillDefinition | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return null;
@@ -300,6 +350,7 @@ export function sanitizeSkillDefinition(
   const type = SKILL_TYPE_SET.has(typeRaw as SkillType)
     ? (typeRaw as SkillType)
     : 'damage';
+  const priority = clampInt(record.priority, 1, 999, 1);
 
   const damage =
     type === 'damage'
@@ -354,16 +405,68 @@ export function sanitizeSkillDefinition(
     sanitizeSkillEffectIdArray(record.effectIds, knownEffectIds) ??
     sanitizeSkillEffectIdArray(record.effect_ids, knownEffectIds);
   let effectAttachments =
-    sanitizeSkillEffectAttachments(record.effectAttachments, knownEffectIds, legacyEffectBuffPercentById) ??
-    sanitizeSkillEffectAttachments(record.effect_attachments, knownEffectIds, legacyEffectBuffPercentById);
+    sanitizeSkillEffectAttachments(
+      record.effectAttachments,
+      knownEffectIds,
+      legacyEffectBuffPercentById,
+      effectTypeById,
+    ) ??
+    sanitizeSkillEffectAttachments(
+      record.effect_attachments,
+      knownEffectIds,
+      legacyEffectBuffPercentById,
+      effectTypeById,
+    );
   let effectIds = effectIdsFromRecord;
 
   if (!effectAttachments && effectIdsFromRecord && effectIdsFromRecord.length > 0) {
-    effectAttachments = effectIdsFromRecord.map((effectId) => ({
-      effectId,
-      buffPercent: clampFloat(legacyEffectBuffPercentById?.get(effectId), 0, 1, 0.1),
-      procChance: 1,
-    }));
+    effectAttachments = effectIdsFromRecord.map((effectId) => {
+      const effectType = effectTypeById?.get(effectId);
+      if (effectType === 'recoil') {
+        return {
+          effectId,
+          procChance: 1,
+          recoilMode: 'percent_max_hp',
+          recoilPercent: 0.1,
+        };
+      }
+      return {
+        effectId,
+        procChance: 1,
+        buffPercent: clampFloat(legacyEffectBuffPercentById?.get(effectId), 0, 1, 0.1),
+      };
+    });
+  }
+  if (effectAttachments) {
+    effectAttachments = effectAttachments.map((attachment) => {
+      const effectType = effectTypeById?.get(attachment.effectId);
+      if (effectType === 'recoil') {
+        return {
+          effectId: attachment.effectId,
+          procChance: clampFloat(attachment.procChance, 0, 1, 1),
+          recoilMode:
+            attachment.recoilMode && SKILL_RECOIL_MODE_SET.has(attachment.recoilMode)
+              ? attachment.recoilMode
+              : 'percent_max_hp',
+          recoilPercent: clampFloat(attachment.recoilPercent, 0, 1, 0.1),
+        };
+      }
+      const fallbackBuff = legacyEffectBuffPercentById?.get(attachment.effectId);
+      const shouldDefaultBuff =
+        effectType == null || STAT_OR_CRIT_EFFECT_TYPE_SET.has(effectType);
+      return {
+        effectId: attachment.effectId,
+        procChance: clampFloat(attachment.procChance, 0, 1, 1),
+        ...(shouldDefaultBuff && {
+          buffPercent: clampFloat(
+            attachment.buffPercent,
+            0,
+            1,
+            typeof fallbackBuff === 'number' ? fallbackBuff : 0.1,
+          ),
+        }),
+      };
+    });
   }
   if (!effectIds && effectAttachments && effectAttachments.length > 0) {
     effectIds = effectAttachments.map((entry) => entry.effectId);
@@ -374,6 +477,7 @@ export function sanitizeSkillDefinition(
     skill_name,
     element,
     type,
+    priority,
     ...(type === 'damage' && { damage }),
     ...(healMode && { healMode }),
     ...(typeof healValue === 'number' && { healValue }),
@@ -389,6 +493,7 @@ export function sanitizeSkillLibrary(
   raw: unknown,
   knownEffectIds?: Set<string>,
   legacyEffectBuffPercentById?: ReadonlyMap<string, number>,
+  effectTypeById?: ReadonlyMap<string, SkillEffectType>,
 ): SkillDefinition[] {
   if (!Array.isArray(raw)) {
     return [];
@@ -396,7 +501,13 @@ export function sanitizeSkillLibrary(
   const seen = new Set<string>();
   const parsed: SkillDefinition[] = [];
   for (let i = 0; i < raw.length; i += 1) {
-    const skill = sanitizeSkillDefinition(raw[i], i, knownEffectIds, legacyEffectBuffPercentById);
+    const skill = sanitizeSkillDefinition(
+      raw[i],
+      i,
+      knownEffectIds,
+      legacyEffectBuffPercentById,
+      effectTypeById,
+    );
     if (!skill || seen.has(skill.skill_id)) {
       continue;
     }

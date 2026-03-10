@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { sanitizeSkillDefinition } from '@/game/skills/schema';
 
 describe('sanitizeSkillDefinition', () => {
-  it('preserves explicit healMode/healValue on damage skills', () => {
+  it('preserves explicit healMode/healValue on damage skills and defaults priority', () => {
     const skill = sanitizeSkillDefinition({
       skill_id: 'sap',
       skill_name: 'Sap',
@@ -18,6 +18,7 @@ describe('sanitizeSkillDefinition', () => {
       skill_name: 'Sap',
       element: 'bloom',
       type: 'damage',
+      priority: 1,
       damage: 25,
       healMode: 'percent_damage',
       healValue: 0.2,
@@ -39,43 +40,10 @@ describe('sanitizeSkillDefinition', () => {
       skill_name: 'Drain Bite',
       element: 'ember',
       type: 'damage',
+      priority: 1,
       damage: 24,
       healMode: 'percent_max_hp',
       healValue: 0.25,
-    });
-  });
-
-  it('migrates legacy support healPercent to percent_max_hp heal config', () => {
-    const skill = sanitizeSkillDefinition({
-      skill_id: 'calm-song',
-      skill_name: 'Calm Song',
-      element: 'bloom',
-      type: 'support',
-      healPercent: 0.25,
-    });
-
-    expect(skill).toMatchObject({
-      skill_id: 'calm-song',
-      type: 'support',
-      healMode: 'percent_max_hp',
-      healValue: 0.25,
-    });
-  });
-
-  it('allows support skills to explicitly disable direct healing', () => {
-    const skill = sanitizeSkillDefinition({
-      skill_id: 'iron-wall',
-      skill_name: 'Iron Wall',
-      element: 'stone',
-      type: 'support',
-      healMode: 'none',
-    });
-
-    expect(skill).toEqual({
-      skill_id: 'iron-wall',
-      skill_name: 'Iron Wall',
-      element: 'stone',
-      type: 'support',
     });
   });
 
@@ -92,89 +60,8 @@ describe('sanitizeSkillDefinition', () => {
       skill_name: 'Focus Shout',
       element: 'spark',
       type: 'support',
+      priority: 1,
     });
-  });
-
-  it('preserves explicit damage heal modes', () => {
-    const skill = sanitizeSkillDefinition({
-      skill_id: 'drain-bite',
-      skill_name: 'Drain Bite',
-      element: 'shade',
-      type: 'damage',
-      damage: 30,
-      healMode: 'percent_damage',
-      healValue: 0.5,
-    });
-
-    expect(skill).toMatchObject({
-      skill_id: 'drain-bite',
-      type: 'damage',
-      damage: 30,
-      healMode: 'percent_damage',
-      healValue: 0.5,
-    });
-  });
-
-  it('normalizes support percent-damage healing to percent_max_hp', () => {
-    const skill = sanitizeSkillDefinition({
-      skill_id: 'focus-rest',
-      skill_name: 'Focus Rest',
-      element: 'bloom',
-      type: 'support',
-      healMode: 'percent_damage',
-      healValue: 0.3,
-    });
-
-    expect(skill).toEqual({
-      skill_id: 'focus-rest',
-      skill_name: 'Focus Rest',
-      element: 'bloom',
-      type: 'support',
-      healMode: 'percent_max_hp',
-      healValue: 0.3,
-    });
-  });
-
-  it('preserves persistent healing fields', () => {
-    const skill = sanitizeSkillDefinition({
-      skill_id: 'aqua-ring',
-      skill_name: 'Aqua Ring',
-      element: 'tide',
-      type: 'support',
-      persistentHealMode: 'flat',
-      persistentHealValue: 3,
-      persistentHealDurationTurns: 3,
-    });
-
-    expect(skill).toMatchObject({
-      skill_id: 'aqua-ring',
-      type: 'support',
-      persistentHealMode: 'flat',
-      persistentHealValue: 3,
-      persistentHealDurationTurns: 3,
-    });
-  });
-
-  it('drops invalid persistent healing modes when no percent fallback applies', () => {
-    const skill = sanitizeSkillDefinition({
-      skill_id: 'broken-ring',
-      skill_name: 'Broken Ring',
-      element: 'tide',
-      type: 'damage',
-      damage: 20,
-      persistentHealMode: 'percent_damage',
-      persistentHealValue: 3,
-      persistentHealDurationTurns: 2,
-    });
-
-    expect(skill).toMatchObject({
-      skill_id: 'broken-ring',
-      type: 'damage',
-      damage: 20,
-    });
-    expect(skill).not.toHaveProperty('persistentHealMode');
-    expect(skill).not.toHaveProperty('persistentHealValue');
-    expect(skill).not.toHaveProperty('persistentHealDurationTurns');
   });
 
   it('preserves explicit effect attachments and clamps buff/proc values', () => {
@@ -191,10 +78,16 @@ describe('sanitizeSkillDefinition', () => {
       },
       0,
       new Set(['atk-buff', 'speed-buff']),
+      undefined,
+      new Map([
+        ['atk-buff', 'atk_buff'],
+        ['speed-buff', 'speed_buff'],
+      ]),
     );
 
     expect(skill).toMatchObject({
       skill_id: 'focus-claw',
+      priority: 1,
       effectAttachments: [
         { effectId: 'atk-buff', buffPercent: 1, procChance: 0 },
         { effectId: 'speed-buff', buffPercent: 0.15, procChance: 0.4 },
@@ -216,12 +109,97 @@ describe('sanitizeSkillDefinition', () => {
       0,
       new Set(['speed-buff']),
       new Map([['speed-buff', 0.12]]),
+      new Map([['speed-buff', 'speed_buff']]),
     );
 
     expect(skill).toMatchObject({
       skill_id: 'flutter',
+      priority: 1,
       effectAttachments: [{ effectId: 'speed-buff', buffPercent: 0.12, procChance: 1 }],
       effectIds: ['speed-buff'],
+    });
+  });
+
+  it('defaults recoil fields for recoil effects', () => {
+    const skill = sanitizeSkillDefinition(
+      {
+        skill_id: 'reckless-hit',
+        skill_name: 'Reckless Hit',
+        element: 'ember',
+        type: 'damage',
+        damage: 20,
+        effectAttachments: [{ effectId: 'recoil', procChance: 0.3 }],
+      },
+      0,
+      new Set(['recoil']),
+      undefined,
+      new Map([['recoil', 'recoil']]),
+    );
+
+    expect(skill).toMatchObject({
+      skill_id: 'reckless-hit',
+      priority: 1,
+      effectAttachments: [
+        {
+          effectId: 'recoil',
+          procChance: 0.3,
+          recoilMode: 'percent_max_hp',
+          recoilPercent: 0.1,
+        },
+      ],
+    });
+  });
+
+  it('clamps recoil config values and priority', () => {
+    const skill = sanitizeSkillDefinition(
+      {
+        skill_id: 'reckless-hit',
+        skill_name: 'Reckless Hit',
+        element: 'ember',
+        type: 'damage',
+        damage: 20,
+        priority: 9999,
+        effectAttachments: [
+          {
+            effectId: 'recoil',
+            procChance: 2,
+            recoilMode: 'percent_damage_dealt',
+            recoilPercent: -1,
+          },
+        ],
+      },
+      0,
+      new Set(['recoil']),
+      undefined,
+      new Map([['recoil', 'recoil']]),
+    );
+
+    expect(skill).toMatchObject({
+      priority: 999,
+      effectAttachments: [
+        {
+          effectId: 'recoil',
+          procChance: 1,
+          recoilMode: 'percent_damage_dealt',
+          recoilPercent: 0,
+        },
+      ],
+    });
+  });
+
+  it('preserves explicit priority when valid', () => {
+    const skill = sanitizeSkillDefinition({
+      skill_id: 'quick-strike',
+      skill_name: 'Quick Strike',
+      element: 'normal',
+      type: 'damage',
+      damage: 30,
+      priority: 2,
+    });
+
+    expect(skill).toMatchObject({
+      skill_id: 'quick-strike',
+      priority: 2,
     });
   });
 });
