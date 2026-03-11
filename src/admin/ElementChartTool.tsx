@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CRITTER_ELEMENTS } from '@/game/critters/types';
-import type { ElementChart } from '@/game/skills/types';
 import { sanitizeElementChartWithElements } from '@/game/skills/schema';
 import { apiFetchJson } from '@/shared/apiClient';
 
@@ -46,6 +45,14 @@ interface LoadSupabaseIconsResponse {
   error?: string;
 }
 
+interface AdminElementChartEntry {
+  attacker: string;
+  defender: string;
+  multiplier: number;
+}
+
+type AdminElementChart = AdminElementChartEntry[];
+
 function sanitizeAdminElements(raw: unknown): AdminElementRow[] {
   if (!Array.isArray(raw)) return [];
   const parsed: AdminElementRow[] = [];
@@ -69,17 +76,17 @@ function sanitizeAdminElements(raw: unknown): AdminElementRow[] {
   return parsed.sort((a, b) => a.sort_index - b.sort_index || a.element_id.localeCompare(b.element_id));
 }
 
-function getMultiplier(chart: ElementChart, attacker: string, defender: string): number {
+function getMultiplier(chart: AdminElementChart, attacker: string, defender: string): number {
   const e = chart.find((x) => x.attacker === attacker && x.defender === defender);
   return e?.multiplier ?? 1;
 }
 
 function setMultiplier(
-  chart: ElementChart,
+  chart: AdminElementChart,
   attacker: string,
   defender: string,
   value: number,
-): ElementChart {
+): AdminElementChart {
   const next = chart.filter((e) => !(e.attacker === attacker && e.defender === defender));
   next.push({ attacker, defender, multiplier: value });
   return next;
@@ -88,7 +95,7 @@ function setMultiplier(
 export function ElementChartTool() {
   const [elements, setElements] = useState<AdminElementRow[]>([]);
   const elementIds = useMemo(() => elements.map((e) => e.element_id), [elements]);
-  const [chart, setChart] = useState<ElementChart>(() => []);
+  const [chart, setChart] = useState<AdminElementChart>(() => []);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);

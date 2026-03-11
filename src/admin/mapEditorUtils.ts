@@ -4,6 +4,7 @@ import type { MapEncounterGroupDefinition } from '@/game/encounters/types';
 import { NPC_LAYER_ORDER_ID } from '@/game/world/types';
 import type {
   InteractionDefinition,
+  NpcBattleConfig,
   NpcDefinition,
   WarpDefinition,
   WorldMap,
@@ -671,6 +672,24 @@ function worldLayerToEditable(layer: WorldMapLayer): EditableMapLayer {
   };
 }
 
+function cloneNpcBattleConfig(config: NpcBattleConfig | undefined): NpcBattleConfig | undefined {
+  if (!config) {
+    return undefined;
+  }
+  return {
+    format: config.format,
+    members: config.members.map((member) => ({
+      critterId: member.critterId,
+      level: member.level,
+      equippedSkillIds: [...member.equippedSkillIds] as [string | null, string | null, string | null, string | null],
+      equippedItems: member.equippedItems.map((item) => ({
+        itemId: item.itemId,
+        slotIndex: item.slotIndex,
+      })),
+    })),
+  };
+}
+
 function cloneNpc(npc: NpcDefinition): NpcDefinition {
   return {
     ...npc,
@@ -683,6 +702,7 @@ function cloneNpc(npc: NpcDefinition): NpcDefinition {
     battleRewards: npc.battleRewards ? npc.battleRewards.map((entry) => ({ ...entry })) : undefined,
     interactionRewards: npc.interactionRewards ? npc.interactionRewards.map((entry) => ({ ...entry })) : undefined,
     interactionRewardSetFlag: npc.interactionRewardSetFlag,
+    battleConfig: cloneNpcBattleConfig(npc.battleConfig),
     battleTeamIds: npc.battleTeamIds ? [...npc.battleTeamIds] : undefined,
     movement: npc.movement
       ? {
@@ -695,6 +715,7 @@ function cloneNpc(npc: NpcDefinition): NpcDefinition {
           ...guard,
           dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
           postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+          battleConfig: cloneNpcBattleConfig(guard.battleConfig),
           battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
           battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
         }))
@@ -719,6 +740,7 @@ function cloneNpc(npc: NpcDefinition): NpcDefinition {
           battleRewards: state.battleRewards ? state.battleRewards.map((entry) => ({ ...entry })) : undefined,
           interactionRewards: state.interactionRewards ? state.interactionRewards.map((entry) => ({ ...entry })) : undefined,
           interactionRewardSetFlag: state.interactionRewardSetFlag,
+          battleConfig: cloneNpcBattleConfig(state.battleConfig),
           battleTeamIds: state.battleTeamIds ? [...state.battleTeamIds] : undefined,
           movement: state.movement
             ? {
@@ -731,6 +753,7 @@ function cloneNpc(npc: NpcDefinition): NpcDefinition {
                 ...guard,
                 dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
                 postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+                battleConfig: cloneNpcBattleConfig(guard.battleConfig),
                 battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
                 battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
               }))

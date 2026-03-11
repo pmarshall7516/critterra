@@ -1143,7 +1143,7 @@ const BUDDO_STORY_LABEL = 'Select Bloom Partner Critter';
 
 function parseCritterLibrary(
   raw: unknown,
-  options?: { strictUnique?: boolean; strictUniqueNames?: boolean },
+  options?: { strictUnique?: boolean; strictUniqueNames?: boolean; allowedElementIds?: Set<string> },
 ): Array<Record<string, unknown>> {
   if (!Array.isArray(raw)) {
     return [];
@@ -1151,12 +1151,13 @@ function parseCritterLibrary(
 
   const strictUnique = Boolean(options?.strictUnique);
   const strictUniqueNames = Boolean(options?.strictUniqueNames);
+  const allowedElementIds = options?.allowedElementIds?.size ? options.allowedElementIds : undefined;
   const seen = new Set<number>();
   const seenNames = new Set<string>();
   const parsed: Array<Record<string, unknown>> = [];
   for (let index = 0; index < raw.length; index += 1) {
     const entry = raw[index];
-    const critter = parseCritterDefinition(entry, index);
+    const critter = parseCritterDefinition(entry, index, allowedElementIds);
     if (!critter) {
       continue;
     }
@@ -1183,7 +1184,11 @@ function parseCritterLibrary(
   return ensureBuddoStarterStoryMission(parsed);
 }
 
-function parseCritterDefinition(raw: unknown, index: number): Record<string, unknown> | null {
+function parseCritterDefinition(
+  raw: unknown,
+  index: number,
+  allowedElementIds?: Set<string>,
+): Record<string, unknown> | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return null;
   }
@@ -1193,7 +1198,8 @@ function parseCritterDefinition(raw: unknown, index: number): Record<string, unk
     typeof record.name === 'string' && record.name.trim() ? record.name.trim().slice(0, 40) : `Critter ${index + 1}`;
   const elementRaw = typeof record.element === 'string' ? record.element.trim().toLowerCase() : 'bloom';
   const rarityRaw = typeof record.rarity === 'string' ? record.rarity.trim().toLowerCase() : 'common';
-  const element = CRITTER_ELEMENT_OPTIONS.has(elementRaw) ? elementRaw : 'bloom';
+  const elementSet = allowedElementIds?.size ? allowedElementIds : CRITTER_ELEMENT_OPTIONS;
+  const element = elementSet.has(elementRaw) ? elementRaw : 'bloom';
   const rarity = CRITTER_RARITY_OPTIONS.has(rarityRaw) ? rarityRaw : 'common';
   const description =
     typeof record.description === 'string' && record.description.trim()
@@ -2960,6 +2966,443 @@ function sanitizeBattleRewardsForMigration(raw: unknown): Array<{ itemId: string
   return Array.from(merged.entries()).map(([itemId, quantity]) => ({ itemId, quantity }));
 }
 
+type NpcTeamBattleFormat = 'singles' | 'doubles' | 'triples';
+
+interface NpcTeamMigrationMember {
+  critterId: number;
+  level: number;
+  equippedSkillIds: [string | null, string | null, string | null, string | null];
+  equippedItems: Array<{ itemId: string; slotIndex: number }>;
+}
+
+interface NpcTeamMigrationConfig {
+  format: NpcTeamBattleFormat;
+  members: NpcTeamMigrationMember[];
+}
+
+interface NpcTeamMigrationCritter {
+  id: number;
+  maxLevel: number;
+  nameLower: string;
+  slug: string;
+}
+
+interface NpcTeamMigrationLookup {
+  byId: Map<number, NpcTeamMigrationCritter>;
+  byName: Map<string, NpcTeamMigrationCritter>;
+  bySlug: Map<string, NpcTeamMigrationCritter>;
+}
+
+interface NpcTeamSeedRecord {
+  label: string;
+  format: NpcTeamBattleFormat;
+  teamJson: NpcTeamMigrationConfig;
+}
+
+function inferNpcTeamFormatForMigration(memberCount: number): NpcTeamBattleFormat {
+  if (memberCount >= 3) {
+    return 'triples';
+  }
+  if (memberCount === 2) {
+    return 'doubles';
+  }
+  return 'singles';
+}
+
+function normalizeNpcBattleMemberForMigration(raw: unknown): NpcTeamMigrationMember | null {
+  if (!isPlainRecord(raw)) {
+    return null;
+  }
+  const critterId =
+    typeof raw.critterId === 'number' && Number.isFinite(raw.critterId) ? Math.max(1, Math.floor(raw.critterId)) : Number.NaN;
+  const level = typeof raw.level === 'number' && Number.isFinite(raw.level) ? Math.max(1, Math.floor(raw.level)) : Number.NaN;
+  if (!Number.isFinite(critterId) || !Number.isFinite(level)) {
+    return null;
+  }
+  const rawSkillSlots = Array.isArray(raw.equippedSkillIds) ? raw.equippedSkillIds : [];
+  const equippedSkillIds: [string | null, string | null, string | null, string | null] = [null, null, null, null];
+  for (let slot = 0; slot < 4; slot += 1) {
+    const rawSkillId = rawSkillSlots[slot];
+    equippedSkillIds[slot] =
+      typeof rawSkillId === 'string' && rawSkillId.trim() ? sanitizeIdentifier(rawSkillId, '') : null;
+  }
+  const equippedItems = (Array.isArray(raw.equippedItems) ? raw.equippedItems : [])
+    .map((entry) => {
+      if (!isPlainRecord(entry)) {
+        return null;
+      }
+      const itemId = sanitizeIdentifier(typeof entry.itemId === 'string' ? entry.itemId : '', '');
+      const slotIndex =
+        typeof entry.slotIndex === 'number' && Number.isFinite(entry.slotIndex)
+          ? Math.max(0, Math.floor(entry.slotIndex))
+          : Number.NaN;
+      if (!itemId || !Number.isFinite(slotIndex)) {
+        return null;
+      }
+      return {
+        itemId,
+        slotIndex,
+      };
+    })
+    .filter((entry): entry is { itemId: string; slotIndex: number } => entry !== null);
+  return {
+    critterId,
+    level,
+    equippedSkillIds,
+    equippedItems,
+  };
+}
+
+function sanitizeNpcBattleConfigForMigration(raw: unknown): NpcTeamMigrationConfig | undefined {
+  if (!isPlainRecord(raw)) {
+    return undefined;
+  }
+  const format =
+    raw.format === 'singles' || raw.format === 'doubles' || raw.format === 'triples'
+      ? raw.format
+      : 'singles';
+  const membersRaw = Array.isArray(raw.members) ? raw.members : [];
+  const seenCritterIds = new Set<number>();
+  const members: NpcTeamMigrationMember[] = [];
+  for (const entry of membersRaw) {
+    const member = normalizeNpcBattleMemberForMigration(entry);
+    if (!member || seenCritterIds.has(member.critterId)) {
+      continue;
+    }
+    seenCritterIds.add(member.critterId);
+    members.push(member);
+  }
+  if (members.length === 0) {
+    return undefined;
+  }
+  return {
+    format,
+    members,
+  };
+}
+
+function buildNpcTeamMigrationLookupFromCritterRows(
+  rows: Array<{ critter_id?: unknown; name?: unknown; critter_data?: unknown }>,
+): NpcTeamMigrationLookup {
+  const byId = new Map<number, NpcTeamMigrationCritter>();
+  const byName = new Map<string, NpcTeamMigrationCritter>();
+  const bySlug = new Map<string, NpcTeamMigrationCritter>();
+  for (const row of rows) {
+    const record = isPlainRecord(row.critter_data) ? row.critter_data : {};
+    const critterId =
+      typeof record.id === 'number' && Number.isFinite(record.id)
+        ? Math.floor(record.id)
+        : typeof row.critter_id === 'number' && Number.isFinite(row.critter_id)
+          ? Math.floor(row.critter_id)
+          : Number.NaN;
+    const nameCandidate =
+      typeof record.name === 'string' && record.name.trim()
+        ? record.name.trim()
+        : typeof row.name === 'string' && row.name.trim()
+          ? row.name.trim()
+          : '';
+    if (!Number.isFinite(critterId) || critterId < 1 || !nameCandidate) {
+      continue;
+    }
+    const levels = Array.isArray(record.levels) ? record.levels : [];
+    const maxLevel = Math.max(
+      1,
+      ...levels.map((entry) =>
+        isPlainRecord(entry) && typeof entry.level === 'number' && Number.isFinite(entry.level)
+          ? Math.floor(entry.level)
+          : 1,
+      ),
+    );
+    const normalized: NpcTeamMigrationCritter = {
+      id: critterId,
+      maxLevel,
+      nameLower: nameCandidate.toLowerCase(),
+      slug: sanitizeIdentifier(nameCandidate, ''),
+    };
+    byId.set(normalized.id, normalized);
+    byName.set(normalized.nameLower, normalized);
+    if (normalized.slug) {
+      bySlug.set(normalized.slug, normalized);
+    }
+  }
+  return { byId, byName, bySlug };
+}
+
+function buildNpcBattleConfigFromLegacyTeamIdsForMigration(
+  teamIds: string[] | undefined,
+  lookup: NpcTeamMigrationLookup,
+): NpcTeamMigrationConfig | undefined {
+  if (!Array.isArray(teamIds) || teamIds.length === 0) {
+    return undefined;
+  }
+  const seenCritterIds = new Set<number>();
+  const members: NpcTeamMigrationMember[] = [];
+  for (const token of teamIds) {
+    if (typeof token !== 'string' || !token.trim()) {
+      continue;
+    }
+    const [rawCritterToken, rawLevelToken] = token.trim().split(/[@:]/, 2);
+    const critterToken = rawCritterToken.trim();
+    if (!critterToken) {
+      continue;
+    }
+    const maybeCritterId = Number.parseInt(critterToken.replace(/^#/, ''), 10);
+    const resolvedCritter =
+      (Number.isFinite(maybeCritterId) ? lookup.byId.get(maybeCritterId) : undefined) ??
+      lookup.byName.get(critterToken.toLowerCase()) ??
+      lookup.bySlug.get(sanitizeIdentifier(critterToken, ''));
+    if (!resolvedCritter || seenCritterIds.has(resolvedCritter.id)) {
+      continue;
+    }
+    const parsedLevel = rawLevelToken ? Number.parseInt(rawLevelToken, 10) : Number.NaN;
+    const level = Number.isFinite(parsedLevel)
+      ? Math.max(1, Math.min(resolvedCritter.maxLevel, Math.floor(parsedLevel)))
+      : 1;
+    members.push({
+      critterId: resolvedCritter.id,
+      level,
+      equippedSkillIds: [null, null, null, null],
+      equippedItems: [],
+    });
+    seenCritterIds.add(resolvedCritter.id);
+  }
+  if (members.length === 0) {
+    return undefined;
+  }
+  return {
+    format: inferNpcTeamFormatForMigration(members.length),
+    members,
+  };
+}
+
+function registerNpcTeamConfigForMigration(
+  seedsByHash: Map<string, NpcTeamSeedRecord>,
+  labelRaw: string,
+  config: NpcTeamMigrationConfig,
+): void {
+  const normalized = sanitizeNpcBattleConfigForMigration(config);
+  if (!normalized) {
+    return;
+  }
+  const canonicalJson = JSON.stringify({
+    format: normalized.format,
+    members: normalized.members.map((member) => ({
+      critterId: member.critterId,
+      level: member.level,
+      equippedSkillIds: [...member.equippedSkillIds],
+      equippedItems: member.equippedItems.map((item) => ({
+        itemId: item.itemId,
+        slotIndex: item.slotIndex,
+      })),
+    })),
+  });
+  const hash = crypto.createHash('sha256').update(canonicalJson).digest('hex');
+  if (seedsByHash.has(hash)) {
+    return;
+  }
+  const label = labelRaw.trim().slice(0, 120) || `NPC Team ${hash.slice(0, 8)}`;
+  seedsByHash.set(hash, {
+    label,
+    format: normalized.format,
+    teamJson: normalized,
+  });
+}
+
+function migrateMovementGuardsForNpcTeamConfigMigration(
+  raw: unknown,
+  lookup: NpcTeamMigrationLookup,
+  contextLabel: string,
+  seedsByHash: Map<string, NpcTeamSeedRecord>,
+): { guards: unknown; changed: boolean } {
+  if (!Array.isArray(raw)) {
+    return { guards: raw, changed: false };
+  }
+  let changed = false;
+  const guards = raw.map((entry, index) => {
+    if (!isPlainRecord(entry)) {
+      return entry;
+    }
+    const before = JSON.stringify(entry);
+    const next: Record<string, unknown> = { ...entry };
+    const guardLabelSuffix =
+      (typeof next.id === 'string' && next.id.trim()) || `guard-${index + 1}`;
+    const explicitConfig = sanitizeNpcBattleConfigForMigration(next.battleConfig);
+    const legacyConfig = buildNpcBattleConfigFromLegacyTeamIdsForMigration(
+      sanitizeBattleTeamIdsForMigration(next.battleTeamIds),
+      lookup,
+    );
+    const resolvedConfig = explicitConfig ?? legacyConfig;
+    if (resolvedConfig) {
+      next.battleConfig = resolvedConfig;
+      registerNpcTeamConfigForMigration(seedsByHash, `${contextLabel} ${guardLabelSuffix}`, resolvedConfig);
+    }
+    if (JSON.stringify(next) !== before) {
+      changed = true;
+    }
+    return next;
+  });
+  return { guards, changed };
+}
+
+function migrateNpcRecordForNpcTeamConfigMigration(
+  rawRecord: unknown,
+  lookup: NpcTeamMigrationLookup,
+  contextLabel: string,
+  seedsByHash: Map<string, NpcTeamSeedRecord>,
+): { record: unknown; changed: boolean } {
+  if (!isPlainRecord(rawRecord)) {
+    return { record: rawRecord, changed: false };
+  }
+  const before = JSON.stringify(rawRecord);
+  const next: Record<string, unknown> = { ...rawRecord };
+
+  const explicitConfig = sanitizeNpcBattleConfigForMigration(next.battleConfig);
+  const legacyConfig = buildNpcBattleConfigFromLegacyTeamIdsForMigration(
+    sanitizeBattleTeamIdsForMigration(next.battleTeamIds),
+    lookup,
+  );
+  const resolvedConfig = explicitConfig ?? legacyConfig;
+  if (resolvedConfig) {
+    next.battleConfig = resolvedConfig;
+    registerNpcTeamConfigForMigration(seedsByHash, contextLabel, resolvedConfig);
+  }
+
+  if (Array.isArray(next.storyStates)) {
+    let storyChanged = false;
+    const storyStates = next.storyStates.map((entry, index) => {
+      if (!isPlainRecord(entry)) {
+        return entry;
+      }
+      const stateBefore = JSON.stringify(entry);
+      const stateNext: Record<string, unknown> = { ...entry };
+      const stateId = (typeof stateNext.id === 'string' && stateNext.id.trim()) || `state-${index + 1}`;
+      const explicitStateConfig = sanitizeNpcBattleConfigForMigration(stateNext.battleConfig);
+      const stateLegacyConfig = buildNpcBattleConfigFromLegacyTeamIdsForMigration(
+        sanitizeBattleTeamIdsForMigration(stateNext.battleTeamIds),
+        lookup,
+      );
+      const resolvedStateConfig = explicitStateConfig ?? stateLegacyConfig;
+      if (resolvedStateConfig) {
+        stateNext.battleConfig = resolvedStateConfig;
+        registerNpcTeamConfigForMigration(seedsByHash, `${contextLabel} ${stateId}`, resolvedStateConfig);
+      }
+      const stateGuards = migrateMovementGuardsForNpcTeamConfigMigration(
+        stateNext.movementGuards,
+        lookup,
+        `${contextLabel} ${stateId}`,
+        seedsByHash,
+      );
+      if (stateGuards.changed) {
+        stateNext.movementGuards = stateGuards.guards;
+      }
+      if (JSON.stringify(stateNext) !== stateBefore) {
+        storyChanged = true;
+      }
+      return stateNext;
+    });
+    if (storyChanged) {
+      next.storyStates = storyStates;
+    }
+  }
+
+  const topLevelGuards = migrateMovementGuardsForNpcTeamConfigMigration(
+    next.movementGuards,
+    lookup,
+    `${contextLabel} root-guard`,
+    seedsByHash,
+  );
+  if (topLevelGuards.changed) {
+    next.movementGuards = topLevelGuards.guards;
+  }
+
+  return {
+    record: next,
+    changed: JSON.stringify(next) !== before,
+  };
+}
+
+function migrateNpcCharacterLibraryForNpcTeamConfigMigration(
+  raw: unknown,
+  lookup: NpcTeamMigrationLookup,
+  seedsByHash: Map<string, NpcTeamSeedRecord>,
+): { characterLibrary: unknown[]; changed: boolean } {
+  if (!Array.isArray(raw)) {
+    return { characterLibrary: [], changed: false };
+  }
+  let changed = false;
+  const characterLibrary = raw.map((entry, index) => {
+    const templateId = isPlainRecord(entry) && typeof entry.id === 'string' && entry.id.trim()
+      ? entry.id.trim()
+      : `npc-template-${index + 1}`;
+    const migrated = migrateNpcRecordForNpcTeamConfigMigration(entry, lookup, `Template ${templateId}`, seedsByHash);
+    if (migrated.changed) {
+      changed = true;
+    }
+    return migrated.record;
+  });
+  return { characterLibrary, changed };
+}
+
+function migrateMapsForNpcTeamConfigMigration(
+  rows: Array<{ map_id: string; map_data: unknown }>,
+  lookup: NpcTeamMigrationLookup,
+  seedsByHash: Map<string, NpcTeamSeedRecord>,
+): Array<{ mapId: string; mapData: unknown }> {
+  const updates: Array<{ mapId: string; mapData: unknown }> = [];
+  for (const row of rows) {
+    if (!isPlainRecord(row.map_data) || !Array.isArray(row.map_data.npcs)) {
+      continue;
+    }
+    const mapData = row.map_data as Record<string, unknown>;
+    const npcs = mapData.npcs as unknown[];
+    let changed = false;
+    const migratedNpcs = npcs.map((entry, index) => {
+      const npcId = isPlainRecord(entry) && typeof entry.id === 'string' && entry.id.trim()
+        ? entry.id.trim()
+        : `${row.map_id}-npc-${index + 1}`;
+      const migrated = migrateNpcRecordForNpcTeamConfigMigration(entry, lookup, `Map ${row.map_id} ${npcId}`, seedsByHash);
+      if (migrated.changed) {
+        changed = true;
+      }
+      return migrated.record;
+    });
+    if (!changed) {
+      continue;
+    }
+    updates.push({
+      mapId: row.map_id,
+      mapData: {
+        ...mapData,
+        npcs: migratedNpcs,
+      },
+    });
+  }
+  return updates;
+}
+
+async function upsertNpcTeamSeedsForMigration(
+  client: PoolClient,
+  seedsByHash: Map<string, NpcTeamSeedRecord>,
+): Promise<void> {
+  const seedEntries = Array.from(seedsByHash.entries());
+  for (const [hash, seed] of seedEntries) {
+    const id = `npc-team-${hash.slice(0, 24)}`;
+    await client.query(
+      `
+        INSERT INTO game_npc_teams (id, label, format, team_hash, team_json, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5::jsonb, NOW(), NOW())
+        ON CONFLICT (team_hash)
+        DO UPDATE SET
+          label = COALESCE(game_npc_teams.label, EXCLUDED.label),
+          format = EXCLUDED.format,
+          team_json = EXCLUDED.team_json,
+          updated_at = NOW()
+      `,
+      [id, seed.label, seed.format, hash, JSON.stringify(seed.teamJson)],
+    );
+  }
+}
+
 function migrateMovementGuardsForBattleCompatibility(
   raw: unknown,
   options?: {
@@ -4124,6 +4567,17 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       );
     `);
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_npc_teams (
+        id TEXT PRIMARY KEY,
+        label TEXT,
+        format TEXT NOT NULL CHECK (format IN ('singles', 'doubles', 'triples')),
+        team_hash TEXT NOT NULL UNIQUE,
+        team_json JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS game_player_sprite_configs (
         catalog_key TEXT PRIMARY KEY,
         sprite_config JSONB NOT NULL,
@@ -4252,6 +4706,55 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
     const w = typeof row.tile_pixel_width === 'number' ? Math.max(1, Math.floor(row.tile_pixel_width)) : 16;
     const h = typeof row.tile_pixel_height === 'number' ? Math.max(1, Math.floor(row.tile_pixel_height)) : 16;
     return { url, tilePixelWidth: w, tilePixelHeight: h };
+  };
+
+  const migrateNpcBattleTeamsToSharedTable = async (client: PoolClient): Promise<void> => {
+    const critterRowsResult = await client.query<{
+      critter_id?: unknown;
+      name?: unknown;
+      critter_data?: unknown;
+    }>(
+      'SELECT critter_id, name, critter_data FROM game_critter_catalog ORDER BY critter_id ASC, name ASC',
+    );
+    const lookup = buildNpcTeamMigrationLookupFromCritterRows(critterRowsResult.rows);
+    const seedsByHash = new Map<string, NpcTeamSeedRecord>();
+
+    const npcCatalogResult = await client.query<{ character_library: unknown }>(
+      'SELECT character_library FROM game_npc_libraries WHERE catalog_key = $1',
+      [GLOBAL_CATALOG_KEY],
+    );
+    const migratedNpcCatalog = migrateNpcCharacterLibraryForNpcTeamConfigMigration(
+      npcCatalogResult.rows[0]?.character_library,
+      lookup,
+      seedsByHash,
+    );
+    if (migratedNpcCatalog.changed) {
+      await client.query(
+        `
+          UPDATE game_npc_libraries
+          SET character_library = $2::jsonb, updated_at = NOW()
+          WHERE catalog_key = $1
+        `,
+        [GLOBAL_CATALOG_KEY, JSON.stringify(migratedNpcCatalog.characterLibrary)],
+      );
+    }
+
+    const mapRowsResult = await client.query<{ map_id: string; map_data: unknown }>(
+      'SELECT map_id, map_data FROM game_maps',
+    );
+    const migratedMaps = migrateMapsForNpcTeamConfigMigration(mapRowsResult.rows, lookup, seedsByHash);
+    for (const migratedMap of migratedMaps) {
+      await client.query(
+        `
+          UPDATE game_maps
+          SET map_data = $2::jsonb, updated_at = NOW()
+          WHERE map_id = $1
+        `,
+        [migratedMap.mapId, JSON.stringify(migratedMap.mapData)],
+      );
+    }
+
+    await upsertNpcTeamSeedsForMigration(client, seedsByHash);
   };
 
   const ensureGlobalCatalogBaseline = async (): Promise<void> => {
@@ -4418,6 +4921,8 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         );
       }
 
+      await migrateNpcBattleTeamsToSharedTable(client);
+
       // Seed game elements once so element usage can be data-driven.
       const elementCountResult = await client.query('SELECT COUNT(*)::int AS count FROM game_elements');
       const elementCount = Number(elementCountResult.rows[0]?.count ?? 0);
@@ -4463,10 +4968,17 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
     if (!pool) {
       return [];
     }
-    const result = await pool.query(
-      'SELECT critter_data FROM game_critter_catalog ORDER BY critter_id ASC, name ASC',
-    );
-    return parseCritterLibrary(result.rows.map((row) => row.critter_data));
+    const [rowsResult, elementsRows] = await Promise.all([
+      pool.query('SELECT critter_data FROM game_critter_catalog ORDER BY critter_id ASC, name ASC'),
+      readGameElements(),
+    ]);
+    const allowedElementIds =
+      elementsRows.length > 0
+        ? new Set<string>(elementsRows.map((e) => String(e.element_id).trim().toLowerCase()))
+        : undefined;
+    return parseCritterLibrary(rowsResult.rows.map((row) => row.critter_data), {
+      allowedElementIds,
+    });
   };
 
   const writeGlobalCritterCatalog = async (critters: Array<Record<string, unknown>>): Promise<void> => {
@@ -4908,11 +5420,11 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
   };
 
   const requireAuth = async (req: IncomingMessage, res: ServerResponse) => {
-    await ensureSchema();
     if (!pool) {
-      sendJson(res, 500, { ok: false, error: 'Database unavailable.' });
+      sendJson(res, 500, { ok: false, error: 'Database unavailable. Set DB_CONNECTION_STRING in .env.' });
       return null;
     }
+    await ensureSchema();
 
     const token = extractBearerToken(req);
     if (!token) {
@@ -5312,7 +5824,13 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
           cells: row.cells ?? [],
         })) as SavedPaintTilePayload[];
         const customTileDefinitions = buildCustomTileDefinitions(savedTiles);
-        const critters = parseCritterLibrary(crittersResult.rows.map((row) => row.critter_data));
+        const allowedElementIds =
+          gameElements.length > 0
+            ? new Set<string>(gameElements.map((e) => String(e.element_id).trim().toLowerCase()))
+            : undefined;
+        const critters = parseCritterLibrary(crittersResult.rows.map((row) => row.critter_data), {
+          allowedElementIds,
+        });
         const encounterTables = parseEncounterLibrary(encounterResult.rows.map((row) => row.table_data));
         sendJson(res, 200, {
           ok: true,
@@ -5979,7 +6497,16 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         }
         await ensureGlobalCatalogBaseline();
         const body = (await readJsonBody(req)) as { critters?: unknown };
-        const critters = parseCritterLibrary(body.critters, { strictUnique: true, strictUniqueNames: true });
+        const elementsRows = await readGameElements();
+        const allowedElementIds =
+          elementsRows.length > 0
+            ? new Set<string>(elementsRows.map((e) => String(e.element_id).trim().toLowerCase()))
+            : undefined;
+        const critters = parseCritterLibrary(body.critters, {
+          strictUnique: true,
+          strictUniqueNames: true,
+          allowedElementIds,
+        });
         await writeGlobalCritterCatalog(critters);
         sendJson(res, 200, { ok: true });
         return;

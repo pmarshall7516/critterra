@@ -14,11 +14,16 @@ import { sanitizeItemCatalog } from '@/game/items/schema';
 import type { GameItemDefinition } from '@/game/items/types';
 import { parseShopCatalog } from '@/game/shops/schema';
 import type { ShopDefinition } from '@/game/shops/types';
+import { fetchDuelCatalogContent } from '@/duel/api';
+import { BattleTeamEditor } from '@/duel/components/BattleTeamEditor';
+import { buildDuelCatalogIndexes, toSavedSquadPayload, type DuelSquadDraft } from '@/duel/squadSchema';
+import type { DuelBattleFormat, DuelCatalogContent, DuelCatalogIndexes } from '@/duel/types';
 import { apiFetchJson } from '@/shared/apiClient';
 import { loadAdminFlags, type AdminFlagEntry } from '@/admin/flagsApi';
 import type { CritterDefinition } from '@/game/critters/types';
 import type {
   InteractionDefinition,
+  NpcBattleConfig,
   NpcInteractionActionDefinition,
   NpcItemRewardDefinition,
   NpcMovementGuardDefinition,
@@ -344,6 +349,114 @@ function createEmptyNpcGuardDraft(): NpcGuardDraft {
   };
 }
 
+function cloneNpcBattleConfig(config: NpcBattleConfig | undefined): NpcBattleConfig | undefined {
+  if (!config) {
+    return undefined;
+  }
+  return {
+    format: config.format,
+    members: cloneNpcBattleMembers(config.members),
+  };
+}
+
+function cloneDuelSquadDraftMembers(members: DuelSquadDraft['members']): DuelSquadDraft['members'] {
+  return members.map((member) => ({
+    critterId: member.critterId,
+    level: member.level,
+    equippedSkillIds: [...member.equippedSkillIds],
+    equippedItems: member.equippedItems.map((item) => ({
+      itemId: item.itemId,
+      slotIndex: item.slotIndex,
+    })),
+  }));
+}
+
+function cloneNpcBattleMembers(members: NpcBattleConfig['members']): NpcBattleConfig['members'] {
+  return members.map((member) => ({
+    critterId: member.critterId,
+    level: member.level,
+    equippedSkillIds: [
+      member.equippedSkillIds[0] ?? null,
+      member.equippedSkillIds[1] ?? null,
+      member.equippedSkillIds[2] ?? null,
+      member.equippedSkillIds[3] ?? null,
+    ],
+    equippedItems: member.equippedItems.map((item) => ({
+      itemId: item.itemId,
+      slotIndex: item.slotIndex,
+    })),
+  }));
+}
+
+function buildIssueMap(
+  issues: Array<{ path: string; message: string }>,
+): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const issue of issues) {
+    const existing = map.get(issue.path) ?? [];
+    existing.push(issue.message);
+    map.set(issue.path, existing);
+  }
+  return map;
+}
+
+function buildDefaultNpcBattleMembers(catalogs: DuelCatalogContent | null): DuelSquadDraft['members'] {
+  const firstCritter = catalogs?.critters?.[0];
+  if (!firstCritter) {
+    return [];
+  }
+  return [{
+    critterId: firstCritter.id,
+    level: 1,
+    equippedSkillIds: [null, null, null, null],
+    equippedItems: [],
+  }];
+}
+
+function parseLegacyBattleTeamIdsToMembers(
+  battleTeamIds: string[] | undefined,
+  catalogs: DuelCatalogContent | null,
+): DuelSquadDraft['members'] {
+  if (!Array.isArray(battleTeamIds) || battleTeamIds.length === 0 || !catalogs || catalogs.critters.length === 0) {
+    return [];
+  }
+  const byId = new Map(catalogs.critters.map((entry) => [entry.id, entry] as const));
+  const bySlug = new Map(catalogs.critters.map((entry) => [sanitizeIdentifier(entry.name, ''), entry] as const));
+  const members: DuelSquadDraft['members'] = [];
+  const seenCritterIds = new Set<number>();
+
+  for (const token of battleTeamIds) {
+    if (typeof token !== 'string' || !token.trim()) {
+      continue;
+    }
+    const [rawCritterToken, rawLevelToken] = token.trim().split(/[@:]/, 2);
+    const critterToken = rawCritterToken.trim();
+    if (!critterToken) {
+      continue;
+    }
+    const maybeCritterId = Number.parseInt(critterToken.replace(/^#/, ''), 10);
+    const byNumericId = Number.isFinite(maybeCritterId) ? byId.get(maybeCritterId) : undefined;
+    const byName = catalogs.critters.find(
+      (entry) => entry.name.trim().toLowerCase() === critterToken.toLowerCase(),
+    );
+    const byNormalizedName = bySlug.get(sanitizeIdentifier(critterToken, ''));
+    const critter = byNumericId ?? byName ?? byNormalizedName;
+    if (!critter || seenCritterIds.has(critter.id)) {
+      continue;
+    }
+    const levelToken = rawLevelToken ? Number.parseInt(rawLevelToken, 10) : Number.NaN;
+    const level = Number.isFinite(levelToken) ? Math.max(1, Math.floor(levelToken)) : 1;
+    members.push({
+      critterId: critter.id,
+      level,
+      equippedSkillIds: [null, null, null, null],
+      equippedItems: [],
+    });
+    seenCritterIds.add(critter.id);
+  }
+  return members;
+}
+
 function getPrimaryNpcMovementGuard(
   guards: NpcMovementGuardDefinition[] | undefined,
 ): NpcMovementGuardDefinition | null {
@@ -400,6 +513,8 @@ function buildNpcMovementGuardFromDraft(
   draft: NpcGuardDraft,
   options: {
     battleTeamIds?: string[];
+    battleConfig?: NpcBattleConfig;
+    duelEnabled?: boolean;
     battleRewards: NpcItemRewardDefinition[];
     battleRepeatable?: boolean;
     defeatedFlag?: string;
@@ -416,6 +531,7 @@ function buildNpcMovementGuardFromDraft(
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
+  const normalizedBattleTeamIds = Array.isArray(options.battleTeamIds) ? [...options.battleTeamIds] : undefined;
   return {
     id: draft.id.trim() || undefined,
     requiresFlag: draft.requiresFlag.trim() || undefined,
@@ -430,7 +546,8 @@ function buildNpcMovementGuardFromDraft(
     dialogueLines: dialogueLines.length > 0 ? dialogueLines : undefined,
     setFlag: draft.setFlag.trim() || undefined,
     defeatedFlag: options.defeatedFlag?.trim() || undefined,
-    battleTeamIds: options.battleTeamIds && options.battleTeamIds.length > 0 ? options.battleTeamIds : undefined,
+    battleConfig: options.duelEnabled ? cloneNpcBattleConfig(options.battleConfig) : undefined,
+    battleTeamIds: options.duelEnabled ? normalizedBattleTeamIds : [],
     battleRewards: options.battleRewards.length > 0 ? options.battleRewards : undefined,
     battleRepeatable: options.battleRepeatable ? true : undefined,
     postDuelDialogueSpeaker: draft.postDuelDialogueSpeaker.trim() || undefined,
@@ -587,6 +704,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   const [npcFirstInteractionSetFlagInput, setNpcFirstInteractionSetFlagInput] = useState('');
   const [npcInteractionModeInput, setNpcInteractionModeInput] = useState<NpcInteractionMode>('dialogue');
   const [npcFirstInteractBattleInput, setNpcFirstInteractBattleInput] = useState(false);
+  const [npcGuardStartsBattleInput, setNpcGuardStartsBattleInput] = useState(false);
   const [npcInteractBattleRepeatableInput, setNpcInteractBattleRepeatableInput] = useState(false);
   const [npcInteractBattleDefeatedFlagInput, setNpcInteractBattleDefeatedFlagInput] = useState('');
   const [npcBattleRewardsInput, setNpcBattleRewardsInput] = useState('');
@@ -595,6 +713,10 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   const [npcInteractionRewardsInput, setNpcInteractionRewardsInput] = useState('');
   const [npcInteractionRewardSetFlagInput, setNpcInteractionRewardSetFlagInput] = useState('');
   const [npcBattleTeamsInput, setNpcBattleTeamsInput] = useState('');
+  const [npcBattleFormatInput, setNpcBattleFormatInput] = useState<DuelBattleFormat>('singles');
+  const [npcBattleMembersDraft, setNpcBattleMembersDraft] = useState<DuelSquadDraft['members']>([]);
+  const [npcTeamJsonDraftInput, setNpcTeamJsonDraftInput] = useState('');
+  const [npcTeamJsonMessage, setNpcTeamJsonMessage] = useState<string | null>(null);
   const [npcStoryStatesInput, setNpcStoryStatesInput] = useState('[]');
   const [npcMovementGuardsInput, setNpcMovementGuardsInput] = useState('[]');
   const [npcGuardDraft, setNpcGuardDraft] = useState<NpcGuardDraft>(createEmptyNpcGuardDraft());
@@ -697,6 +819,8 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   const [isLoadingEncounterTables, setIsLoadingEncounterTables] = useState(false);
   const [encounterCritters, setEncounterCritters] = useState<CritterDefinition[]>([]);
   const [itemCatalog, setItemCatalog] = useState<GameItemDefinition[]>([]);
+  const [npcDuelCatalogs, setNpcDuelCatalogs] = useState<DuelCatalogContent | null>(null);
+  const [isLoadingNpcDuelCatalogs, setIsLoadingNpcDuelCatalogs] = useState(false);
   const [selectedEncounterGroupId, setSelectedEncounterGroupId] = useState('');
   const [encounterGroupIdInput, setEncounterGroupIdInput] = useState('');
   const [encounterWalkTableIdInput, setEncounterWalkTableIdInput] = useState('');
@@ -954,6 +1078,39 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     }
     return lookup;
   }, [shopCatalog]);
+  const npcDuelCatalogIndexes = useMemo<DuelCatalogIndexes | null>(
+    () => (npcDuelCatalogs ? buildDuelCatalogIndexes(npcDuelCatalogs) : null),
+    [npcDuelCatalogs],
+  );
+  const npcBattleDraftValidation = useMemo(() => {
+    if (!npcDuelCatalogIndexes) {
+      return null;
+    }
+    return toSavedSquadPayload(
+      {
+        name: 'NPC Team',
+        members: npcBattleMembersDraft,
+      },
+      npcDuelCatalogIndexes,
+    );
+  }, [npcBattleMembersDraft, npcDuelCatalogIndexes]);
+  const npcBattleValidationIssuesByPath = useMemo(
+    () => (npcBattleDraftValidation && !npcBattleDraftValidation.ok ? buildIssueMap(npcBattleDraftValidation.issues) : new Map<string, string[]>()),
+    [npcBattleDraftValidation],
+  );
+  const npcBattleConfigJson = useMemo(() => {
+    if (!npcBattleDraftValidation?.ok || !npcBattleDraftValidation.squad) {
+      return '';
+    }
+    return JSON.stringify(
+      {
+        format: npcBattleFormatInput,
+        members: npcBattleDraftValidation.squad.members,
+      },
+      null,
+      2,
+    );
+  }, [npcBattleDraftValidation, npcBattleFormatInput]);
   const filteredTilesetSupabaseAssets = useMemo(() => {
     const query = tilesetSearchInput.trim().toLowerCase();
     const sorted = [...tilesetSupabaseAssets].sort((left, right) =>
@@ -2010,6 +2167,25 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     }
   };
 
+  const loadNpcDuelCatalogs = async () => {
+    setIsLoadingNpcDuelCatalogs(true);
+    try {
+      const catalogs = await fetchDuelCatalogContent();
+      setNpcDuelCatalogs(catalogs);
+      setNpcBattleMembersDraft((current) => {
+        if (current.length > 0) {
+          return current;
+        }
+        const fallbackFromLegacy = parseLegacyBattleTeamIdsToMembers(parseStringList(npcBattleTeamsInput), catalogs);
+        return fallbackFromLegacy.length > 0 ? fallbackFromLegacy : buildDefaultNpcBattleMembers(catalogs);
+      });
+    } catch {
+      setNpcDuelCatalogs(null);
+    } finally {
+      setIsLoadingNpcDuelCatalogs(false);
+    }
+  };
+
   const loadShopCatalogFromDatabase = async () => {
     try {
       const result = await apiFetchJson<LoadShopLibraryResponse>('/api/admin/shops/list');
@@ -2040,9 +2216,10 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     if (isMapSection || isNpcsSection || isNpcCharactersSection) {
       void loadFlagsFromDatabase();
     }
-    if (isNpcsSection || isNpcCharactersSection) {
+    if (isNpcsSection || isNpcCharactersSection || section === 'full') {
       void loadItemCatalogFromDatabase();
       void loadShopCatalogFromDatabase();
+      void loadNpcDuelCatalogs();
     }
     if (isMapSection) {
       void loadEncounterDataFromDatabase();
@@ -3234,6 +3411,118 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     setNpcAnimationSetsInput(stringifyDirectionalAnimationSetsForEditor(safeSets));
   };
 
+  const loadNpcBattleDraftFromSources = (
+    battleConfig: NpcBattleConfig | undefined,
+    legacyBattleTeamIds: string[] | undefined,
+  ) => {
+    const clonedConfig = cloneNpcBattleConfig(battleConfig);
+    if (clonedConfig) {
+      setNpcBattleFormatInput(clonedConfig.format);
+      setNpcBattleMembersDraft(cloneDuelSquadDraftMembers(clonedConfig.members));
+      return;
+    }
+    const legacyMembers = parseLegacyBattleTeamIdsToMembers(legacyBattleTeamIds, npcDuelCatalogs);
+    if (legacyMembers.length > 0) {
+      setNpcBattleFormatInput('singles');
+      setNpcBattleMembersDraft(legacyMembers);
+      return;
+    }
+    setNpcBattleFormatInput('singles');
+    setNpcBattleMembersDraft(buildDefaultNpcBattleMembers(npcDuelCatalogs));
+  };
+
+  const resolveValidatedNpcBattleConfig = (
+    options: { required: boolean; label: string },
+  ): { ok: true; battleConfig?: NpcBattleConfig } | { ok: false; error: string } => {
+    if (!npcDuelCatalogIndexes || !npcDuelCatalogs) {
+      if (options.required) {
+        return {
+          ok: false,
+          error: `${options.label} requires duel catalogs. Reload the page and try again.`,
+        };
+      }
+      return { ok: true };
+    }
+    const validation = toSavedSquadPayload(
+      {
+        name: 'NPC Team',
+        members: npcBattleMembersDraft,
+      },
+      npcDuelCatalogIndexes,
+    );
+    if (!validation.ok || !validation.squad) {
+      if (options.required) {
+        return {
+          ok: false,
+          error:
+            validation.issues[0]?.message ??
+            `${options.label} is invalid. Fix team errors before saving.`,
+        };
+      }
+      return { ok: true };
+    }
+    return {
+      ok: true,
+      battleConfig: {
+        format: npcBattleFormatInput,
+        members: cloneNpcBattleMembers(validation.squad.members),
+      },
+    };
+  };
+
+  const importNpcTeamJsonFromDraft = () => {
+    const trimmed = npcTeamJsonDraftInput.trim();
+    if (!trimmed) {
+      setNpcTeamJsonMessage('Paste a team JSON payload first.');
+      return;
+    }
+    if (!npcDuelCatalogIndexes) {
+      setNpcTeamJsonMessage('Duel catalogs are still loading.');
+      return;
+    }
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      const sanitized = sanitizeNpcBattleConfig(parsed);
+      if (!sanitized) {
+        setNpcTeamJsonMessage('Team JSON is missing a valid format or members list.');
+        return;
+      }
+      const validation = toSavedSquadPayload(
+        {
+          name: 'NPC Team',
+          members: sanitized.members,
+        },
+        npcDuelCatalogIndexes,
+      );
+      if (!validation.ok || !validation.squad) {
+        setNpcTeamJsonMessage(validation.issues[0]?.message ?? 'Team JSON is invalid.');
+        return;
+      }
+      setNpcBattleFormatInput(sanitized.format);
+      setNpcBattleMembersDraft(cloneDuelSquadDraftMembers(validation.squad.members));
+      setNpcTeamJsonMessage('Imported team JSON.');
+    } catch {
+      setNpcTeamJsonMessage('Team JSON is invalid.');
+    }
+  };
+
+  const copyNpcTeamJson = async () => {
+    if (!npcBattleConfigJson) {
+      setNpcTeamJsonMessage('Current team is invalid. Fix validation issues before copying.');
+      return;
+    }
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(npcBattleConfigJson);
+        setNpcTeamJsonMessage('Copied team JSON to clipboard.');
+        return;
+      }
+    } catch {
+      // Fall through to manual copy instruction.
+    }
+    setNpcTeamJsonMessage('Clipboard unavailable. Copy from the read-only JSON field below.');
+  };
+
   const validateNpcItemRewardsAgainstCatalog = (rewards: NpcItemRewardDefinition[]): string | null => {
     if (rewards.length === 0) {
       return null;
@@ -3270,14 +3559,21 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
   const validateNpcMovementGuardBattles = (
     guards: NpcMovementGuardDefinition[],
     fallbackBattleTeamIds: string[] | undefined,
+    fallbackBattleConfig: NpcBattleConfig | undefined,
     fallbackBattleRewards: NpcItemRewardDefinition[],
   ): string | null => {
     for (let index = 0; index < guards.length; index += 1) {
       const guard = guards[index];
       const guardLabel = guard.id?.trim() || `guard-${index + 1}`;
-      const effectiveTeams =
-        guard.battleTeamIds && guard.battleTeamIds.length > 0 ? guard.battleTeamIds : fallbackBattleTeamIds;
-      if (!effectiveTeams || effectiveTeams.length === 0) {
+      const hasGuardTeamOverride = Array.isArray(guard.battleTeamIds);
+      const guardBattleTeams = hasGuardTeamOverride ? guard.battleTeamIds : undefined;
+      const guardBattleConfig =
+        guard.battleConfig && guard.battleConfig.members.length > 0 ? guard.battleConfig : undefined;
+      const effectiveTeams = guardBattleTeams ?? fallbackBattleTeamIds;
+      const effectiveBattleConfig = guardBattleConfig ?? (hasGuardTeamOverride ? undefined : fallbackBattleConfig);
+      const hasBattleConfig = Boolean(effectiveBattleConfig && effectiveBattleConfig.members.length > 0);
+      const hasBattleTeams = Boolean(effectiveTeams && effectiveTeams.length > 0);
+      if (!hasBattleConfig && !hasBattleTeams) {
         continue;
       }
       const defeatedFlag = typeof guard.defeatedFlag === 'string' ? guard.defeatedFlag.trim() : '';
@@ -3305,9 +3601,11 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
 
   const resolveEditorMovementGuards = (
     battleTeamIds: string[] | undefined,
+    battleConfig: NpcBattleConfig | undefined,
     battleRewards: NpcItemRewardDefinition[],
     defeatedFlag: string | undefined,
     battleRepeatable: boolean,
+    guardStartsBattle: boolean,
   ): { ok: true; guards: NpcMovementGuardDefinition[] } | { ok: false; error: string } => {
     if (npcInteractionModeInput !== 'guard') {
       return { ok: true, guards: [] };
@@ -3322,6 +3620,8 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     }
     const primaryGuard = buildNpcMovementGuardFromDraft(npcGuardDraft, {
       battleTeamIds,
+      battleConfig,
+      duelEnabled: guardStartsBattle,
       battleRewards,
       battleRepeatable,
       defeatedFlag,
@@ -3856,23 +4156,38 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     }
     const interactBattleDefeatedFlag = npcInteractBattleDefeatedFlagInput.trim() || undefined;
     const battleTeamIds = parseStringList(npcBattleTeamsInput);
-    const movementGuardsResult = resolveEditorMovementGuards(
-      battleTeamIds,
-      battleRewardsResult.rewards,
-      interactBattleDefeatedFlag,
-      npcInteractBattleRepeatableInput,
-    );
-    if (!movementGuardsResult.ok) {
-      setError(movementGuardsResult.error);
-      return;
-    }
-    const interactionRewardSetFlag = npcInteractionRewardSetFlagInput.trim() || undefined;
     const interactionModeFlags = resolveNpcInteractionFlags(npcInteractionModeInput, npcShopIdInput);
     const effectiveFirstInteractBattle = resolveEffectiveNpcFirstInteractBattle(
       npcInteractionModeInput,
       interactionModeFlags,
       npcFirstInteractBattleInput,
     );
+    const shouldPersistBattleConfig =
+      npcInteractionModeInput === 'battle' ||
+      effectiveFirstInteractBattle ||
+      (npcInteractionModeInput === 'guard' && npcGuardStartsBattleInput);
+    const battleConfigResult = resolveValidatedNpcBattleConfig({
+      required: shouldPersistBattleConfig,
+      label: 'NPC battle configuration',
+    });
+    if (!battleConfigResult.ok) {
+      setError(battleConfigResult.error);
+      return;
+    }
+    const resolvedBattleConfig = shouldPersistBattleConfig ? battleConfigResult.battleConfig : undefined;
+    const movementGuardsResult = resolveEditorMovementGuards(
+      battleTeamIds,
+      resolvedBattleConfig,
+      battleRewardsResult.rewards,
+      interactBattleDefeatedFlag,
+      npcInteractBattleRepeatableInput,
+      npcGuardStartsBattleInput,
+    );
+    if (!movementGuardsResult.ok) {
+      setError(movementGuardsResult.error);
+      return;
+    }
+    const interactionRewardSetFlag = npcInteractionRewardSetFlagInput.trim() || undefined;
     const resolvedShopId = interactionModeFlags.shopId;
     if (npcInteractionModeInput === 'shop') {
       if (!resolvedShopId) {
@@ -3894,8 +4209,10 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       return;
     }
     if (effectiveFirstInteractBattle) {
-      if (!battleTeamIds || battleTeamIds.length === 0) {
-        setError('Battler NPCs require at least one Battle Team ID.');
+      const hasTeams = Array.isArray(battleTeamIds) && battleTeamIds.length > 0;
+      const hasBattleConfig = Boolean(resolvedBattleConfig && resolvedBattleConfig.members.length > 0);
+      if (!hasTeams && !hasBattleConfig) {
+        setError('Battler NPCs require either Battle Team IDs or an advanced battle configuration.');
         return;
       }
       if (battleRewardsResult.rewards.length === 0) {
@@ -3908,6 +4225,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
         continue;
       }
       const effectiveTeams = state.battleTeamIds && state.battleTeamIds.length > 0 ? state.battleTeamIds : battleTeamIds;
+      const effectiveBattleConfig = state.battleConfig ?? resolvedBattleConfig;
       const stateDefeatFlag = state.interactBattleDefeatedFlag?.trim() || interactBattleDefeatedFlag;
       const stateRewards =
         state.battleRewards && state.battleRewards.length > 0 ? state.battleRewards : battleRewardsResult.rewards;
@@ -3915,8 +4233,8 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
         setError(`Story state "${state.id ?? '(unnamed)'}" enables battle but has no Defeat Flag.`);
         return;
       }
-      if (!effectiveTeams || effectiveTeams.length === 0) {
-        setError(`Story state "${state.id ?? '(unnamed)'}" enables battle but has no Battle Team IDs.`);
+      if ((!effectiveTeams || effectiveTeams.length === 0) && !effectiveBattleConfig) {
+        setError(`Story state "${state.id ?? '(unnamed)'}" enables battle but has no team configuration.`);
         return;
       }
       if (!stateRewards || stateRewards.length === 0) {
@@ -3940,6 +4258,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       const stateGuardValidationError = validateNpcMovementGuardBattles(
         state.movementGuards ?? [],
         effectiveTeams,
+        effectiveBattleConfig,
         stateRewards,
       );
       if (stateGuardValidationError) {
@@ -3950,6 +4269,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     const movementGuardBattleValidationError = validateNpcMovementGuardBattles(
       movementGuardsResult.guards,
       battleTeamIds,
+      resolvedBattleConfig,
       battleRewardsResult.rewards,
     );
     if (movementGuardBattleValidationError) {
@@ -3983,6 +4303,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       shopId: resolvedShopId,
       interactionRewards: interactionRewardsResult.rewards.length > 0 ? interactionRewardsResult.rewards : undefined,
       interactionRewardSetFlag,
+      battleConfig: resolvedBattleConfig,
       battleTeamIds,
       storyStates:
         storyStatesResult.states.length > 0 ? compactCharacterPlacementOrder(storyStatesResult.states) : undefined,
@@ -4113,13 +4434,22 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
         ? String(Math.max(1, Math.floor(template.movement?.leashRadius ?? 0)))
         : '',
     );
-    setNpcBattleTeamsInput(
-      (
-        interactionMode === 'guard'
-          ? primaryGuard?.battleTeamIds ?? template.battleTeamIds ?? []
-          : template.battleTeamIds ?? []
-      ).join(', '),
+    const resolvedBattleTeamIds =
+      interactionMode === 'guard' ? primaryGuard?.battleTeamIds ?? template.battleTeamIds ?? [] : template.battleTeamIds ?? [];
+    setNpcBattleTeamsInput(resolvedBattleTeamIds.join(', '));
+    const guardStartsBattle = Boolean(
+      interactionMode === 'guard'
+        ? (primaryGuard?.battleConfig && primaryGuard.battleConfig.members.length > 0) ||
+            (primaryGuard?.battleTeamIds && primaryGuard.battleTeamIds.length > 0)
+        : false,
     );
+    setNpcGuardStartsBattleInput(guardStartsBattle);
+    loadNpcBattleDraftFromSources(
+      interactionMode === 'guard' ? primaryGuard?.battleConfig ?? template.battleConfig : template.battleConfig,
+      resolvedBattleTeamIds,
+    );
+    setNpcTeamJsonDraftInput('');
+    setNpcTeamJsonMessage(null);
     setNpcStoryStatesInput(JSON.stringify(template.storyStates ?? [], null, 2));
     setNpcMovementGuardsInput(formatNpcMovementGuardsInput(template.movementGuards));
     setNpcGuardDraft(npcMovementGuardToDraft(primaryGuard));
@@ -4172,6 +4502,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
             ? template.interactionRewards.map((entry) => ({ ...entry }))
             : undefined,
           interactionRewardSetFlag: template.interactionRewardSetFlag,
+          battleConfig: cloneNpcBattleConfig(template.battleConfig),
           battleTeamIds: template.battleTeamIds ? [...template.battleTeamIds] : undefined,
           movement: template.movement
             ? {
@@ -4184,6 +4515,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                 ...guard,
                 dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
                 postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+                battleConfig: cloneNpcBattleConfig(guard.battleConfig),
                 battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
                 battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
               }))
@@ -4333,13 +4665,26 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     setNpcInteractionRewardSetFlagInput(
       placement.interactionRewardSetFlag ?? character.interactionRewardSetFlag ?? '',
     );
-    setNpcBattleTeamsInput(
-      (
-        interactionMode === 'guard'
-          ? primaryGuard?.battleTeamIds ?? placement.battleTeamIds ?? character.battleTeamIds ?? []
-          : placement.battleTeamIds ?? character.battleTeamIds ?? []
-      ).join(', '),
+    const resolvedBattleTeamIds =
+      interactionMode === 'guard'
+        ? primaryGuard?.battleTeamIds ?? placement.battleTeamIds ?? character.battleTeamIds ?? []
+        : placement.battleTeamIds ?? character.battleTeamIds ?? [];
+    setNpcBattleTeamsInput(resolvedBattleTeamIds.join(', '));
+    const guardStartsBattle = Boolean(
+      interactionMode === 'guard'
+        ? (primaryGuard?.battleConfig && primaryGuard.battleConfig.members.length > 0) ||
+            (primaryGuard?.battleTeamIds && primaryGuard.battleTeamIds.length > 0)
+        : false,
     );
+    setNpcGuardStartsBattleInput(guardStartsBattle);
+    loadNpcBattleDraftFromSources(
+      interactionMode === 'guard'
+        ? primaryGuard?.battleConfig ?? placement.battleConfig ?? character.battleConfig
+        : placement.battleConfig ?? character.battleConfig,
+      resolvedBattleTeamIds,
+    );
+    setNpcTeamJsonDraftInput('');
+    setNpcTeamJsonMessage(null);
     setNpcMovementTypeInput(toEditorNpcMovementType(placement.movement?.type ?? character.movement?.type));
     setNpcMovementPatternInput((placement.movement?.pattern ?? character.movement?.pattern ?? []).join(', '));
     setNpcStepIntervalInput(String(placement.movement?.stepIntervalMs ?? character.movement?.stepIntervalMs ?? 850));
@@ -4925,13 +5270,22 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     setNpcShopIdInput(npc.shopId ?? '');
     setNpcInteractionRewardsInput(formatNpcItemRewardsInput(npc.interactionRewards));
     setNpcInteractionRewardSetFlagInput(npc.interactionRewardSetFlag ?? '');
-    setNpcBattleTeamsInput(
-      (
-        interactionMode === 'guard'
-          ? primaryGuard?.battleTeamIds ?? npc.battleTeamIds ?? []
-          : npc.battleTeamIds ?? []
-      ).join(', '),
+    const resolvedBattleTeamIds =
+      interactionMode === 'guard' ? primaryGuard?.battleTeamIds ?? npc.battleTeamIds ?? [] : npc.battleTeamIds ?? [];
+    setNpcBattleTeamsInput(resolvedBattleTeamIds.join(', '));
+    const guardStartsBattle = Boolean(
+      interactionMode === 'guard'
+        ? (primaryGuard?.battleConfig && primaryGuard.battleConfig.members.length > 0) ||
+            (primaryGuard?.battleTeamIds && primaryGuard.battleTeamIds.length > 0)
+        : false,
     );
+    setNpcGuardStartsBattleInput(guardStartsBattle);
+    loadNpcBattleDraftFromSources(
+      interactionMode === 'guard' ? primaryGuard?.battleConfig ?? npc.battleConfig : npc.battleConfig,
+      resolvedBattleTeamIds,
+    );
+    setNpcTeamJsonDraftInput('');
+    setNpcTeamJsonMessage(null);
     setNpcStoryStatesInput(JSON.stringify(npc.storyStates ?? [], null, 2));
     setNpcMovementGuardsInput(formatNpcMovementGuardsInput(npc.movementGuards));
     setNpcGuardDraft(npcMovementGuardToDraft(primaryGuard));
@@ -5007,23 +5361,38 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       return;
     }
     const battleTeamIds = parseStringList(npcBattleTeamsInput);
-    const movementGuardsResult = resolveEditorMovementGuards(
-      battleTeamIds,
-      battleRewardsResult.rewards,
-      interactBattleDefeatedFlag,
-      npcInteractBattleRepeatableInput,
-    );
-    if (!movementGuardsResult.ok) {
-      setError(movementGuardsResult.error);
-      return;
-    }
-    const interactionRewardSetFlag = npcInteractionRewardSetFlagInput.trim() || undefined;
     const interactionModeFlags = resolveNpcInteractionFlags(npcInteractionModeInput, npcShopIdInput);
     const effectiveFirstInteractBattle = resolveEffectiveNpcFirstInteractBattle(
       npcInteractionModeInput,
       interactionModeFlags,
       npcFirstInteractBattleInput,
     );
+    const shouldPersistBattleConfig =
+      npcInteractionModeInput === 'battle' ||
+      effectiveFirstInteractBattle ||
+      (npcInteractionModeInput === 'guard' && npcGuardStartsBattleInput);
+    const battleConfigResult = resolveValidatedNpcBattleConfig({
+      required: shouldPersistBattleConfig,
+      label: 'NPC battle configuration',
+    });
+    if (!battleConfigResult.ok) {
+      setError(battleConfigResult.error);
+      return;
+    }
+    const resolvedBattleConfig = shouldPersistBattleConfig ? battleConfigResult.battleConfig : undefined;
+    const movementGuardsResult = resolveEditorMovementGuards(
+      battleTeamIds,
+      resolvedBattleConfig,
+      battleRewardsResult.rewards,
+      interactBattleDefeatedFlag,
+      npcInteractBattleRepeatableInput,
+      npcGuardStartsBattleInput,
+    );
+    if (!movementGuardsResult.ok) {
+      setError(movementGuardsResult.error);
+      return;
+    }
+    const interactionRewardSetFlag = npcInteractionRewardSetFlagInput.trim() || undefined;
     const resolvedShopId = interactionModeFlags.shopId;
     if (npcInteractionModeInput === 'shop') {
       if (!resolvedShopId) {
@@ -5045,8 +5414,10 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       return;
     }
     if (effectiveFirstInteractBattle) {
-      if (!battleTeamIds || battleTeamIds.length === 0) {
-        setError('Battler NPCs require at least one Battle Team ID.');
+      const hasTeams = Array.isArray(battleTeamIds) && battleTeamIds.length > 0;
+      const hasBattleConfig = Boolean(resolvedBattleConfig && resolvedBattleConfig.members.length > 0);
+      if (!hasTeams && !hasBattleConfig) {
+        setError('Battler NPCs require either Battle Team IDs or an advanced battle configuration.');
         return;
       }
       if (battleRewardsResult.rewards.length === 0) {
@@ -5057,6 +5428,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
     const movementGuardBattleValidationError = validateNpcMovementGuardBattles(
       movementGuardsResult.guards,
       battleTeamIds,
+      resolvedBattleConfig,
       battleRewardsResult.rewards,
     );
     if (movementGuardBattleValidationError) {
@@ -5126,6 +5498,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           shopId: resolvedShopId,
           interactionRewards: interactionRewardsResult.rewards.length > 0 ? interactionRewardsResult.rewards : undefined,
           interactionRewardSetFlag,
+          battleConfig: resolvedBattleConfig,
           battleTeamIds,
           movement,
           movementGuards: resolvedMovementGuards,
@@ -5159,6 +5532,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
           shopId: resolvedShopId,
           interactionRewards: interactionRewardsResult.rewards.length > 0 ? interactionRewardsResult.rewards : undefined,
           interactionRewardSetFlag,
+          battleConfig: resolvedBattleConfig,
           battleTeamIds,
           movement,
           movementGuards: resolvedMovementGuards,
@@ -5188,6 +5562,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
         continue;
       }
       const effectiveTeams = state.battleTeamIds && state.battleTeamIds.length > 0 ? state.battleTeamIds : battleTeamIds;
+      const effectiveBattleConfig = state.battleConfig ?? resolvedBattleConfig;
       const stateDefeatFlag = state.interactBattleDefeatedFlag?.trim() || interactBattleDefeatedFlag;
       const stateRewards =
         state.battleRewards && state.battleRewards.length > 0 ? state.battleRewards : battleRewardsResult.rewards;
@@ -5195,8 +5570,8 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
         setError(`Story state "${state.id ?? '(unnamed)'}" enables battle but has no Defeat Flag.`);
         return;
       }
-      if (!effectiveTeams || effectiveTeams.length === 0) {
-        setError(`Story state "${state.id ?? '(unnamed)'}" enables battle but has no Battle Team IDs.`);
+      if ((!effectiveTeams || effectiveTeams.length === 0) && !effectiveBattleConfig) {
+        setError(`Story state "${state.id ?? '(unnamed)'}" enables battle but has no team configuration.`);
         return;
       }
       if (!stateRewards || stateRewards.length === 0) {
@@ -5220,6 +5595,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
       const stateGuardValidationError = validateNpcMovementGuardBattles(
         state.movementGuards ?? [],
         effectiveTeams,
+        effectiveBattleConfig,
         stateRewards,
       );
       if (stateGuardValidationError) {
@@ -5255,6 +5631,7 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
         shopId: resolvedShopId,
         interactionRewards: interactionRewardsResult.rewards.length > 0 ? interactionRewardsResult.rewards : undefined,
         interactionRewardSetFlag,
+        battleConfig: resolvedBattleConfig,
         battleTeamIds,
         movement,
         movementGuards: resolvedMovementGuards,
@@ -7611,11 +7988,20 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                     setNpcInteractionModeInput(mode);
                     if (mode === 'guard') {
                       const parsed = parseNpcMovementGuardsInput(npcMovementGuardsInput);
+                      const primaryGuard = getPrimaryNpcMovementGuard(parsed.ok ? parsed.guards : undefined);
                       setNpcGuardDraft(
                         npcMovementGuardToDraft(
-                          getPrimaryNpcMovementGuard(parsed.ok ? parsed.guards : undefined),
+                          primaryGuard,
                         ),
                       );
+                      setNpcGuardStartsBattleInput(
+                        Boolean(
+                          (primaryGuard?.battleConfig && primaryGuard.battleConfig.members.length > 0) ||
+                            (primaryGuard?.battleTeamIds && primaryGuard.battleTeamIds.length > 0),
+                        ),
+                      );
+                    } else {
+                      setNpcGuardStartsBattleInput(false);
                     }
                   }}
                 >
@@ -7674,6 +8060,14 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
               )}
               {npcInteractionModeInput === 'guard' && (
                 <>
+                  <label>
+                    Starts A Duel When Blocked?
+                    <input
+                      type="checkbox"
+                      checked={npcGuardStartsBattleInput}
+                      onChange={(event) => setNpcGuardStartsBattleInput(event.target.checked)}
+                    />
+                  </label>
                   <label>
                     Also Start Duel On Interact?
                     <input
@@ -7766,8 +8160,8 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
               <>
                 <label>
                   {npcInteractionModeInput === 'guard'
-                    ? 'Guard Battle Team IDs (comma-separated)'
-                    : 'Battle Team IDs (comma-separated)'}
+                    ? 'Guard Battle Team IDs (legacy fallback)'
+                    : 'Battle Team IDs (legacy fallback)'}
                   <input
                     value={npcBattleTeamsInput}
                     onChange={(event) => setNpcBattleTeamsInput(event.target.value)}
@@ -7784,6 +8178,61 @@ export function MapEditorTool({ section = 'full', embedded = false }: MapEditorT
                     placeholder="lume:25, field-bandage:1"
                   />
                 </label>
+                {(npcInteractionModeInput === 'battle' ||
+                  (npcInteractionModeInput === 'guard' && (npcGuardStartsBattleInput || npcFirstInteractBattleInput))) && (
+                  <>
+                    {isLoadingNpcDuelCatalogs && (
+                      <p className="admin-note">Loading duel catalogs for advanced squad editing...</p>
+                    )}
+                    {!isLoadingNpcDuelCatalogs && !npcDuelCatalogs && (
+                      <p className="admin-note">
+                        Advanced squad editor is unavailable until duel catalogs load.
+                      </p>
+                    )}
+                    {!isLoadingNpcDuelCatalogs && npcDuelCatalogs && npcDuelCatalogIndexes && (
+                      <>
+                        <div className="npc-battle-editor">
+                          <p className="admin-note npc-battle-editor__note">
+                            Configure species, level, skills, and equipment for each critter.
+                          </p>
+                          <BattleTeamEditor
+                            catalogs={npcDuelCatalogs}
+                            catalogIndexes={npcDuelCatalogIndexes}
+                            format={npcBattleFormatInput}
+                            onFormatChange={setNpcBattleFormatInput}
+                            members={npcBattleMembersDraft}
+                            onChange={setNpcBattleMembersDraft}
+                            validationIssuesByPath={npcBattleValidationIssuesByPath}
+                            layout="compact"
+                          />
+                        </div>
+                        <label>
+                          Paste Team JSON
+                          <textarea
+                            rows={6}
+                            className="admin-json"
+                            value={npcTeamJsonDraftInput}
+                            onChange={(event) => setNpcTeamJsonDraftInput(event.target.value)}
+                            placeholder='{"format":"singles","members":[{"critterId":1,"level":5,"equippedSkillIds":[null,null,null,null],"equippedItems":[]}]}'
+                          />
+                        </label>
+                        <div className="admin-row">
+                          <button type="button" className="secondary" onClick={importNpcTeamJsonFromDraft}>
+                            Import Team JSON
+                          </button>
+                          <button type="button" className="secondary" onClick={() => void copyNpcTeamJson()}>
+                            Copy Team JSON
+                          </button>
+                        </div>
+                        {npcTeamJsonMessage && <p className="admin-note">{npcTeamJsonMessage}</p>}
+                        <label>
+                          Current Team JSON
+                          <textarea rows={6} className="admin-json" value={npcBattleConfigJson} readOnly />
+                        </label>
+                      </>
+                    )}
+                  </>
+                )}
               </>
             )}
             <label>
@@ -9396,6 +9845,7 @@ function placeNpcFromTemplate(
     shopId: template.shopId,
     interactionRewards: template.interactionRewards ? template.interactionRewards.map((entry) => ({ ...entry })) : undefined,
     interactionRewardSetFlag: template.interactionRewardSetFlag,
+    battleConfig: cloneNpcBattleConfig(template.battleConfig),
     battleTeamIds: template.battleTeamIds ? [...template.battleTeamIds] : undefined,
     movement: template.movement
       ? {
@@ -9415,6 +9865,7 @@ function placeNpcFromTemplate(
           shopId: state.shopId,
           interactionRewards: state.interactionRewards ? state.interactionRewards.map((entry) => ({ ...entry })) : undefined,
           interactionRewardSetFlag: state.interactionRewardSetFlag,
+          battleConfig: cloneNpcBattleConfig(state.battleConfig),
           battleTeamIds: state.battleTeamIds ? [...state.battleTeamIds] : undefined,
           movement: state.movement
             ? {
@@ -9427,6 +9878,7 @@ function placeNpcFromTemplate(
                 ...guard,
                 dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
                 postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+                battleConfig: cloneNpcBattleConfig(guard.battleConfig),
                 battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
                 battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
               }))
@@ -9445,6 +9897,7 @@ function placeNpcFromTemplate(
           ...guard,
           dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
           postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+          battleConfig: cloneNpcBattleConfig(guard.battleConfig),
           battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
           battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
         }))
@@ -10423,6 +10876,77 @@ function sanitizeNpcSpriteLibrary(raw: unknown): NpcSpriteLibraryEntry[] {
   return sprites;
 }
 
+function sanitizeNpcBattleConfig(raw: unknown): NpcBattleConfig | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return undefined;
+  }
+  const record = raw as Record<string, unknown>;
+  const format =
+    record.format === 'triples' || record.format === 'doubles' || record.format === 'singles'
+      ? record.format
+      : 'singles';
+  const rawMembers = Array.isArray(record.members) ? record.members : [];
+  const members = rawMembers
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        return null;
+      }
+      const member = entry as Record<string, unknown>;
+      const critterId =
+        typeof member.critterId === 'number' && Number.isFinite(member.critterId)
+          ? Math.max(1, Math.floor(member.critterId))
+          : Number.NaN;
+      const level =
+        typeof member.level === 'number' && Number.isFinite(member.level)
+          ? Math.max(1, Math.floor(member.level))
+          : Number.NaN;
+      if (!Number.isFinite(critterId) || !Number.isFinite(level)) {
+        return null;
+      }
+      const rawSkillSlots = Array.isArray(member.equippedSkillIds) ? member.equippedSkillIds : [];
+      const equippedSkillIds: [string | null, string | null, string | null, string | null] = [null, null, null, null];
+      for (let slot = 0; slot < 4; slot += 1) {
+        const value = rawSkillSlots[slot];
+        equippedSkillIds[slot] =
+          typeof value === 'string' && value.trim() ? sanitizeIdentifier(value, '') : null;
+      }
+      const equippedItems = (Array.isArray(member.equippedItems) ? member.equippedItems : [])
+        .map((itemEntry) => {
+          if (!itemEntry || typeof itemEntry !== 'object' || Array.isArray(itemEntry)) {
+            return null;
+          }
+          const item = itemEntry as Record<string, unknown>;
+          const itemId = sanitizeIdentifier(typeof item.itemId === 'string' ? item.itemId : '', '');
+          const slotIndex =
+            typeof item.slotIndex === 'number' && Number.isFinite(item.slotIndex)
+              ? Math.max(0, Math.floor(item.slotIndex))
+              : Number.NaN;
+          if (!itemId || !Number.isFinite(slotIndex)) {
+            return null;
+          }
+          return {
+            itemId,
+            slotIndex,
+          };
+        })
+        .filter((item): item is { itemId: string; slotIndex: number } => item !== null);
+      return {
+        critterId,
+        level,
+        equippedSkillIds,
+        equippedItems,
+      };
+    })
+    .filter((entry): entry is NpcBattleConfig['members'][number] => entry !== null);
+  if (members.length <= 0) {
+    return undefined;
+  }
+  return {
+    format,
+    members,
+  };
+}
+
 function sanitizeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateEntry[] {
   if (!Array.isArray(raw)) {
     return [];
@@ -10454,6 +10978,7 @@ function sanitizeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateEntry[] 
       shopId?: unknown;
       interactionRewards?: unknown;
       interactionRewardSetFlag?: unknown;
+      battleConfig?: unknown;
       battleTeamIds?: unknown;
       movementGuards?: unknown;
       storyStates?: unknown;
@@ -10525,6 +11050,7 @@ function sanitizeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateEntry[] 
         typeof record.interactionRewardSetFlag === 'string' && record.interactionRewardSetFlag.trim()
           ? record.interactionRewardSetFlag.trim()
           : undefined,
+      battleConfig: sanitizeNpcBattleConfig(record.battleConfig),
       battleTeamIds: battleTeamIds && battleTeamIds.length > 0 ? battleTeamIds : undefined,
       movementGuards: sanitizeNpcMovementGuards(record.movementGuards),
       storyStates: compactCharacterPlacementOrder(sanitizeNpcStoryStates(record.storyStates) ?? []),
@@ -10631,6 +11157,7 @@ function sanitizeNpcStoryStates(raw: unknown): NpcStoryStateDefinition[] | undef
         typeof record.interactionRewardSetFlag === 'string' && record.interactionRewardSetFlag.trim()
           ? record.interactionRewardSetFlag.trim()
           : undefined,
+      battleConfig: sanitizeNpcBattleConfig(record.battleConfig),
       battleTeamIds: battleTeamIds && battleTeamIds.length > 0 ? battleTeamIds : undefined,
       movement: sanitizeNpcMovement(record.movement),
       movementGuards: sanitizeNpcMovementGuards(record.movementGuards),
@@ -10718,6 +11245,7 @@ function sanitizeNpcMovementGuards(raw: unknown): NpcMovementGuardDefinition[] |
         : undefined,
       setFlag: typeof record.setFlag === 'string' && record.setFlag.trim() ? record.setFlag.trim() : undefined,
       defeatedFlag: guardDefeatTransitionFlag,
+      battleConfig: sanitizeNpcBattleConfig(record.battleConfig),
       battleTeamIds: Array.isArray(record.battleTeamIds)
         ? record.battleTeamIds
             .filter((teamId): teamId is string => typeof teamId === 'string' && teamId.trim().length > 0)
@@ -10983,6 +11511,7 @@ function compactCharacterPlacementOrder(states: NpcStoryStateDefinition[]): NpcS
     dialogueLines: state.dialogueLines ? [...state.dialogueLines] : undefined,
     battleRewards: state.battleRewards ? state.battleRewards.map((entry) => ({ ...entry })) : undefined,
     interactionRewards: state.interactionRewards ? state.interactionRewards.map((entry) => ({ ...entry })) : undefined,
+    battleConfig: cloneNpcBattleConfig(state.battleConfig),
     battleTeamIds: state.battleTeamIds ? [...state.battleTeamIds] : undefined,
     movement: state.movement
       ? {
@@ -10995,6 +11524,7 @@ function compactCharacterPlacementOrder(states: NpcStoryStateDefinition[]): NpcS
           ...guard,
           dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
           postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+          battleConfig: cloneNpcBattleConfig(guard.battleConfig),
           battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
           battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
         }))

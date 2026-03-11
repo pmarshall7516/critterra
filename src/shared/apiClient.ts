@@ -7,7 +7,7 @@ export interface ApiJsonResult<T> {
   error?: string;
 }
 
-const DEFAULT_REQUEST_TIMEOUT_MS = 8000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 25000;
 
 export async function apiFetchJson<T>(path: string, init: RequestInit = {}): Promise<ApiJsonResult<T>> {
   const headers = new Headers(init.headers ?? {});

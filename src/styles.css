@@ -1130,6 +1130,10 @@ button.secondary:hover:not(:disabled) {
   gap: 0.42rem;
 }
 
+.battle-screen__swap-picker-wrap {
+  margin-bottom: 0.35rem;
+}
+
 .battle-squad-picker__slot {
   width: 100% !important;
   text-align: left;
@@ -3544,6 +3548,20 @@ button.secondary:hover:not(:disabled) {
   font-size: 0.78rem;
 }
 
+.npc-battle-editor {
+  border: 1px solid rgba(112, 200, 255, 0.24);
+  border-radius: 8px;
+  background: rgba(8, 20, 36, 0.58);
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.npc-battle-editor__note {
+  margin-top: 0;
+}
+
 .duel-screen {
   padding: clamp(0.65rem, 1.6vw, 1rem);
 }
@@ -3768,11 +3786,20 @@ button.secondary:hover:not(:disabled) {
   gap: 0.65rem;
 }
 
+.duel-members--compact {
+  gap: 0.5rem;
+}
+
 .duel-members__toolbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 0.6rem;
+}
+
+.duel-members--compact .duel-members__toolbar h3 {
+  margin: 0;
+  font-size: 0.88rem;
 }
 
 .duel-member-card {
@@ -3785,6 +3812,11 @@ button.secondary:hover:not(:disabled) {
   gap: 0.65rem;
 }
 
+.duel-member-card--compact {
+  padding: 0.5rem;
+  gap: 0.5rem;
+}
+
 .duel-member-card__head {
   display: flex;
   justify-content: space-between;
@@ -3792,10 +3824,31 @@ button.secondary:hover:not(:disabled) {
   gap: 0.6rem;
 }
 
+.duel-member-card--compact .duel-member-card__head h4 {
+  margin: 0;
+  font-size: 0.84rem;
+}
+
+.duel-member-card--compact .title-screen__actions {
+  gap: 0.3rem;
+}
+
+.duel-member-card--compact .title-screen__actions .secondary {
+  min-width: 0;
+  padding: 0.28rem 0.45rem;
+  font-size: 0.68rem;
+}
+
 .duel-member-card__grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 0.45rem 0.65rem;
+}
+
+.duel-member-card__grid--compact {
+  grid-template-columns: minmax(0, 1fr) minmax(70px, 100px);
+  gap: 0.35rem 0.5rem;
+  align-items: end;
 }
 
 .duel-member-card__skills,
@@ -3805,10 +3858,51 @@ button.secondary:hover:not(:disabled) {
   gap: 0.45rem;
 }
 
+.duel-member-card__metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.7rem;
+  grid-column: 1 / -1;
+}
+
+.duel-member-card__metrics .admin-note {
+  margin: 0;
+}
+
+.duel-member-card__detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.55rem;
+}
+
+.duel-member-card__detail-grid--compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  align-items: start;
+}
+
 .duel-member-card__skill-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 0.45rem;
+}
+
+.duel-member-card__skill-slot {
+  min-width: 0;
+}
+
+.duel-member-card--compact .duel-member-card__skills h5,
+.duel-member-card--compact .duel-member-card__equipment h5 {
+  margin: 0;
+  font-size: 0.7rem;
+  color: #8fb9db;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.duel-member-card--compact .duel-member-card__skill-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.35rem;
 }
 
 .duel-member-card__equipment-toolbar {
@@ -3818,10 +3912,20 @@ button.secondary:hover:not(:disabled) {
   gap: 0.55rem;
 }
 
+.duel-member-card--compact .duel-member-card__equipment-toolbar .secondary {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.67rem;
+}
+
 .duel-equip-slots {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
   gap: 0.35rem;
+}
+
+.duel-member-card--compact .duel-equip-slots {
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+  gap: 0.25rem;
 }
 
 .duel-equip-slot {
@@ -3835,14 +3939,27 @@ button.secondary:hover:not(:disabled) {
   gap: 0.2rem;
 }
 
+.duel-member-card--compact .duel-equip-slot {
+  min-height: 40px;
+  padding: 0.25rem;
+}
+
 .duel-equip-slot span {
   font-size: 0.72rem;
   color: #8db6d8;
 }
 
+.duel-member-card--compact .duel-equip-slot span {
+  font-size: 0.66rem;
+}
+
 .duel-equip-slot small {
   font-size: 0.72rem;
   color: #d8ebfd;
+}
+
+.duel-member-card--compact .duel-equip-slot small {
+  font-size: 0.62rem;
 }
 
 .duel-equip-item-row {
@@ -3854,6 +3971,23 @@ button.secondary:hover:not(:disabled) {
   border-radius: 8px;
   padding: 0.45rem;
   background: rgba(10, 21, 38, 0.72);
+}
+
+.duel-equip-item-row--compact {
+  grid-template-columns: minmax(0, 1fr) 86px auto;
+  gap: 0.35rem;
+  padding: 0.35rem;
+}
+
+.duel-equip-item-row--compact label {
+  min-width: 0;
+}
+
+.duel-equip-item-row--compact .secondary {
+  white-space: nowrap;
+  min-width: 0;
+  padding: 0.3rem 0.45rem;
+  font-size: 0.66rem;
 }
 
 .duel-equip-item-row__meta {
@@ -3878,6 +4012,16 @@ button.secondary:hover:not(:disabled) {
   place-items: center;
   font-size: 0.56rem;
   color: #96b8d6;
+}
+
+@media (max-width: 940px) {
+  .duel-member-card__detail-grid--compact {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .duel-equip-item-row--compact {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .duel-field-error {

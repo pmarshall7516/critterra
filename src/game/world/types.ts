@@ -1,5 +1,6 @@
 import type { Direction, Vector2 } from '@/shared/types';
 import type { MapEncounterGroupDefinition } from '@/game/encounters/types';
+import type { DuelBattleFormat, DuelSquadMember } from '@/duel/types';
 
 /** Layer order id for the Base (floor) layer. */
 export const BASE_LAYER_ORDER_ID = 1;
@@ -50,6 +51,11 @@ export interface NpcMovementDefinition {
   leashRadius?: number;
 }
 
+export interface NpcBattleConfig {
+  format: DuelBattleFormat;
+  members: DuelSquadMember[];
+}
+
 export interface NpcMovementGuardDefinition {
   id?: string;
   requiresFlag?: string;
@@ -65,6 +71,8 @@ export interface NpcMovementGuardDefinition {
   setFlag?: string;
   /** Set when player wins the guard battle; guard becomes inactive unless battleRepeatable is true. */
   defeatedFlag?: string;
+  /** Optional advanced battle config override. Falls back to NPC battleConfig when omitted. */
+  battleConfig?: NpcBattleConfig;
   /** Optional per-guard battle team override. Falls back to NPC battleTeamIds when omitted. */
   battleTeamIds?: string[];
   /** Optional rewards granted after winning this guard battle. */
@@ -138,6 +146,7 @@ export interface NpcStoryStateDefinition {
   dialogueLines?: string[];
   dialogueSpeaker?: string;
   dialogueSetFlag?: string;
+  battleConfig?: NpcBattleConfig;
   battleTeamIds?: string[];
   movement?: NpcMovementDefinition;
   idleAnimation?: string;
@@ -168,6 +177,7 @@ export interface NpcDefinition {
   dialogueLines?: string[];
   dialogueSpeaker?: string;
   dialogueSetFlag?: string;
+  battleConfig?: NpcBattleConfig;
   battleTeamIds?: string[];
   movement?: NpcMovementDefinition;
   idleAnimation?: string;

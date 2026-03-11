@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { sanitizeCritterDatabase, sanitizeCritterDefinition } from '@/game/critters/schema';
 import { sanitizeItemCatalog } from '@/game/items/schema';
-import { sanitizeSkillLibrary } from '@/game/skills/schema';
+import { sanitizeSkillEffectLibrary, sanitizeSkillLibrary } from '@/game/skills/schema';
 import {
   CRITTER_ABILITY_KINDS,
   CRITTER_ELEMENTS,
@@ -52,6 +52,7 @@ interface LoadSupabaseSpriteSheetsResponse {
 interface SkillsListResponse {
   ok: boolean;
   critterSkills?: unknown;
+  skillEffects?: unknown;
   error?: string;
 }
 
@@ -366,7 +367,22 @@ export function CritterTool() {
       if (!result.ok) {
         throw new Error(result.error ?? result.data?.error ?? 'Unable to load skills.');
       }
-      const list: SkillOption[] = sanitizeSkillLibrary(result.data?.critterSkills)
+      const rawSkills = result.data?.critterSkills;
+      const rawEffects = result.data?.skillEffects;
+      const skillEffects = sanitizeSkillEffectLibrary(rawEffects);
+      const knownEffectIds = new Set(skillEffects.map((e) => e.effect_id));
+      const effectTypeById = new Map(skillEffects.map((e) => [e.effect_id, e.effect_type] as const));
+      const legacyEffectBuffPercentById = new Map(
+        skillEffects
+          .filter((e) => typeof e.buffPercent === 'number' && Number.isFinite(e.buffPercent))
+          .map((e) => [e.effect_id, e.buffPercent as number]),
+      );
+      const list: SkillOption[] = sanitizeSkillLibrary(
+        rawSkills,
+        knownEffectIds,
+        legacyEffectBuffPercentById,
+        effectTypeById,
+      )
         .map((skill) => ({
           id: skill.skill_id,
           name: skill.skill_name,
@@ -380,8 +396,11 @@ export function CritterTool() {
         }))
         .filter((x) => x.id.length > 0);
       setSkillList(list);
-    } catch {
+    } catch (err) {
       setSkillList([]);
+      setStatus(
+        err instanceof Error ? err.message : 'Skills could not be loaded. Check database connection and try Reload.',
+      );
     }
   };
 
@@ -1125,7 +1144,11 @@ export function CritterTool() {
                           >
                             {filteredOptions.length === 0 ? (
                               <div className="admin-effect-picker__dropdown-empty">
-                                {searchInput.trim() ? 'No matching skills' : 'All selected or no skills'}
+                                {skillList.length === 0
+                                  ? 'No skills loaded. Add skills in Admin → Skills and reload, or check database connection.'
+                                  : searchInput.trim()
+                                    ? 'No matching skills'
+                                    : 'All selected or no skills'}
                               </div>
                             ) : (
                               filteredOptions.map((opt) => (

@@ -56,6 +56,7 @@ import {
 import { NPC_LAYER_ORDER_ID } from '@/game/world/types';
 import type {
   InteractionDefinition,
+  NpcBattleConfig,
   NpcInteractionActionDefinition,
   NpcDefinition,
   NpcItemRewardDefinition,
@@ -2694,6 +2695,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       ? baseNpc.interactionRewards.map((entry) => ({ ...entry }))
       : undefined;
     let interactionRewardSetFlag = baseNpc.interactionRewardSetFlag;
+    let battleConfig = cloneRuntimeNpcBattleConfig(baseNpc.battleConfig);
     let battleTeamIds = baseNpc.battleTeamIds ? [...baseNpc.battleTeamIds] : undefined;
     let movement = baseNpc.movement
       ? {
@@ -2712,6 +2714,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
           ...guard,
           dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
           postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+          battleConfig: cloneRuntimeNpcBattleConfig(guard.battleConfig),
           battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
           battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
         }))
@@ -2773,6 +2776,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       if (typeof state.interactionRewardSetFlag === 'string' && state.interactionRewardSetFlag.trim()) {
         interactionRewardSetFlag = state.interactionRewardSetFlag;
       }
+      if (state.battleConfig) {
+        battleConfig = cloneRuntimeNpcBattleConfig(state.battleConfig);
+      }
       if (Array.isArray(state.battleTeamIds)) {
         battleTeamIds = state.battleTeamIds
           .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
@@ -2801,6 +2807,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
           ...guard,
           dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
           postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+          battleConfig: cloneRuntimeNpcBattleConfig(guard.battleConfig),
           battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
           battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
         }));
@@ -2824,6 +2831,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       shopId,
       interactionRewards,
       interactionRewardSetFlag,
+      battleConfig,
       battleTeamIds,
       movement,
       interactionScript,
@@ -2890,6 +2898,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
             ? character.interactionRewards.map((entry) => ({ ...entry }))
             : undefined,
         interactionRewardSetFlag: state.interactionRewardSetFlag ?? character.interactionRewardSetFlag,
+        battleConfig: cloneRuntimeNpcBattleConfig(state.battleConfig ?? character.battleConfig),
         battleTeamIds: state.battleTeamIds ? [...state.battleTeamIds] : character.battleTeamIds ? [...character.battleTeamIds] : undefined,
         movement: state.movement
           ? {
@@ -2910,6 +2919,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
               ...guard,
               dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
               postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+              battleConfig: cloneRuntimeNpcBattleConfig(guard.battleConfig),
               battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
               battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
             }))
@@ -2918,6 +2928,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
                 ...guard,
                 dialogueLines: guard.dialogueLines ? [...guard.dialogueLines] : undefined,
                 postDuelDialogueLines: guard.postDuelDialogueLines ? [...guard.postDuelDialogueLines] : undefined,
+                battleConfig: cloneRuntimeNpcBattleConfig(guard.battleConfig),
                 battleTeamIds: guard.battleTeamIds ? [...guard.battleTeamIds] : undefined,
                 battleRewards: guard.battleRewards ? guard.battleRewards.map((entry) => ({ ...entry })) : undefined,
               }))
@@ -3874,11 +3885,12 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         if (!this.doesNpcMovementGuardMatchTarget(guard, targetX, targetY)) {
           continue;
         }
-        const battleTeamIds =
-          Array.isArray(guard.battleTeamIds) && guard.battleTeamIds.length > 0
-            ? guard.battleTeamIds
-            : npc.battleTeamIds;
-        if (Array.isArray(battleTeamIds) && battleTeamIds.length > 0) {
+        const hasGuardTeamOverride = Array.isArray(guard.battleTeamIds);
+        const guardBattleConfig = this.hasNpcBattleConfig(guard.battleConfig) ? guard.battleConfig : undefined;
+        const npcBattleConfig = this.hasNpcBattleConfig(npc.battleConfig) ? npc.battleConfig : undefined;
+        const effectiveBattleConfig = guardBattleConfig ?? (hasGuardTeamOverride ? undefined : npcBattleConfig);
+        const effectiveBattleTeamIds = hasGuardTeamOverride ? guard.battleTeamIds : npc.battleTeamIds ?? [];
+        if (effectiveBattleConfig || (Array.isArray(effectiveBattleTeamIds) && effectiveBattleTeamIds.length > 0)) {
           const npcState = this.getNpcRuntimeState(npc);
           npcState.facing = oppositeDirection(this.facing);
           const preBattleLines = (Array.isArray(guard.dialogueLines) && guard.dialogueLines.length > 0
@@ -3896,7 +3908,10 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
             this.startDialogue(speaker, preBattleLines);
             return false;
           }
-          this.startMovementGuardBattle(npc, guard, battleTeamIds);
+          this.startMovementGuardBattle(npc, guard, {
+            battleConfig: effectiveBattleConfig,
+            teamIdsOverride: effectiveBattleTeamIds,
+          });
           return false;
         }
         if (!this.dialogue) {
@@ -4313,21 +4328,35 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
   private startMovementGuardBattle(
     npc: NpcDefinition,
     guard: NpcMovementGuardDefinition,
-    teamIdsOverride?: string[],
+    options?: {
+      battleConfig?: NpcBattleConfig;
+      teamIdsOverride?: string[];
+    },
   ): void {
     const playerTeam = this.buildPlayerBattleTeam();
     if (!this.hasBattleReadyCritter(playerTeam)) {
       this.handleEmptyPlayerBattleTeam();
       return;
     }
-    const guardBattleTeamIds =
-      Array.isArray(teamIdsOverride) && teamIdsOverride.length > 0
-        ? teamIdsOverride
-        : Array.isArray(guard.battleTeamIds) && guard.battleTeamIds.length > 0
-          ? guard.battleTeamIds
+    const hasGuardTeamOverride = Array.isArray(guard.battleTeamIds);
+    const guardBattleConfig = this.hasNpcBattleConfig(options?.battleConfig)
+      ? options?.battleConfig
+      : this.hasNpcBattleConfig(guard.battleConfig)
+        ? guard.battleConfig
+        : undefined;
+    const npcBattleConfig = this.hasNpcBattleConfig(npc.battleConfig) ? npc.battleConfig : undefined;
+    const effectiveBattleConfig = guardBattleConfig ?? (hasGuardTeamOverride ? undefined : npcBattleConfig);
+    const effectiveBattleTeamIds =
+      Array.isArray(options?.teamIdsOverride)
+        ? options.teamIdsOverride
+        : hasGuardTeamOverride
+          ? guard.battleTeamIds ?? []
           : npc.battleTeamIds ?? [];
-    const opponentTeam = this.buildNpcBattleTeam(guardBattleTeamIds);
+    const opponentTeam = effectiveBattleConfig
+      ? this.buildNpcBattleTeamFromMembers(effectiveBattleConfig.members)
+      : this.buildNpcBattleTeam(effectiveBattleTeamIds);
     if (opponentTeam.length === 0) {
+      this.showMessage(`${npc.name} guard battle team is not configured.`, 2200);
       return;
     }
     const defeatedFlag = typeof guard.defeatedFlag === 'string' && guard.defeatedFlag.trim() ? guard.defeatedFlag.trim() : '';
@@ -4378,7 +4407,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       return false;
     }
 
-    const opponentTeam = this.buildNpcBattleTeam(npc.battleTeamIds ?? []);
+    const opponentTeam = this.hasNpcBattleConfig(npc.battleConfig)
+      ? this.buildNpcBattleTeamFromMembers(npc.battleConfig.members)
+      : this.buildNpcBattleTeam(npc.battleTeamIds ?? []);
     if (opponentTeam.length === 0) {
       this.showMessage(`${npc.name} is not ready to battle yet.`, 2200);
       return false;
@@ -7676,7 +7707,10 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     }
 
     const jacobNpc = this.getNpcsForMap(this.currentMapId).find((entry) => entry.id === JACOB_NPC_ID);
-    const opponentTeam = this.buildNpcBattleTeam(jacobNpc?.battleTeamIds ?? []);
+    const opponentTeam =
+      jacobNpc && this.hasNpcBattleConfig(jacobNpc.battleConfig)
+        ? this.buildNpcBattleTeamFromMembers(jacobNpc.battleConfig.members)
+        : this.buildNpcBattleTeam(jacobNpc?.battleTeamIds ?? []);
     if (opponentTeam.length === 0) {
       this.activeCutscene = null;
       return;
@@ -7867,6 +7901,90 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       .replace(/<username>/gi, this.playerName)
       .replace(/<player-name>/gi, this.playerName)
       .replace(/<player-starter-critter-name>/gi, starterName);
+  }
+
+  private hasNpcBattleConfig(config: NpcBattleConfig | undefined): config is NpcBattleConfig {
+    return Boolean(config && Array.isArray(config.members) && config.members.length > 0);
+  }
+
+  private buildNpcBattleTeamFromMembers(members: NpcBattleConfig['members']): BattleCritterState[] {
+    const team: BattleCritterState[] = [];
+    const seenCritterIds = new Set<number>();
+    for (const member of members) {
+      const critter = this.critterLookup[member.critterId];
+      if (!critter || seenCritterIds.has(critter.id)) {
+        continue;
+      }
+      seenCritterIds.add(critter.id);
+      const maxConfiguredLevel = Math.max(1, ...critter.levels.map((entry) => entry.level));
+      const level = clamp(Math.max(1, Math.floor(member.level)), 1, maxConfiguredLevel);
+      const derived = computeCritterDerivedProgress(critter, level);
+      const slotCount = Math.max(0, computeCritterUnlockedEquipSlots(critter, level));
+      const rawAnchors = member.equippedItems
+        .map((item) => ({
+          itemId: sanitizeRuntimeIdentifier(item.itemId),
+          slotIndex: Math.max(0, Math.floor(item.slotIndex)),
+        }))
+        .filter((item) => item.itemId.length > 0);
+      const equipmentState = resolveEquipmentState(rawAnchors, slotCount, (itemId) => this.getEquipmentItemSizeById(itemId));
+      const equipmentEffects = this.getEquipmentEffectsFromAnchors(equipmentState.anchors);
+      const equipmentEffectSourceById: Record<string, string[]> = {};
+      for (const anchor of equipmentState.anchors) {
+        const item = this.getEquipmentItemById(anchor.itemId);
+        if (!item) {
+          continue;
+        }
+        for (const effectId of this.getEquipmentEffectIdsForItem(item)) {
+          const sourceNames = equipmentEffectSourceById[effectId] ?? [];
+          if (!sourceNames.includes(item.name)) {
+            sourceNames.push(item.name);
+          }
+          equipmentEffectSourceById[effectId] = sourceNames;
+        }
+      }
+      const adjustedStats = this.applyEquipmentEffectsToStats(derived.effectiveStats, equipmentEffects);
+      const maxHp = Math.max(1, adjustedStats.hp);
+      const baseDefense = Math.max(1, derived.effectiveStats.defense);
+      const adjustedDefense = Math.max(1, adjustedStats.defense);
+      const equippedSkillIds: BattleEquippedSkillSlots = [
+        this.skillLookupById[member.equippedSkillIds[0] ?? ''] ? member.equippedSkillIds[0] : null,
+        this.skillLookupById[member.equippedSkillIds[1] ?? ''] ? member.equippedSkillIds[1] : null,
+        this.skillLookupById[member.equippedSkillIds[2] ?? ''] ? member.equippedSkillIds[2] : null,
+        this.skillLookupById[member.equippedSkillIds[3] ?? ''] ? member.equippedSkillIds[3] : null,
+      ];
+      const equipmentEffectIds = equipmentEffects
+        .map((effect) => effect.effect_id)
+        .filter((id, idx, all) => all.indexOf(id) === idx);
+      team.push({
+        slotIndex: null,
+        critterId: critter.id,
+        name: critter.name,
+        element: critter.element,
+        spriteUrl: critter.spriteUrl,
+        level,
+        maxHp,
+        currentHp: maxHp,
+        attack: Math.max(1, adjustedStats.attack),
+        defense: adjustedDefense,
+        speed: Math.max(1, adjustedStats.speed),
+        equipmentDefensePositiveBonus: Math.max(0, adjustedDefense - baseDefense),
+        fainted: false,
+        knockoutProgressCounted: false,
+        attackModifier: 1,
+        defenseModifier: 1,
+        speedModifier: 1,
+        pendingCritChanceBonus: 0,
+        activeEffectIds: [],
+        activeEffectValueById: {},
+        activeEffectSourceById: {},
+        equipmentEffectIds,
+        equipmentEffectSourceById,
+        persistentHeal: null,
+        consecutiveSuccessfulGuardCount: 0,
+        equippedSkillIds,
+      });
+    }
+    return team;
   }
 
   private buildNpcBattleTeam(teamIds: string[]): BattleCritterState[] {
@@ -9786,6 +9904,95 @@ function sanitizeRuntimeNpcSpriteLibrary(raw: unknown): NpcSpriteLibraryEntry[] 
   return [...merged.values()];
 }
 
+function cloneRuntimeNpcBattleConfig(config: NpcBattleConfig | undefined): NpcBattleConfig | undefined {
+  if (!config) {
+    return undefined;
+  }
+  return {
+    format: config.format,
+    members: config.members.map((member) => ({
+      critterId: member.critterId,
+      level: member.level,
+      equippedSkillIds: [...member.equippedSkillIds] as [string | null, string | null, string | null, string | null],
+      equippedItems: member.equippedItems.map((item) => ({
+        itemId: item.itemId,
+        slotIndex: item.slotIndex,
+      })),
+    })),
+  };
+}
+
+function sanitizeRuntimeNpcBattleConfig(raw: unknown): NpcBattleConfig | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return undefined;
+  }
+  const record = raw as Record<string, unknown>;
+  const format =
+    record.format === 'triples' || record.format === 'doubles' || record.format === 'singles'
+      ? record.format
+      : 'singles';
+  const rawMembers = Array.isArray(record.members) ? record.members : [];
+  const members = rawMembers
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        return null;
+      }
+      const member = entry as Record<string, unknown>;
+      const critterId =
+        typeof member.critterId === 'number' && Number.isFinite(member.critterId)
+          ? Math.max(1, Math.floor(member.critterId))
+          : Number.NaN;
+      const level =
+        typeof member.level === 'number' && Number.isFinite(member.level)
+          ? Math.max(1, Math.floor(member.level))
+          : Number.NaN;
+      if (!Number.isFinite(critterId) || !Number.isFinite(level)) {
+        return null;
+      }
+      const rawSkillSlots = Array.isArray(member.equippedSkillIds) ? member.equippedSkillIds : [];
+      const equippedSkillIds: [string | null, string | null, string | null, string | null] = [null, null, null, null];
+      for (let slot = 0; slot < 4; slot += 1) {
+        const slotValue = rawSkillSlots[slot];
+        equippedSkillIds[slot] =
+          typeof slotValue === 'string' && slotValue.trim() ? sanitizeRuntimeIdentifier(slotValue) : null;
+      }
+      const equippedItems = (Array.isArray(member.equippedItems) ? member.equippedItems : [])
+        .map((itemEntry) => {
+          if (!itemEntry || typeof itemEntry !== 'object' || Array.isArray(itemEntry)) {
+            return null;
+          }
+          const item = itemEntry as Record<string, unknown>;
+          const itemId = sanitizeRuntimeIdentifier(item.itemId);
+          const slotIndex =
+            typeof item.slotIndex === 'number' && Number.isFinite(item.slotIndex)
+              ? Math.max(0, Math.floor(item.slotIndex))
+              : Number.NaN;
+          if (!itemId || !Number.isFinite(slotIndex)) {
+            return null;
+          }
+          return {
+            itemId,
+            slotIndex,
+          };
+        })
+        .filter((item): item is { itemId: string; slotIndex: number } => item !== null);
+      return {
+        critterId,
+        level,
+        equippedSkillIds,
+        equippedItems,
+      };
+    })
+    .filter((entry): entry is NpcBattleConfig['members'][number] => entry !== null);
+  if (members.length === 0) {
+    return undefined;
+  }
+  return {
+    format,
+    members,
+  };
+}
+
 function sanitizeRuntimeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateEntry[] {
   if (!Array.isArray(raw)) {
     return [];
@@ -9859,6 +10066,7 @@ function sanitizeRuntimeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateE
           typeof stateRecord.interactionRewardSetFlag === 'string' && stateRecord.interactionRewardSetFlag.trim()
             ? stateRecord.interactionRewardSetFlag.trim()
             : undefined,
+        battleConfig: sanitizeRuntimeNpcBattleConfig(stateRecord.battleConfig),
         dialogueLines: Array.isArray(stateRecord.dialogueLines)
           ? stateRecord.dialogueLines.filter((line): line is string => typeof line === 'string')
           : undefined,
@@ -9898,6 +10106,7 @@ function sanitizeRuntimeNpcCharacterLibrary(raw: unknown): NpcCharacterTemplateE
         typeof record.interactionRewardSetFlag === 'string' && record.interactionRewardSetFlag.trim()
           ? record.interactionRewardSetFlag.trim()
           : undefined,
+      battleConfig: sanitizeRuntimeNpcBattleConfig(record.battleConfig),
       battleTeamIds: Array.isArray(record.battleTeamIds)
         ? record.battleTeamIds
             .filter((team): team is string => typeof team === 'string' && team.trim().length > 0)
@@ -9958,6 +10167,7 @@ function sanitizeRuntimeNpcMovementGuards(raw: unknown): NpcMovementGuardDefinit
           : typeof record.postDefeatSetFlag === 'string' && record.postDefeatSetFlag.trim()
             ? record.postDefeatSetFlag.trim()
           : undefined,
+      battleConfig: sanitizeRuntimeNpcBattleConfig(record.battleConfig),
       battleTeamIds: Array.isArray(record.battleTeamIds)
         ? record.battleTeamIds
             .filter((teamId): teamId is string => typeof teamId === 'string' && teamId.trim().length > 0)

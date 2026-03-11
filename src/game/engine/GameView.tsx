@@ -2467,7 +2467,9 @@ function BattleOverlay({
     );
   }
 
-  const canSelectSquad = !battle.canAdvanceNarration && (battle.requiresStarterSelection || battle.requiresSwapSelection);
+  const canSelectStarterSquad = !battle.canAdvanceNarration && battle.requiresStarterSelection;
+  const canSelectSwapSquad = !battle.canAdvanceNarration && battle.requiresSwapSelection;
+  const canSelectSquad = canSelectStarterSquad || canSelectSwapSquad;
   const showSwapBackLink = !battle.canAdvanceNarration && battle.requiresSwapSelection && battle.canCancelSwap;
 
   return (
@@ -2488,13 +2490,13 @@ function BattleOverlay({
             attackToken={battle.activeAnimation?.attacker === 'player' ? battle.activeAnimation.token : null}
             squadEntries={battle.playerTeam}
             playerActiveIndex={battle.playerActiveIndex}
-            canSelectSquad={canSelectSquad}
+            canSelectSquad={canSelectStarterSquad}
             emptyText={
-              canSelectSquad
-                ? battle.requiresStarterSelection
-                  ? 'Choose your lead critter.'
-                  : 'Choose a squad critter.'
-                : 'No active critter.'
+              canSelectStarterSquad
+                ? 'Choose your lead critter.'
+                : canSelectSwapSquad
+                  ? 'Choose a squad critter below.'
+                  : 'No active critter.'
             }
             onSelectSquadSlot={onSelectSquadSlot}
           />
@@ -2539,6 +2541,37 @@ function BattleOverlay({
               >
                 ← Back
               </a>
+            )}
+            {canSelectSwapSquad && (
+              <div className="battle-screen__swap-picker-wrap">
+                <div className="battle-squad-picker" aria-label="Choose a critter to swap in">
+                  {battle.playerTeam.map((entry, index) => {
+                    const isActive = battle.playerActiveIndex === index;
+                    const canChooseSlot = typeof entry.slotIndex === 'number' && !isActive && !entry.fainted && entry.currentHp > 0;
+                    const slotLabelIndex = typeof entry.slotIndex === 'number' ? entry.slotIndex : index;
+                    return (
+                      <button
+                        key={`battle-swap-slot-${slotLabelIndex}`}
+                        type="button"
+                        className={`battle-squad-picker__slot ${isActive ? 'is-active' : ''} ${entry.fainted || entry.currentHp <= 0 ? 'is-fainted' : ''}`}
+                        disabled={!canChooseSlot}
+                        onClick={() => {
+                          if (typeof entry.slotIndex === 'number') {
+                            onSelectSquadSlot(entry.slotIndex);
+                          }
+                        }}
+                      >
+                        <span className="battle-squad-picker__name">
+                          Slot {slotLabelIndex + 1}: {entry.name}
+                        </span>
+                        <span className="battle-squad-picker__hp">
+                          {isActive ? 'Currently active' : entry.fainted || entry.currentHp <= 0 ? 'Fainted' : `HP ${entry.currentHp}/${entry.maxHp}`}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             )}
           </div>
 
