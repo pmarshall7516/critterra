@@ -1,4 +1,15 @@
-export const CRITTER_ELEMENTS = ['bloom', 'ember', 'tide', 'gust', 'stone', 'spark', 'shade', 'normal'] as const;
+export const CRITTER_ELEMENTS = [
+  'bloom',
+  'ember',
+  'tide',
+  'gust',
+  'stone',
+  'spark',
+  'shade',
+  'normal',
+  'primal',
+  'mystic',
+] as const;
 export type CritterElement = (typeof CRITTER_ELEMENTS)[number];
 
 export const CRITTER_RARITIES = ['common', 'uncommon', 'rare', 'legendary'] as const;
@@ -13,6 +24,7 @@ export const CRITTER_MISSION_TYPES = [
   'pay_item',
   'use_guard',
   'swap_in',
+  'swap_out',
   'heal_critter',
   'ascension',
   'story_flag',

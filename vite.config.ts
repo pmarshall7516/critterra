@@ -176,6 +176,25 @@ interface SaveFlagsRequestPayload {
   flags?: unknown;
 }
 
+interface DuelSquadMemberPayload {
+  critterId?: unknown;
+  level?: unknown;
+  equippedSkillIds?: unknown;
+  equippedItems?: unknown;
+}
+
+interface DuelSquadPayload {
+  id?: unknown;
+  name?: unknown;
+  sortIndex?: unknown;
+  members?: unknown;
+}
+
+interface DuelSquadItemPayload {
+  itemId?: unknown;
+  slotIndex?: unknown;
+}
+
 interface FlagCatalogEntryPayload {
   flagId: string;
   label: string;
@@ -3285,6 +3304,347 @@ function createSpawnMapPayload(): EditableMapPayload {
   };
 }
 
+interface DuelCatalogCritterLevelRow {
+  level: number;
+  unlockEquipSlots: number;
+  unlockedSkillIds: Set<string>;
+}
+
+interface DuelCatalogCritter {
+  id: number;
+  maxLevel: number;
+  levelRows: DuelCatalogCritterLevelRow[];
+}
+
+interface DuelCatalogEquipmentItem {
+  itemId: string;
+  equipSize: number;
+  equipTypeKey: string;
+}
+
+interface DuelValidationCatalogs {
+  critterById: Map<number, DuelCatalogCritter>;
+  equipmentById: Map<string, DuelCatalogEquipmentItem>;
+  skillIds: Set<string>;
+}
+
+interface NormalizedDuelSquadMember {
+  critterId: number;
+  level: number;
+  equippedSkillIds: [string | null, string | null, string | null, string | null];
+  equippedItems: Array<{
+    itemId: string;
+    slotIndex: number;
+  }>;
+}
+
+interface NormalizedDuelSquadPayload {
+  id: string | null;
+  name: string;
+  sortIndex: number | null;
+  members: NormalizedDuelSquadMember[];
+}
+
+function sanitizeDuelCatalogIdentifier(raw: unknown): string {
+  if (typeof raw !== 'string') {
+    return '';
+  }
+  const normalized = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+/g, '')
+    .replace(/-+$/g, '');
+  return normalized;
+}
+
+function sanitizeDuelEntityId(raw: unknown): string {
+  if (typeof raw !== 'string') {
+    return '';
+  }
+  const normalized = raw.trim();
+  if (!normalized) {
+    return '';
+  }
+  if (!/^[A-Za-z0-9_-]{1,120}$/.test(normalized)) {
+    return '';
+  }
+  return normalized;
+}
+
+function parseDuelSortIndex(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return null;
+  }
+  const normalized = Math.floor(raw);
+  if (normalized < 0 || normalized > 9999) {
+    return null;
+  }
+  return normalized;
+}
+
+function parseDuelLevelRows(rawLevels: unknown): DuelCatalogCritterLevelRow[] {
+  if (!Array.isArray(rawLevels)) {
+    return [];
+  }
+  const rows: DuelCatalogCritterLevelRow[] = [];
+  for (const entry of rawLevels) {
+    if (!isPlainRecord(entry)) {
+      continue;
+    }
+    const levelRaw = entry.level;
+    const unlockEquipSlotsRaw = entry.unlockEquipSlots;
+    const level = typeof levelRaw === 'number' && Number.isFinite(levelRaw) ? Math.floor(levelRaw) : 0;
+    const unlockEquipSlots =
+      typeof unlockEquipSlotsRaw === 'number' && Number.isFinite(unlockEquipSlotsRaw)
+        ? Math.floor(unlockEquipSlotsRaw)
+        : 0;
+    if (level < 1) {
+      continue;
+    }
+    const rawSkillIds = Array.isArray(entry.skillUnlockIds) ? entry.skillUnlockIds : [];
+    const unlockedSkillIds = new Set(
+      rawSkillIds
+        .filter((skillId): skillId is string => typeof skillId === 'string')
+        .map((skillId) => sanitizeDuelCatalogIdentifier(skillId))
+        .filter((skillId) => skillId.length > 0),
+    );
+    rows.push({
+      level,
+      unlockEquipSlots: Math.max(0, Math.min(8, unlockEquipSlots)),
+      unlockedSkillIds,
+    });
+  }
+  rows.sort((left, right) => left.level - right.level);
+  return rows;
+}
+
+function computeDuelMaxLevel(levelRows: DuelCatalogCritterLevelRow[]): number {
+  const maxLevel = levelRows.reduce((max, row) => Math.max(max, row.level), 1);
+  return Math.max(1, Math.min(99, maxLevel));
+}
+
+function computeDuelUnlockedEquipSlots(levelRows: DuelCatalogCritterLevelRow[], level: number): number {
+  const safeLevel = Math.max(1, Math.floor(level));
+  let unlocked = 0;
+  for (const row of levelRows) {
+    if (row.level > safeLevel) {
+      continue;
+    }
+    unlocked += row.unlockEquipSlots;
+  }
+  return Math.max(0, Math.min(8, unlocked));
+}
+
+function computeDuelUnlockedSkillIds(levelRows: DuelCatalogCritterLevelRow[], level: number): Set<string> {
+  const safeLevel = Math.max(1, Math.floor(level));
+  const unlocked = new Set<string>();
+  for (const row of levelRows) {
+    if (row.level > safeLevel) {
+      continue;
+    }
+    row.unlockedSkillIds.forEach((skillId) => {
+      unlocked.add(skillId);
+    });
+  }
+  return unlocked;
+}
+
+function parseDuelSkillSlots(
+  raw: unknown,
+  unlockedSkillIds: Set<string>,
+  knownSkillIds: Set<string>,
+  memberLabel: string,
+): [string | null, string | null, string | null, string | null] {
+  if (raw == null) {
+    return [null, null, null, null];
+  }
+  if (!Array.isArray(raw)) {
+    throw new Error(`${memberLabel} equippedSkillIds must be an array.`);
+  }
+  if (raw.length > 4) {
+    throw new Error(`${memberLabel} equippedSkillIds cannot exceed 4 slots.`);
+  }
+  const slots: [string | null, string | null, string | null, string | null] = [null, null, null, null];
+  const seenSkillIds = new Set<string>();
+  for (let slotIndex = 0; slotIndex < 4; slotIndex += 1) {
+    const entry = raw[slotIndex];
+    if (entry === null || entry === undefined || entry === '') {
+      slots[slotIndex] = null;
+      continue;
+    }
+    if (typeof entry !== 'string') {
+      throw new Error(`${memberLabel} skill slot ${slotIndex + 1} must be a string or null.`);
+    }
+    const skillId = sanitizeDuelCatalogIdentifier(entry);
+    if (!skillId) {
+      throw new Error(`${memberLabel} skill slot ${slotIndex + 1} is invalid.`);
+    }
+    if (!knownSkillIds.has(skillId)) {
+      throw new Error(`${memberLabel} skill "${skillId}" does not exist.`);
+    }
+    if (!unlockedSkillIds.has(skillId)) {
+      throw new Error(`${memberLabel} skill "${skillId}" is not unlocked at this level.`);
+    }
+    if (seenSkillIds.has(skillId)) {
+      throw new Error(`${memberLabel} cannot equip duplicate skill "${skillId}".`);
+    }
+    seenSkillIds.add(skillId);
+    slots[slotIndex] = skillId;
+  }
+  return slots;
+}
+
+function parseDuelEquippedItems(
+  raw: unknown,
+  equipSlotCount: number,
+  equipmentById: Map<string, DuelCatalogEquipmentItem>,
+  memberLabel: string,
+): Array<{ itemId: string; slotIndex: number }> {
+  if (raw == null) {
+    return [];
+  }
+  if (!Array.isArray(raw)) {
+    throw new Error(`${memberLabel} equippedItems must be an array.`);
+  }
+  const seenItemIds = new Set<string>();
+  const seenEquipTypes = new Set<string>();
+  const occupancy = Array.from({ length: Math.max(0, equipSlotCount) }, () => false);
+  const parsed: Array<{ itemId: string; slotIndex: number; equipSize: number; equipTypeKey: string }> = [];
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const entry = raw[index];
+    if (!isPlainRecord(entry)) {
+      throw new Error(`${memberLabel} equipped item ${index + 1} must be an object.`);
+    }
+    const itemId = sanitizeDuelCatalogIdentifier(entry.itemId);
+    const slotIndex =
+      typeof entry.slotIndex === 'number' && Number.isFinite(entry.slotIndex)
+        ? Math.floor(entry.slotIndex)
+        : Number.NaN;
+    if (!itemId) {
+      throw new Error(`${memberLabel} equipped item ${index + 1} is missing itemId.`);
+    }
+    if (!Number.isFinite(slotIndex)) {
+      throw new Error(`${memberLabel} equipped item "${itemId}" is missing slotIndex.`);
+    }
+    const equipment = equipmentById.get(itemId);
+    if (!equipment) {
+      throw new Error(`${memberLabel} item "${itemId}" is not a valid active equipment item.`);
+    }
+    if (seenItemIds.has(itemId)) {
+      throw new Error(`${memberLabel} cannot equip duplicate item "${itemId}".`);
+    }
+    if (seenEquipTypes.has(equipment.equipTypeKey)) {
+      throw new Error(`${memberLabel} cannot equip two items of type "${equipment.equipTypeKey}".`);
+    }
+    if (slotIndex < 0 || slotIndex >= equipSlotCount) {
+      throw new Error(`${memberLabel} equipped item "${itemId}" has an out-of-range slot index.`);
+    }
+    const slotEnd = slotIndex + equipment.equipSize;
+    if (slotEnd > equipSlotCount) {
+      throw new Error(`${memberLabel} equipped item "${itemId}" exceeds unlocked equip slots.`);
+    }
+    for (let slot = slotIndex; slot < slotEnd; slot += 1) {
+      if (occupancy[slot]) {
+        throw new Error(`${memberLabel} equipped item "${itemId}" overlaps another equipped item.`);
+      }
+    }
+    for (let slot = slotIndex; slot < slotEnd; slot += 1) {
+      occupancy[slot] = true;
+    }
+    seenItemIds.add(itemId);
+    seenEquipTypes.add(equipment.equipTypeKey);
+    parsed.push({
+      itemId,
+      slotIndex,
+      equipSize: equipment.equipSize,
+      equipTypeKey: equipment.equipTypeKey,
+    });
+  }
+
+  parsed.sort((left, right) => left.slotIndex - right.slotIndex || left.itemId.localeCompare(right.itemId));
+  return parsed.map((entry) => ({
+    itemId: entry.itemId,
+    slotIndex: entry.slotIndex,
+  }));
+}
+
+function parseDuelSquadPayload(
+  raw: unknown,
+  catalogs: DuelValidationCatalogs,
+  options?: { requireId?: boolean },
+): NormalizedDuelSquadPayload {
+  if (!isPlainRecord(raw)) {
+    throw new Error('Invalid squad payload.');
+  }
+  const source = isPlainRecord(raw.squad) ? raw.squad : raw;
+  const id = sanitizeDuelEntityId(source.id ?? raw.id);
+  if (options?.requireId && !id) {
+    throw new Error('Squad id is required.');
+  }
+
+  const nameRaw = typeof source.name === 'string' ? source.name.trim() : '';
+  if (!nameRaw) {
+    throw new Error('Squad name is required.');
+  }
+  const name = nameRaw.slice(0, 40);
+  const sortIndex = parseDuelSortIndex(source.sortIndex ?? raw.sortIndex);
+  const membersRaw = source.members;
+  if (!Array.isArray(membersRaw)) {
+    throw new Error('Squad members must be an array.');
+  }
+  if (membersRaw.length < 1 || membersRaw.length > 8) {
+    throw new Error('Squad must contain between 1 and 8 critters.');
+  }
+
+  const seenCritterIds = new Set<number>();
+  const members: NormalizedDuelSquadMember[] = membersRaw.map((entry, index) => {
+    if (!isPlainRecord(entry)) {
+      throw new Error(`Member ${index + 1} must be an object.`);
+    }
+    const critterId =
+      typeof entry.critterId === 'number' && Number.isFinite(entry.critterId) ? Math.floor(entry.critterId) : Number.NaN;
+    if (!Number.isFinite(critterId)) {
+      throw new Error(`Member ${index + 1} is missing critterId.`);
+    }
+    const critter = catalogs.critterById.get(critterId);
+    if (!critter) {
+      throw new Error(`Critter ${critterId} does not exist.`);
+    }
+    if (seenCritterIds.has(critterId)) {
+      throw new Error('Squad cannot contain duplicate critter species.');
+    }
+    seenCritterIds.add(critterId);
+
+    const level = typeof entry.level === 'number' && Number.isFinite(entry.level) ? Math.floor(entry.level) : Number.NaN;
+    if (!Number.isFinite(level) || level < 1 || level > critter.maxLevel) {
+      throw new Error(`Critter ${critterId} level must be between 1 and ${critter.maxLevel}.`);
+    }
+
+    const unlockedSkillIds = computeDuelUnlockedSkillIds(critter.levelRows, level);
+    const equipSlotCount = computeDuelUnlockedEquipSlots(critter.levelRows, level);
+    const memberLabel = `Critter ${critterId} at level ${level}`;
+    const equippedSkillIds = parseDuelSkillSlots(entry.equippedSkillIds, unlockedSkillIds, catalogs.skillIds, memberLabel);
+    const equippedItems = parseDuelEquippedItems(entry.equippedItems, equipSlotCount, catalogs.equipmentById, memberLabel);
+
+    return {
+      critterId,
+      level,
+      equippedSkillIds,
+      equippedItems,
+    };
+  });
+
+  return {
+    id: id || null,
+    name,
+    sortIndex,
+    members,
+  };
+}
+
 function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConfig: SupabaseStorageConfig | null): Plugin {
   const pool =
     dbConnectionString.trim().length > 0
@@ -3711,6 +4071,21 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       );
     `);
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_duel_squads (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        squad_name TEXT NOT NULL,
+        squad_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+        sort_index INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS user_duel_squads_user_idx
+      ON user_duel_squads (user_id, sort_index, updated_at DESC, id);
+    `);
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS game_catalog_state (
         catalog_key TEXT PRIMARY KEY,
         map_init_version INTEGER NOT NULL DEFAULT 0,
@@ -3821,6 +4196,17 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       CREATE TABLE IF NOT EXISTS game_element_chart (
         catalog_key TEXT PRIMARY KEY,
         chart_data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_elements (
+        element_id TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL DEFAULT '',
+        color_hex TEXT NOT NULL DEFAULT '',
+        icon_bucket TEXT NOT NULL DEFAULT 'icons',
+        icon_path TEXT NOT NULL DEFAULT '',
+        sort_index INTEGER NOT NULL DEFAULT 0,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
@@ -4032,6 +4418,36 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         );
       }
 
+      // Seed game elements once so element usage can be data-driven.
+      const elementCountResult = await client.query('SELECT COUNT(*)::int AS count FROM game_elements');
+      const elementCount = Number(elementCountResult.rows[0]?.count ?? 0);
+      if (elementCount === 0) {
+        const seededElements: Array<{ id: string; name: string; color: string }> = [
+          { id: 'bloom', name: 'Bloom', color: '#81c784' },
+          { id: 'ember', name: 'Ember', color: '#ffb74d' },
+          { id: 'tide', name: 'Tide', color: '#b3e5fc' },
+          { id: 'gust', name: 'Gust', color: '#b0bec5' },
+          { id: 'stone', name: 'Stone', color: '#d7ccc8' },
+          { id: 'spark', name: 'Spark', color: '#fff176' },
+          { id: 'shade', name: 'Shade', color: '#b8a0e0' },
+          { id: 'normal', name: 'Normal', color: '#f5f0e1' },
+          { id: 'primal', name: 'Primal', color: '#6A4ACD' },
+          { id: 'mystic', name: 'Mystic', color: '#FFD1DC' },
+        ];
+        for (let i = 0; i < seededElements.length; i += 1) {
+          const entry = seededElements[i];
+          await client.query(
+            `
+              INSERT INTO game_elements (element_id, display_name, color_hex, icon_bucket, icon_path, sort_index, updated_at)
+              VALUES ($1, $2, $3, 'icons', $4, $5, NOW())
+              ON CONFLICT (element_id)
+              DO UPDATE SET display_name = EXCLUDED.display_name, color_hex = EXCLUDED.color_hex, icon_bucket = EXCLUDED.icon_bucket, icon_path = EXCLUDED.icon_path, sort_index = EXCLUDED.sort_index, updated_at = NOW()
+            `,
+            [entry.id, entry.name, entry.color, `${entry.id}-element.png`, i],
+          );
+        }
+      }
+
       await syncDiscoveredFlags(client);
 
       await client.query('COMMIT');
@@ -4210,6 +4626,97 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
     return (result.rows.map((row) => row.skill_data) as Array<Record<string, unknown>>).filter(Boolean);
   };
 
+  const loadDuelValidationCatalogs = async (): Promise<DuelValidationCatalogs> => {
+    await ensureGlobalCatalogBaseline();
+    const [critters, items, skills] = await Promise.all([
+      readGlobalCritterCatalog(),
+      readGlobalItemCatalog(),
+      readGlobalSkillCatalog(),
+    ]);
+
+    const critterById = new Map<number, DuelCatalogCritter>();
+    for (const critter of critters) {
+      if (!isPlainRecord(critter)) {
+        continue;
+      }
+      const critterId = typeof critter.id === 'number' && Number.isFinite(critter.id) ? Math.floor(critter.id) : -1;
+      if (critterId < 1) {
+        continue;
+      }
+      const levelRows = parseDuelLevelRows(critter.levels);
+      critterById.set(critterId, {
+        id: critterId,
+        maxLevel: computeDuelMaxLevel(levelRows),
+        levelRows,
+      });
+    }
+
+    const equipmentById = new Map<string, DuelCatalogEquipmentItem>();
+    for (const item of items) {
+      if (!isPlainRecord(item)) {
+        continue;
+      }
+      const itemId = sanitizeDuelCatalogIdentifier(item.id);
+      const category = typeof item.category === 'string' ? item.category.trim().toLowerCase() : '';
+      const isActive = item.isActive !== false;
+      if (!itemId || category !== 'equipment' || !isActive) {
+        continue;
+      }
+      const effectConfig = isPlainRecord(item.effectConfig) ? item.effectConfig : {};
+      const equipSize =
+        typeof effectConfig.equipSize === 'number' && Number.isFinite(effectConfig.equipSize)
+          ? Math.max(1, Math.min(8, Math.floor(effectConfig.equipSize)))
+          : 1;
+      const slotRaw = typeof effectConfig.slot === 'string' ? sanitizeDuelCatalogIdentifier(effectConfig.slot) : '';
+      const equipTypeKey = slotRaw || itemId;
+      equipmentById.set(itemId, {
+        itemId,
+        equipSize,
+        equipTypeKey,
+      });
+    }
+
+    const skillIds = new Set<string>();
+    for (const skill of skills) {
+      if (!isPlainRecord(skill)) {
+        continue;
+      }
+      const skillId = sanitizeDuelCatalogIdentifier(skill.skill_id);
+      if (!skillId) {
+        continue;
+      }
+      skillIds.add(skillId);
+    }
+
+    return {
+      critterById,
+      equipmentById,
+      skillIds,
+    };
+  };
+
+  const mapDuelSquadRowToResponse = (
+    row: {
+      id: string;
+      squad_name: string;
+      squad_data: unknown;
+      sort_index: number;
+      created_at: string;
+      updated_at: string;
+    },
+  ) => {
+    const data = isPlainRecord(row.squad_data) ? row.squad_data : {};
+    const members = Array.isArray(data.members) ? data.members : [];
+    return {
+      id: row.id,
+      name: typeof row.squad_name === 'string' && row.squad_name.trim() ? row.squad_name.trim() : 'Squad',
+      sortIndex: Number.isFinite(row.sort_index) ? Math.max(0, Math.floor(row.sort_index)) : 0,
+      members,
+      createdAt: typeof row.created_at === 'string' ? row.created_at : new Date().toISOString(),
+      updatedAt: typeof row.updated_at === 'string' ? row.updated_at : new Date().toISOString(),
+    };
+  };
+
   const writeGlobalSkillCatalog = async (skills: Array<Record<string, unknown>>): Promise<void> => {
     if (!pool) {
       throw new Error('Database unavailable.');
@@ -4321,6 +4828,61 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
 
   const ELEMENT_CHART_KEY = 'default';
 
+  type GameElementRow = {
+    element_id: string;
+    display_name: string;
+    color_hex: string;
+    icon_bucket: string;
+    icon_path: string;
+    sort_index: number;
+  };
+
+  const readGameElements = async (): Promise<GameElementRow[]> => {
+    if (!pool) {
+      return [];
+    }
+    const result = await pool.query<GameElementRow>(
+      'SELECT element_id, display_name, color_hex, icon_bucket, icon_path, sort_index FROM game_elements ORDER BY sort_index ASC, element_id ASC',
+    );
+    return (result.rows ?? []).filter((row) => typeof row.element_id === 'string' && row.element_id.trim().length > 0);
+  };
+
+  const writeGameElements = async (elements: GameElementRow[]): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Upsert each element; do not delete implicitly.
+      for (let i = 0; i < elements.length; i += 1) {
+        const e = elements[i];
+        const id = typeof e.element_id === 'string' ? e.element_id.trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-') : '';
+        if (!id) continue;
+        const displayName = typeof e.display_name === 'string' ? e.display_name.trim() : id;
+        const colorHex = typeof e.color_hex === 'string' ? e.color_hex.trim() : '';
+        const iconBucket = typeof e.icon_bucket === 'string' && e.icon_bucket.trim() ? e.icon_bucket.trim() : 'icons';
+        const iconPath = typeof e.icon_path === 'string' ? e.icon_path.trim() : '';
+        const sortIndex = Number.isFinite(e.sort_index) ? Math.max(0, Math.floor(e.sort_index)) : i;
+        await client.query(
+          `
+            INSERT INTO game_elements (element_id, display_name, color_hex, icon_bucket, icon_path, sort_index, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, NOW())
+            ON CONFLICT (element_id)
+            DO UPDATE SET display_name = EXCLUDED.display_name, color_hex = EXCLUDED.color_hex, icon_bucket = EXCLUDED.icon_bucket, icon_path = EXCLUDED.icon_path, sort_index = EXCLUDED.sort_index, updated_at = NOW()
+          `,
+          [id, displayName, colorHex, iconBucket, iconPath, sortIndex],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
   const readElementChart = async (): Promise<Array<Record<string, unknown>>> => {
     if (!pool) {
       return [];
@@ -4421,8 +4983,36 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
     next();
   };
 
+  const rewriteDuelRoute = (req: IncomingMessage, _res: ServerResponse, next: () => void) => {
+    const method = req.method ?? 'GET';
+    if (method !== 'GET' && method !== 'HEAD') {
+      next();
+      return;
+    }
+
+    const [pathname, query = ''] = (req.url ?? '').split('?');
+    const isDuelRoutePath =
+      pathname === '/simulation' ||
+      pathname === '/simulation/' ||
+      pathname === '/simulation.html' ||
+      /^\/simulation(?:\/[a-z0-9-]+)*\/?$/i.test(pathname ?? '') ||
+      pathname === '/duel' ||
+      pathname === '/duel/' ||
+      pathname === '/duel.html' ||
+      /^\/duel(?:\/[a-z0-9-]+)*\/?$/i.test(pathname ?? '');
+
+    if (!isDuelRoutePath) {
+      next();
+      return;
+    }
+
+    req.url = query ? `/duel.html?${query}` : '/duel.html';
+    next();
+  };
+
   const middleware = async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
     const url = req.url?.split('?')[0] ?? '';
+    const duelSquadByIdMatch = url.match(/^\/api\/duel\/squads\/([A-Za-z0-9_-]{1,120})$/);
     const handledRoutes = new Set([
       '/api/auth/signup',
       '/api/auth/login',
@@ -4431,6 +5021,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       '/api/game/save',
       '/api/game/reset',
       '/api/content/bootstrap',
+      '/api/duel/squads',
       '/api/admin/maps/save',
       '/api/admin/maps/list',
       '/api/admin/tiles/save',
@@ -4457,10 +5048,12 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       '/api/admin/equipment-effects/save',
       '/api/admin/element-chart/get',
       '/api/admin/element-chart/save',
+      '/api/admin/elements/list',
+      '/api/admin/elements/save',
       '/api/admin/flags/save',
       '/api/admin/flags/list',
     ]);
-    if (!handledRoutes.has(url)) {
+    if (!handledRoutes.has(url) && !duelSquadByIdMatch) {
       next();
       return;
     }
@@ -4691,7 +5284,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         } finally {
           client.release();
         }
-        const [mapsResult, tilesRowsResult, playerSpriteResult, npcLibraryResult, crittersResult, encounterResult, skills, effects, equipmentEffects, elementChart, items, shops] = await Promise.all([
+        const [mapsResult, tilesRowsResult, playerSpriteResult, npcLibraryResult, crittersResult, encounterResult, skills, effects, equipmentEffects, elementChart, gameElements, items, shops] = await Promise.all([
           pool.query('SELECT map_data FROM game_maps ORDER BY updated_at DESC'),
           pool.query('SELECT id, name, primary_code, width, height, y_sort_with_actors, tileset_url, tile_pixel_width, tile_pixel_height, cells FROM game_tiles ORDER BY updated_at DESC'),
           pool.query('SELECT sprite_config FROM game_player_sprite_configs WHERE catalog_key = $1', [GLOBAL_CATALOG_KEY]),
@@ -4702,6 +5295,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
           readGlobalSkillEffectsCatalog(),
           readGlobalEquipmentEffectsCatalog(),
           readElementChart(),
+          readGameElements(),
           readGlobalItemCatalog(),
           readGlobalShopCatalog(),
         ]);
@@ -4736,9 +5330,182 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
             skillEffects: effects,
             equipmentEffects,
             elementChart,
+            gameElements,
             items,
             shops,
           },
+        });
+        return;
+      }
+
+      if (url === '/api/duel/squads' && req.method === 'GET') {
+        const auth = await requireAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureSchema();
+        const squadsResult = await pool.query<{
+          id: string;
+          squad_name: string;
+          squad_data: unknown;
+          sort_index: number;
+          created_at: string;
+          updated_at: string;
+        }>(
+          `
+            SELECT id, squad_name, squad_data, sort_index, created_at, updated_at
+            FROM user_duel_squads
+            WHERE user_id = $1
+            ORDER BY sort_index ASC, updated_at DESC, id ASC
+          `,
+          [auth.user.id],
+        );
+        sendJson(res, 200, {
+          ok: true,
+          squads: squadsResult.rows.map((row) => mapDuelSquadRowToResponse(row)),
+        });
+        return;
+      }
+
+      if (url === '/api/duel/squads' && req.method === 'POST') {
+        const auth = await requireAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        const catalogs = await loadDuelValidationCatalogs();
+        const body = (await readJsonBody(req)) as DuelSquadPayload;
+        const payload = parseDuelSquadPayload(body, catalogs);
+
+        const countResult = await pool.query<{ count: number }>(
+          'SELECT COUNT(*)::int AS count FROM user_duel_squads WHERE user_id = $1',
+          [auth.user.id],
+        );
+        const count = Number(countResult.rows[0]?.count ?? 0);
+        if (count >= 30) {
+          sendJson(res, 400, { ok: false, error: 'You can only save up to 30 duel squads.' });
+          return;
+        }
+
+        const maxSortResult = await pool.query<{ max_sort: number | null }>(
+          'SELECT MAX(sort_index)::int AS max_sort FROM user_duel_squads WHERE user_id = $1',
+          [auth.user.id],
+        );
+        const nextSortIndex =
+          payload.sortIndex ??
+          (Number.isFinite(maxSortResult.rows[0]?.max_sort as number)
+            ? Number(maxSortResult.rows[0]?.max_sort ?? 0) + 1
+            : count);
+
+        const squadId = crypto.randomUUID();
+        const squadData = {
+          version: 1,
+          members: payload.members,
+        };
+        const insertResult = await pool.query<{
+          id: string;
+          squad_name: string;
+          squad_data: unknown;
+          sort_index: number;
+          created_at: string;
+          updated_at: string;
+        }>(
+          `
+            INSERT INTO user_duel_squads (id, user_id, squad_name, squad_data, sort_index, created_at, updated_at)
+            VALUES ($1, $2, $3, $4::jsonb, $5, NOW(), NOW())
+            RETURNING id, squad_name, squad_data, sort_index, created_at, updated_at
+          `,
+          [squadId, auth.user.id, payload.name, JSON.stringify(squadData), nextSortIndex],
+        );
+        const row = insertResult.rows[0];
+        sendJson(res, 200, {
+          ok: true,
+          squad: row ? mapDuelSquadRowToResponse(row) : null,
+        });
+        return;
+      }
+
+      if ((url === '/api/duel/squads' || duelSquadByIdMatch) && req.method === 'PUT') {
+        const auth = await requireAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        const catalogs = await loadDuelValidationCatalogs();
+        const body = (await readJsonBody(req)) as DuelSquadPayload;
+        const pathId = duelSquadByIdMatch ? sanitizeDuelEntityId(duelSquadByIdMatch[1]) : '';
+        const payload = parseDuelSquadPayload(pathId ? { ...body, id: pathId } : body, catalogs, { requireId: true });
+        const squadId = payload.id as string;
+
+        const existingResult = await pool.query<{ sort_index: number }>(
+          'SELECT sort_index FROM user_duel_squads WHERE id = $1 AND user_id = $2',
+          [squadId, auth.user.id],
+        );
+        if ((existingResult.rowCount ?? 0) === 0) {
+          sendJson(res, 404, { ok: false, error: 'Duel squad not found.' });
+          return;
+        }
+        const resolvedSortIndex =
+          payload.sortIndex ??
+          (typeof existingResult.rows[0]?.sort_index === 'number' && Number.isFinite(existingResult.rows[0]?.sort_index)
+            ? Math.max(0, Math.floor(existingResult.rows[0].sort_index))
+            : 0);
+
+        const squadData = {
+          version: 1,
+          members: payload.members,
+        };
+        const updateResult = await pool.query<{
+          id: string;
+          squad_name: string;
+          squad_data: unknown;
+          sort_index: number;
+          created_at: string;
+          updated_at: string;
+        }>(
+          `
+            UPDATE user_duel_squads
+            SET squad_name = $3, squad_data = $4::jsonb, sort_index = $5, updated_at = NOW()
+            WHERE id = $1 AND user_id = $2
+            RETURNING id, squad_name, squad_data, sort_index, created_at, updated_at
+          `,
+          [squadId, auth.user.id, payload.name, JSON.stringify(squadData), resolvedSortIndex],
+        );
+        const row = updateResult.rows[0];
+        sendJson(res, 200, {
+          ok: true,
+          squad: row ? mapDuelSquadRowToResponse(row) : null,
+        });
+        return;
+      }
+
+      if ((url === '/api/duel/squads' || duelSquadByIdMatch) && req.method === 'DELETE') {
+        const auth = await requireAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        let squadId = duelSquadByIdMatch ? sanitizeDuelEntityId(duelSquadByIdMatch[1]) : '';
+        if (!squadId) {
+          const body = (await readJsonBody(req)) as { id?: unknown };
+          squadId = sanitizeDuelEntityId(body.id);
+        }
+        if (!squadId) {
+          sendJson(res, 400, { ok: false, error: 'Squad id is required.' });
+          return;
+        }
+        const deleteResult = await pool.query<{ id: string }>(
+          `
+            DELETE FROM user_duel_squads
+            WHERE id = $1 AND user_id = $2
+            RETURNING id
+          `,
+          [squadId, auth.user.id],
+        );
+        if ((deleteResult.rowCount ?? 0) === 0) {
+          sendJson(res, 404, { ok: false, error: 'Duel squad not found.' });
+          return;
+        }
+        sendJson(res, 200, {
+          ok: true,
+          deletedId: deleteResult.rows[0]?.id ?? squadId,
         });
         return;
       }
@@ -5403,6 +6170,40 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         return;
       }
 
+      if (url === '/api/admin/elements/list' && req.method === 'GET') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const elements = await readGameElements();
+        sendJson(res, 200, { ok: true, elements });
+        return;
+      }
+
+      if (url === '/api/admin/elements/save' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const body = (await readJsonBody(req)) as { elements?: unknown };
+        const raw = Array.isArray(body.elements) ? body.elements : [];
+        const parsed = raw
+          .filter((e): e is Record<string, unknown> => e != null && typeof e === 'object' && !Array.isArray(e))
+          .map((e, sortIndex) => ({
+            element_id: typeof e.element_id === 'string' ? e.element_id : typeof e.id === 'string' ? e.id : '',
+            display_name: typeof e.display_name === 'string' ? e.display_name : typeof e.name === 'string' ? e.name : '',
+            color_hex: typeof e.color_hex === 'string' ? e.color_hex : typeof e.color === 'string' ? e.color : '',
+            icon_bucket: typeof e.icon_bucket === 'string' ? e.icon_bucket : 'icons',
+            icon_path: typeof e.icon_path === 'string' ? e.icon_path : typeof e.iconPath === 'string' ? e.iconPath : '',
+            sort_index: typeof e.sort_index === 'number' ? e.sort_index : sortIndex,
+          }));
+        await writeGameElements(parsed);
+        sendJson(res, 200, { ok: true, elements: await readGameElements() });
+        return;
+      }
+
       if (url === '/api/admin/flags/list' && req.method === 'GET') {
         const auth = await requireAdminAuth(req, res);
         if (!auth || !pool) {
@@ -5436,14 +6237,17 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
 
   return {
     name: 'admin-map-save-api',
+    enforce: 'pre', // Run before Vite core so /simulation and /admin rewrites run before SPA fallback
     configureServer(server) {
       server.middlewares.use(rewriteAdminRoute);
+      server.middlewares.use(rewriteDuelRoute);
       server.middlewares.use((req, res, next) => {
         void middleware(req, res, next);
       });
     },
     configurePreviewServer(server) {
       server.middlewares.use(rewriteAdminRoute);
+      server.middlewares.use(rewriteDuelRoute);
       server.middlewares.use((req, res, next) => {
         void middleware(req, res, next);
       });
@@ -5472,6 +6276,7 @@ export default defineConfig(({ mode }) => {
         input: {
           game: resolve(fileURLToPath(new URL('.', import.meta.url)), 'index.html'),
           admin: resolve(fileURLToPath(new URL('.', import.meta.url)), 'admin.html'),
+          duel: resolve(fileURLToPath(new URL('.', import.meta.url)), 'duel.html'),
         },
       },
     },

@@ -2679,6 +2679,17 @@ function calcBattleHpAnimationMs(deltaPercent: number): number {
   return Math.max(BATTLE_HP_ANIMATION_MIN_MS, Math.min(BATTLE_HP_ANIMATION_MAX_MS, rawDuration));
 }
 
+function formatBattleStatDisplay(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '1';
+  }
+  const rounded = Math.round(Math.max(1, value) * 100) / 100;
+  if (Math.abs(rounded - Math.round(rounded)) < 0.000_01) {
+    return String(Math.round(rounded));
+  }
+  return String(rounded);
+}
+
 function BattleActivePanel({
   title,
   position,
@@ -2777,6 +2788,9 @@ function BattleActivePanel({
     critter?.spriteUrl,
     critter?.element,
     critter?.maxHp,
+    critter?.activeEffectIds?.join('|'),
+    critter?.activeEffectIconUrls?.join('|'),
+    critter?.activeEffectDescriptions?.join('|'),
   ]);
 
   const critterForRender = displayCritter;
@@ -2870,15 +2884,13 @@ function BattleActivePanel({
           )}
         </span>
       )}
-      {effectIcons.length > 0 && (
-        <div className="battle-critter__effect-bubbles" aria-label="Active effects">
-          {effectIcons.map((url, i) => (
-            <span key={`${url}-${i}`} className="battle-critter__effect-bubble" title={effectDescriptions[i]?.trim() || undefined}>
-              <img src={url} alt="" className="battle-critter__effect-icon" loading="lazy" decoding="async" />
-            </span>
-          ))}
-        </div>
-      )}
+      <div className="battle-critter__effect-bubbles" aria-label="Active effects" aria-hidden={effectIcons.length === 0}>
+        {effectIcons.map((url, i) => (
+          <span key={`${url}-${i}`} className="battle-critter__effect-bubble" title={effectDescriptions[i]?.trim() || undefined}>
+            <img src={url} alt="" className="battle-critter__effect-icon" loading="lazy" decoding="async" />
+          </span>
+        ))}
+      </div>
       {critterForRender ? (
         <>
           <div className="battle-critter__head">
@@ -2908,9 +2920,9 @@ function BattleActivePanel({
             </span>
           </div>
           <div className="battle-critter__stats">
-            <span>ATK {critterForRender.attack}</span>
-            <span>DEF {critterForRender.defense}</span>
-            <span>SPD {critterForRender.speed}</span>
+            <span>ATK {formatBattleStatDisplay(critterForRender.attack)}</span>
+            <span>DEF {formatBattleStatDisplay(critterForRender.defense)}</span>
+            <span>SPD {formatBattleStatDisplay(critterForRender.speed)}</span>
           </div>
         </>
       ) : (
@@ -3047,6 +3059,9 @@ function formatMissionTypeLabel(mission: {
   }
   if (mission.type === 'swap_in') {
     return 'Swap In';
+  }
+  if (mission.type === 'swap_out') {
+    return 'Swap Out';
   }
   if (mission.type === 'heal_critter') {
     const requiredHealingItemNames = Array.isArray(mission.requiredHealingItemNames)

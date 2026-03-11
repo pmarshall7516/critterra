@@ -539,6 +539,10 @@ function sanitizeLevelMission(raw: unknown, index: number, level: number): Critt
   const normalizedTypeRaw =
     typeRaw === 'pay' || typeRaw === 'pay-item' || typeRaw === 'payitem'
       ? 'pay_item'
+      : typeRaw === 'swap' || typeRaw === 'swaps' || typeRaw === 'swap-in' || typeRaw === 'swapin'
+        ? 'swap_in'
+        : typeRaw === 'swap-out' || typeRaw === 'swapout'
+          ? 'swap_out'
       : typeRaw;
   const type = MISSION_TYPE_SET.has(normalizedTypeRaw as CritterMissionType)
     ? (normalizedTypeRaw as CritterMissionType)

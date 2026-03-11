@@ -583,12 +583,61 @@ describe('GameRuntime equipment integration', () => {
       activeEffectSourceById: {
         'focus-def': 'Iron Wall',
       },
+      activeEffectValueById: {
+        'focus-def': 0.7,
+      },
       equipmentEffectIds: [],
       equipmentEffectSourceById: {},
       persistentHeal: null,
       consecutiveSuccessfulGuardCount: 0,
       equippedSkillIds: ['iron-wall', null, null, null],
     });
-    expect(snapshotEntry.activeEffectDescriptions).toContain('+35 Defense (Iron Wall)');
+    expect(snapshotEntry.activeEffectIconUrls).toContain('https://example.com/focus-def.png');
+    expect(
+      snapshotEntry.activeEffectDescriptions.some(
+        (entry: string) => entry.includes('+70 Defense') && entry.includes('Total stacked: +70% DEF') && entry.includes('Iron Wall'),
+      ),
+    ).toBe(true);
+  });
+
+  it('uses modifier-adjusted battle stats in snapshot cards', () => {
+    const critter = createCritter({ id: 1, name: 'Buddo', level: 1 });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [createProgressEntry(critter, { level: 1 })],
+      squad: [1, null, null, null, null, null, null, null],
+      items: [],
+      itemInventory: inventory([]),
+    });
+
+    const snapshotEntry = (runtime as any).mapBattleTeamEntryToSnapshot({
+      slotIndex: 0,
+      critterId: 1,
+      name: 'Buddo',
+      element: 'bloom',
+      spriteUrl: '',
+      level: 1,
+      maxHp: 20,
+      currentHp: 20,
+      attack: 20,
+      defense: 12,
+      speed: 10,
+      fainted: false,
+      knockoutProgressCounted: false,
+      attackModifier: 1.5,
+      defenseModifier: 0.5,
+      speedModifier: 0.8,
+      activeEffectIds: [],
+      activeEffectSourceById: {},
+      equipmentEffectIds: [],
+      equipmentEffectSourceById: {},
+      persistentHeal: null,
+      consecutiveSuccessfulGuardCount: 0,
+      equippedSkillIds: [null, null, null, null],
+    });
+
+    expect(snapshotEntry.attack).toBe(30);
+    expect(snapshotEntry.defense).toBe(6);
+    expect(snapshotEntry.speed).toBe(8);
   });
 });

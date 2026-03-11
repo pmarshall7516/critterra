@@ -15,6 +15,7 @@ import type { GameItemDefinition } from '@/game/items/types';
 import { getSkillValueDisplayNumber, type SkillHealMode, type SkillPersistentHealMode } from '@/game/skills/types';
 import { apiFetchJson } from '@/shared/apiClient';
 import { loadAdminFlags, type AdminFlagEntry } from '@/admin/flagsApi';
+import { loadAdminGameElements } from '@/admin/elementsApi';
 
 interface CritterListResponse {
   ok: boolean;
@@ -169,6 +170,7 @@ const DEFAULT_CRITTER_SPRITE_BUCKET = 'critter-sprites';
 
 export function CritterTool() {
   const [critters, setCritters] = useState<CritterDefinition[]>([]);
+  const [gameElements, setGameElements] = useState<string[]>(() => [...CRITTER_ELEMENTS]);
   const [selectedCritterId, setSelectedCritterId] = useState<number | null>(null);
   const [draft, setDraft] = useState<CritterDraft>(() => createEmptyDraft([]));
   const [status, setStatus] = useState('');
@@ -389,6 +391,12 @@ export function CritterTool() {
     void loadFlags();
     void loadItems();
     void loadSkills();
+    void (async () => {
+      const loaded = await loadAdminGameElements();
+      if (loaded.length > 0) {
+        setGameElements(loaded.map((e) => e.element_id));
+      }
+    })();
     // Run once on mount with default critter bucket.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -473,7 +481,7 @@ export function CritterTool() {
       return;
     }
 
-    const parsed = sanitizeCritterDefinition(draftToRaw(draft));
+    const parsed = sanitizeCritterDefinition(draftToRaw(draft, gameElements));
     if (!parsed) {
       setError('Draft is invalid.');
       return;
@@ -684,7 +692,7 @@ export function CritterTool() {
                 value={draft.element}
                 onChange={(event) => setDraft((current) => ({ ...current, element: event.target.value }))}
               >
-                {CRITTER_ELEMENTS.map((element) => (
+                {gameElements.map((element) => (
                   <option key={element} value={element}>
                     {element}
                   </option>
@@ -1421,7 +1429,7 @@ export function CritterTool() {
                         <div className="critter-mission-row__wide critter-mission-filter-panel">
                           <p>Element(s) (Optional)</p>
                           <div className="critter-mission-filter-chip-list">
-                            {CRITTER_ELEMENTS.map((element) => {
+                            {gameElements.map((element) => {
                               const isSelected = mission.knockoutElements.includes(element);
                               return (
                                 <button
@@ -1652,7 +1660,10 @@ function critterToDraft(critter: CritterDefinition): CritterDraft {
   };
 }
 
-function draftToRaw(draft: CritterDraft): unknown {
+function draftToRaw(draft: CritterDraft, gameElements: string[]): unknown {
+  const allowedElements = new Set(
+    gameElements.map((entry) => entry.trim().toLowerCase()).filter((entry) => entry.length > 0),
+  );
   return {
     id: Number.parseInt(draft.id, 10),
     name: draft.name.trim(),
@@ -1698,7 +1709,7 @@ function draftToRaw(draft: CritterDraft): unknown {
           .filter((entry) => Number.isFinite(entry) && entry > 0);
         const knockoutElements = mission.knockoutElements
           .map((entry) => entry.trim().toLowerCase())
-          .filter((entry, index, values) => CRITTER_ELEMENTS.includes(entry as (typeof CRITTER_ELEMENTS)[number]) && values.indexOf(entry) === index);
+          .filter((entry, index, values) => allowedElements.has(entry) && values.indexOf(entry) === index);
         const requiredEquippedItemIds = mission.requiredEquippedItemIds.filter(
           (entry, index, values) => entry.trim().length > 0 && values.indexOf(entry) === index,
         );
@@ -1773,6 +1784,9 @@ function getMissionTypeLabel(missionType: CritterMissionType): string {
   if (missionType === 'swap_in') {
     return 'Swap In';
   }
+  if (missionType === 'swap_out') {
+    return 'Swap Out';
+  }
   if (missionType === 'heal_critter') {
     return 'Heal Critter';
   }
@@ -1797,6 +1811,9 @@ function toMissionTypeValue(value: string): CritterMissionType {
   }
   if (value === 'swap_in') {
     return 'swap_in';
+  }
+  if (value === 'swap_out') {
+    return 'swap_out';
   }
   if (value === 'heal_critter') {
     return 'heal_critter';
