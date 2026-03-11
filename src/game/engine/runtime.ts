@@ -78,11 +78,21 @@ import type {
 import { DEFAULT_TACKLE_SKILL } from '@/game/skills/types';
 import {
   buildDefaultElementChart,
-  getElementChartMultiplier,
   sanitizeElementChart,
   sanitizeSkillEffectLibrary,
   sanitizeSkillLibrary,
 } from '@/game/skills/schema';
+import {
+  MIN_BATTLE_STAT_MODIFIER,
+  buildSkillEffectBuffPercentById,
+  computeBattleDamage,
+  resolveAppliedSkillAttachments,
+  resolveRequestedSkillHealAmount,
+  resolveRequestedSkillRecoilAmount,
+  resolveSkillEffectAttachmentsForRuntime,
+} from '@/game/battle/damageAndEffects';
+import { rollGuard } from '@/game/battle/guard';
+import { resolveEffectiveSpeed as resolveEffectiveSpeedShared, resolveSkillPriority as resolveSkillPriorityShared } from '@/game/battle/ordering';
 import {
   createDefaultPlayerItemInventory,
   getItemInventoryQuantity,
@@ -845,6 +855,7 @@ const SPAWN_MAP_INPUT: WorldMapInput = {
 export interface RuntimeInitOptions {
   forceNewGame?: boolean;
   playerName?: string;
+  rng?: () => number;
 }
 
 /** Keep URLs stable so browser and CDN caches can accelerate recurring loads. */
@@ -864,10 +875,9 @@ const FISHING_CAST_ANIMATION_FRAME_MS = 120;
 const WALK_ANIMATION_FRAME_MS = 60;
 const ACTOR_SPRITE_WIDTH_SCALE = 1.08;
 const BATTLE_KNOCKOUT_RESOLUTION_DELAY_MS = 520;
-const MIN_BATTLE_STAT_MODIFIER = 0.1;
-const BASE_CRIT_CHANCE = 0.0155;
 
 export class GameRuntime {
+  private rng: () => number;
   private mapRegistry: Record<string, WorldMap> = buildMapRegistryFromInputs([SPAWN_MAP_INPUT], TILE_DEFINITIONS);
   private tileDefinitions: Record<string, TileDefinition> = TILE_DEFINITIONS;
   private critterDatabase: CritterDefinition[] = [...BASE_CRITTER_DATABASE];
@@ -964,6 +974,7 @@ export class GameRuntime {
   private announcedCritterAdvanceKeys = new Set<string>();
 
   constructor(options?: RuntimeInitOptions) {
+    this.rng = options?.rng ?? Math.random;
     const storedWorldContent = readStoredWorldContent();
     if (storedWorldContent) {
       const tileDefinitionsFromSavedTiles = buildTileDefinitionsFromSavedPaintTiles(storedWorldContent.savedPaintTiles);
@@ -1096,6 +1107,11 @@ export class GameRuntime {
       this.dirty = true;
       this.persistNow();
     }
+  }
+
+  /** RNG accessor that stays safe for test harnesses that bypass the constructor. */
+  private getRng(): () => number {
+    return typeof this.rng === 'function' ? this.rng : Math.random;
   }
 
   public hasSave(): boolean {
@@ -2498,6 +2514,10 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     }
 
     const previousIndex = battle.playerActiveIndex;
+    const previousCritterId =
+      previousIndex !== null && battle.playerTeam[previousIndex]
+        ? battle.playerTeam[previousIndex].critterId
+        : null;
     if (previousIndex !== null && battle.playerTeam[previousIndex]) {
       const prev = battle.playerTeam[previousIndex];
       prev.consecutiveSuccessfulGuardCount = 0;
@@ -2540,7 +2560,15 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
 
     battle.phase = 'player-turn';
     battle.turnNumber += 1;
-    if (this.incrementSimpleCritterMissionProgress(selected.critterId, (mission) => mission.type === 'swap_in')) {
+    const didUpdateSwapIn = this.incrementSimpleCritterMissionProgress(
+      selected.critterId,
+      (mission) => mission.type === 'swap_in',
+    );
+    const didUpdateSwapOut =
+      previousCritterId !== null
+        ? this.incrementSimpleCritterMissionProgress(previousCritterId, (mission) => mission.type === 'swap_out')
+        : false;
+    if (didUpdateSwapIn || didUpdateSwapOut) {
       this.markProgressDirty();
     }
     const previousName =
@@ -4529,7 +4557,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       return;
     }
 
-    if (Math.random() >= group.walkFrequency) {
+    if (this.getRng()() >= group.walkFrequency) {
       return;
     }
 
@@ -4647,7 +4675,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       return;
     }
 
-    if (Math.random() >= session.fishFrequency) {
+    if (this.getRng()() >= session.fishFrequency) {
       this.clearFishingSession();
       this.startDialogue('Fishing', ['No bites right now.']);
       return;
@@ -5206,7 +5234,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         continue;
       }
       const dropChance = clamp(drop.dropChance, 0, 1);
-      if (dropChance <= 0 || Math.random() >= dropChance) {
+      if (dropChance <= 0 || this.getRng()() >= dropChance) {
         continue;
       }
       const minAmount = clamp(Math.floor(drop.minAmount), 1, 9999);
@@ -5499,7 +5527,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     if (levelsInRange.length === 0) {
       return null;
     }
-    const index = Math.floor(Math.random() * levelsInRange.length);
+    const index = Math.floor(this.getRng()() * levelsInRange.length);
     return levelsInRange[index] ?? null;
   }
 
@@ -5520,7 +5548,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
 
     // Randomly select up to 4 moves from unlocked movepool
     const unlockedSkillIds = derived.unlockedSkillIds ?? [];
-    const shuffledSkills = [...unlockedSkillIds].sort(() => Math.random() - 0.5);
+    const shuffledSkills = [...unlockedSkillIds].sort(() => this.getRng()() - 0.5);
     const selectedSkills = shuffledSkills.slice(0, 4);
     const equippedSkillIds: BattleEquippedSkillSlots = [
       selectedSkills[0] ?? null,
@@ -5581,15 +5609,13 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     const narration: BattleNarrationEvent[] = [];
 
     if (action === 'guard') {
-      const guardSuccessChance = Math.pow(0.5, player.consecutiveSuccessfulGuardCount);
-      const guardSucceeded = Math.random() < guardSuccessChance;
+      const guardResult = rollGuard(player.consecutiveSuccessfulGuardCount, this.getRng());
+      const guardSucceeded = guardResult.succeeded;
+      player.consecutiveSuccessfulGuardCount = guardResult.nextConsecutiveSuccessfulCount;
       if (guardSucceeded) {
-        player.consecutiveSuccessfulGuardCount += 1;
         if (this.incrementSimpleCritterMissionProgress(player.critterId, (mission) => mission.type === 'use_guard')) {
           this.markProgressDirty();
         }
-      } else {
-        player.consecutiveSuccessfulGuardCount = 0;
       }
       narration.push({
         message: `Your ${player.name} used Guard!`,
@@ -5728,12 +5754,11 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
   }
 
   private getEffectiveBattleSpeed(critter: Pick<BattleCritterState, 'speed' | 'speedModifier'>): number {
-    return Math.max(1, critter.speed * Math.max(MIN_BATTLE_STAT_MODIFIER, critter.speedModifier));
+    return resolveEffectiveSpeedShared(critter.speed, critter.speedModifier);
   }
 
   private resolveSkillPriority(skill: Pick<SkillDefinition, 'priority'>): number {
-    const rawPriority = typeof skill.priority === 'number' && Number.isFinite(skill.priority) ? skill.priority : 1;
-    return Math.max(1, Math.floor(rawPriority));
+    return resolveSkillPriorityShared(skill.priority);
   }
 
   private selectOpponentBattleSkill(
@@ -5749,7 +5774,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     if (availableSkills.length === 0) {
       return { skill, skillSlotIndex };
     }
-    const randomIndex = Math.floor(Math.random() * availableSkills.length);
+    const randomIndex = Math.floor(this.getRng()() * availableSkills.length);
     const selectedSkillId = availableSkills[randomIndex];
     if (!selectedSkillId) {
       return { skill, skillSlotIndex };
@@ -5809,12 +5834,12 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
 
     const resolvedAttachments = resolveSkillEffectAttachmentsForRuntime(skill, this.skillEffectLookupById);
     const appliedAttachments = resolvedAttachments.filter((attachment) =>
-      attachment.procChance >= 1 || Math.random() < attachment.procChance,
+      attachment.procChance >= 1 || this.getRng()() < attachment.procChance,
     );
-    const attachmentResolution = this.resolveAppliedSkillAttachments(appliedAttachments);
+    const attachmentResolution = resolveAppliedSkillAttachments(appliedAttachments, this.skillEffectLookupById);
 
     if (skill.type === 'support') {
-      const requestedHeal = resolveRequestedSkillHealAmount(skill, attacker);
+      const requestedHeal = resolveRequestedSkillHealAmount(skill, attacker.maxHp, 0);
       const plannedRecoil = resolveRequestedSkillRecoilAmount(
         attachmentResolution.recoilAttachments,
         attacker.maxHp,
@@ -5848,38 +5873,30 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       };
     }
 
-    const power = skill.damage ?? 20;
-    const A = Math.max(1, attacker.attack * Math.max(MIN_BATTLE_STAT_MODIFIER, attacker.attackModifier));
-    const D = Math.max(1, defender.defense * Math.max(MIN_BATTLE_STAT_MODIFIER, defender.defenseModifier));
-    const levelTerm = (2 * attacker.level) / 5 + 2;
-    const base = ((levelTerm * power * A) / D) / 50 + 2;
-    const typeMult = getElementChartMultiplier(
-      this.elementChart,
-      skill.element,
-      defender.element as CritterElement,
-    );
-    const stab = skill.element === attacker.element ? 1.2 : 1;
-    const critChance = clamp(BASE_CRIT_CHANCE + consumedCritBonus, 0, 1);
-    const isCrit = Math.random() < critChance;
-    const critMult = isCrit ? 2 : 1;
-    const defenseWithoutPositiveEquipment = Math.max(1, defender.defense - defender.equipmentDefensePositiveBonus);
-    const defenseModifierForCrit = Math.max(
-      MIN_BATTLE_STAT_MODIFIER,
-      Math.min(1, defender.defenseModifier),
-    );
-    const defenseForCrit = Math.max(1, defenseWithoutPositiveEquipment * defenseModifierForCrit);
-    const baseForCrit = isCrit
-      ? ((levelTerm * power * A) / defenseForCrit) / 50 + 2
-      : base;
-    const guardMult =
-      defenderGuarded && guardSucceeded ? 0.02 : defenderGuarded && !guardSucceeded ? 1 : 1;
-    const variance = randomNumber(0.85, 1.15);
-    const damage = Math.max(
-      1,
-      Math.floor(baseForCrit * typeMult * stab * critMult * guardMult * variance),
-    );
-    const damageDealt = Math.min(damage, Math.max(0, defender.currentHp));
-    const plannedHeal = resolveRequestedSkillHealAmount(skill, attacker, damageDealt);
+    const damageResult = computeBattleDamage({
+      attacker: {
+        level: attacker.level,
+        attack: attacker.attack,
+        attackModifier: attacker.attackModifier,
+        element: attacker.element,
+      },
+      defender: {
+        defense: defender.defense,
+        defenseModifier: defender.defenseModifier,
+        guardActive: false,
+        equipmentDefensePositiveBonus: defender.equipmentDefensePositiveBonus,
+        element: defender.element,
+        currentHp: defender.currentHp,
+      },
+      skill: { damage: skill.damage, element: skill.element },
+      elementChart: this.elementChart,
+      rng: this.getRng(),
+      consumedCritBonus,
+      defenderGuarded,
+      guardSucceeded,
+    });
+    const { damage, damageDealt, isCrit, typeMult } = damageResult;
+    const plannedHeal = resolveRequestedSkillHealAmount(skill, attacker.maxHp, damageDealt);
     const plannedRecoil = resolveRequestedSkillRecoilAmount(
       attachmentResolution.recoilAttachments,
       attacker.maxHp,
@@ -5950,61 +5967,6 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       ],
       defenderFainted: wouldFaint,
       damageToDefender: damage,
-    };
-  }
-
-  private resolveAppliedSkillAttachments(
-    attachments: SkillEffectAttachment[],
-  ): {
-    attackerEffectAttachments: SkillEffectAttachment[];
-    defenderEffectAttachments: SkillEffectAttachment[];
-    recoilAttachments: SkillEffectAttachment[];
-    attackerCritChanceBuffPercent: number;
-  } {
-    const attackerEffectAttachments: SkillEffectAttachment[] = [];
-    const defenderEffectAttachments: SkillEffectAttachment[] = [];
-    const recoilAttachments: SkillEffectAttachment[] = [];
-    let attackerCritChanceBuffPercent = 0;
-
-    for (const attachment of attachments) {
-      const effect = this.skillEffectLookupById[attachment.effectId];
-      if (!effect) {
-        continue;
-      }
-      if (
-        effect.effect_type === 'atk_buff' ||
-        effect.effect_type === 'def_buff' ||
-        effect.effect_type === 'speed_buff' ||
-        effect.effect_type === 'self_atk_debuff' ||
-        effect.effect_type === 'self_def_debuff' ||
-        effect.effect_type === 'self_speed_debuff'
-      ) {
-        attackerEffectAttachments.push(attachment);
-        continue;
-      }
-      if (
-        effect.effect_type === 'target_atk_debuff' ||
-        effect.effect_type === 'target_def_debuff' ||
-        effect.effect_type === 'target_speed_debuff'
-      ) {
-        defenderEffectAttachments.push(attachment);
-        continue;
-      }
-      if (effect.effect_type === 'crit_buff') {
-        const defaultBuff = typeof effect.buffPercent === 'number' ? effect.buffPercent : 0.1;
-        attackerCritChanceBuffPercent += clamp(attachment.buffPercent ?? defaultBuff, 0, 1);
-        continue;
-      }
-      if (effect.effect_type === 'recoil') {
-        recoilAttachments.push(attachment);
-      }
-    }
-
-    return {
-      attackerEffectAttachments,
-      defenderEffectAttachments,
-      recoilAttachments,
-      attackerCritChanceBuffPercent,
     };
   }
 
@@ -6896,11 +6858,15 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
             procChance: 1,
             buffPercent,
           });
+          const stackSummary = this.summarizeSkillEffectStackTotal(skillEffect, buffPercent);
+          const tooltipBody = [effectDescription.trim(), stackSummary]
+            .filter((text): text is string => typeof text === 'string' && text.length > 0)
+            .join('\n');
           const sourceNames = entry.activeEffectSourceById[id]
             ? [entry.activeEffectSourceById[id]]
             : (skillEffectSourcesById[id] ?? []);
           activeEffectDescriptions.push(
-            this.formatBattleEffectTooltip(effectDescription, sourceNames),
+            this.formatBattleEffectTooltip(tooltipBody, sourceNames),
           );
         }
         continue;
@@ -6929,9 +6895,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       level: entry.level,
       maxHp: entry.maxHp,
       currentHp: entry.currentHp,
-      attack: entry.attack,
-      defense: entry.defense,
-      speed: entry.speed,
+      attack: this.getEffectiveBattleStat(entry.attack, entry.attackModifier),
+      defense: this.getEffectiveBattleStat(entry.defense, entry.defenseModifier),
+      speed: this.getEffectiveBattleStat(entry.speed, entry.speedModifier),
       fainted: entry.fainted,
       activeEffectIds,
       activeEffectIconUrls,
@@ -6955,6 +6921,35 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       return `Source: ${normalizedSourceNames.join(', ')}`;
     }
     return `${description} (${normalizedSourceNames.join(', ')})`;
+  }
+
+  private getEffectiveBattleStat(baseStat: number, modifier: number): number {
+    return Math.max(1, baseStat * Math.max(MIN_BATTLE_STAT_MODIFIER, modifier));
+  }
+
+  private summarizeSkillEffectStackTotal(
+    effect: Pick<SkillEffectDefinition, 'effect_type'>,
+    stackedBuffPercent: number,
+  ): string | null {
+    if (!Number.isFinite(stackedBuffPercent) || Math.abs(stackedBuffPercent) <= 0) {
+      return null;
+    }
+    const statLabel = effect.effect_type.includes('atk')
+      ? 'ATK'
+      : effect.effect_type.includes('def')
+        ? 'DEF'
+        : effect.effect_type.includes('speed')
+          ? 'SPD'
+          : null;
+    const isDebuff = effect.effect_type.includes('debuff');
+    const magnitude = Math.round(Math.abs(stackedBuffPercent) * 100);
+    if (magnitude <= 0) {
+      return null;
+    }
+    if (statLabel) {
+      return `Total stacked: ${isDebuff ? '-' : '+'}${magnitude}% ${statLabel}`;
+    }
+    return `Total stacked: ${isDebuff ? '-' : '+'}${magnitude}%`;
   }
 
   private getBattleSnapshot(): RuntimeBattleSnapshot | null {
@@ -10279,12 +10274,6 @@ function randomInt(min: number, max: number): number {
   return Math.floor(Math.random() * (safeMax - safeMin + 1)) + safeMin;
 }
 
-function randomNumber(min: number, max: number): number {
-  const safeMin = Math.min(min, max);
-  const safeMax = Math.max(min, max);
-  return safeMin + Math.random() * (safeMax - safeMin);
-}
-
 function lerp(start: number, end: number, t: number): number {
   return start + (end - start) * clamp(t, 0, 1);
 }
@@ -10322,165 +10311,6 @@ function cloneBattleNarrationEvent(event: BattleNarrationEvent): BattleNarration
         }
       : undefined,
   };
-}
-
-function resolveRequestedSkillHealAmount(
-  skill: Pick<SkillDefinition, 'element' | 'healMode' | 'healValue' | 'type'>,
-  attacker: Pick<BattleCritterState, 'element' | 'maxHp'>,
-  damageDealt = 0,
-): number {
-  if (
-    !skill.healMode ||
-    skill.healMode === 'none' ||
-    typeof skill.healValue !== 'number' ||
-    !Number.isFinite(skill.healValue)
-  ) {
-    return 0;
-  }
-
-  const healMode =
-    skill.type !== 'damage' && skill.healMode === 'percent_damage'
-      ? 'percent_max_hp'
-      : skill.healMode;
-  let requestedHeal = 0;
-  if (healMode === 'flat') {
-    requestedHeal = Math.max(0, Math.floor(skill.healValue));
-  } else if (healMode === 'percent_max_hp') {
-    requestedHeal = Math.floor(attacker.maxHp * clamp(skill.healValue, 0, 1));
-  } else if (healMode === 'percent_damage') {
-    const percent = clamp(skill.healValue, 0, 1);
-    if (percent > 0 && damageDealt > 0) {
-      requestedHeal = Math.max(1, Math.floor(Math.max(0, damageDealt) * percent));
-    }
-  }
-
-  return Math.max(0, requestedHeal);
-}
-
-function resolveRequestedSkillRecoilAmount(
-  attachments: SkillEffectAttachment[],
-  attackerMaxHp: number,
-  damageDealt: number,
-): number {
-  let totalRequested = 0;
-  for (const attachment of attachments) {
-    const recoilPercent = clamp(
-      typeof attachment.recoilPercent === 'number' && Number.isFinite(attachment.recoilPercent)
-        ? attachment.recoilPercent
-        : 0,
-      0,
-      1,
-    );
-    if (recoilPercent <= 0) {
-      continue;
-    }
-    if (attachment.recoilMode === 'percent_damage_dealt') {
-      if (damageDealt <= 0) {
-        continue;
-      }
-      totalRequested += Math.floor(Math.max(0, damageDealt) * recoilPercent);
-      continue;
-    }
-    totalRequested += Math.max(1, Math.floor(Math.max(1, attackerMaxHp) * recoilPercent));
-  }
-  return Math.max(0, totalRequested);
-}
-
-function resolveSkillEffectAttachmentsForRuntime(
-  skill: Pick<SkillDefinition, 'effectAttachments' | 'effectIds'>,
-  skillEffectLookupById: Record<string, SkillEffectDefinition>,
-): SkillEffectAttachment[] {
-  const normalized: SkillEffectAttachment[] = [];
-  const seen = new Set<string>();
-  const pushAttachment = (
-    effectIdRaw: unknown,
-    buffPercentRaw: unknown,
-    procChanceRaw: unknown,
-    recoilModeRaw: unknown,
-    recoilPercentRaw: unknown,
-  ): void => {
-    if (typeof effectIdRaw !== 'string') {
-      return;
-    }
-    const effectId = effectIdRaw.trim();
-    if (!effectId || seen.has(effectId)) {
-      return;
-    }
-    if (!skillEffectLookupById[effectId]) {
-      return;
-    }
-    const effectFallback = skillEffectLookupById[effectId];
-    const next: SkillEffectAttachment = {
-      effectId,
-      procChance: clamp(
-        typeof procChanceRaw === 'number' && Number.isFinite(procChanceRaw) ? procChanceRaw : 1,
-        0,
-        1,
-      ),
-    };
-    if (effectFallback.effect_type === 'recoil') {
-      const recoilMode = recoilModeRaw === 'percent_damage_dealt' ? 'percent_damage_dealt' : 'percent_max_hp';
-      next.recoilMode = recoilMode;
-      next.recoilPercent = clamp(
-        typeof recoilPercentRaw === 'number' && Number.isFinite(recoilPercentRaw) ? recoilPercentRaw : 0.1,
-        0,
-        1,
-      );
-    } else {
-      const buffFallback = typeof effectFallback?.buffPercent === 'number' ? effectFallback.buffPercent : 0.1;
-      next.buffPercent = clamp(
-        typeof buffPercentRaw === 'number' && Number.isFinite(buffPercentRaw) ? buffPercentRaw : buffFallback,
-        0,
-        1,
-      );
-    }
-    normalized.push(next);
-    seen.add(effectId);
-  };
-
-  if (Array.isArray(skill.effectAttachments) && skill.effectAttachments.length > 0) {
-    for (const attachment of skill.effectAttachments) {
-      if (!attachment || typeof attachment !== 'object') {
-        continue;
-      }
-      pushAttachment(
-        attachment.effectId,
-        attachment.buffPercent,
-        attachment.procChance,
-        attachment.recoilMode,
-        attachment.recoilPercent,
-      );
-    }
-    return normalized;
-  }
-
-  for (const effectId of skill.effectIds ?? []) {
-    pushAttachment(effectId, undefined, 1, undefined, undefined);
-  }
-  return normalized;
-}
-
-function buildSkillEffectBuffPercentById(
-  attachments: SkillEffectAttachment[],
-): Record<string, number> | undefined {
-  if (attachments.length === 0) {
-    return undefined;
-  }
-  const result: Record<string, number> = {};
-  for (const attachment of attachments) {
-    const buffPercent = clamp(
-      typeof attachment.buffPercent === 'number' && Number.isFinite(attachment.buffPercent)
-        ? attachment.buffPercent
-        : 0,
-      0,
-      1,
-    );
-    if (buffPercent <= 0) {
-      continue;
-    }
-    result[attachment.effectId] = (result[attachment.effectId] ?? 0) + buffPercent;
-  }
-  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function formatSkillEffectDescription(

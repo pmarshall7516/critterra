@@ -69,6 +69,9 @@ export function TitleScreen({ userEmail, isAdmin, hasSave, onLogout, onContinue,
               Admin Tools
             </button>
           )}
+          <button type="button" className="secondary" onClick={() => window.location.assign('/simulation')}>
+            Duel Simulator
+          </button>
           <button type="button" className="secondary" onClick={onLogout}>
             Log Out
           </button>

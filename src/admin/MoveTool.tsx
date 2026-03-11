@@ -7,18 +7,25 @@ import type {
   SkillHealMode,
   SkillPersistentHealMode,
   SkillRecoilMode,
+  SkillTargetKindDamage,
+  SkillTargetKindSupport,
+  SkillTargetTeamOption,
 } from '@/game/skills/types';
 import {
   DAMAGE_SKILL_HEAL_MODES,
   ELEMENT_SKILL_COLORS,
   SKILL_EFFECT_TYPES,
   SKILL_RECOIL_MODES,
+  SKILL_TARGET_KIND_DAMAGE,
+  SKILL_TARGET_KIND_SUPPORT,
+  SKILL_TARGET_TEAM_OPTIONS,
   SKILL_TYPES,
   SUPPORT_SKILL_HEAL_MODES,
   getSkillValueDisplayNumber,
 } from '@/game/skills/types';
 import { sanitizeSkillLibrary } from '@/game/skills/schema';
 import { apiFetchJson } from '@/shared/apiClient';
+import { loadAdminGameElements } from '@/admin/elementsApi';
 
 type SkillDraftType = SkillDefinition['type'];
 
@@ -271,6 +278,9 @@ interface SkillDraft {
   persistentHealValue: string;
   persistentHealDurationTurns: string;
   effectAttachments: SkillEffectAttachmentDraft[];
+  targetKind: string;
+  targetTeamOption: string;
+  targetSelectCount: string;
 }
 
 interface SkillEffectAttachmentDraft {
@@ -294,6 +304,9 @@ const emptyDraft: SkillDraft = {
   persistentHealValue: '0',
   persistentHealDurationTurns: '1',
   effectAttachments: [],
+  targetKind: 'select_enemies',
+  targetTeamOption: 'user_only',
+  targetSelectCount: '1',
 };
 
 function normalizeDraftHealMode(type: SkillDraftType, healMode: string): SkillHealMode {
@@ -388,6 +401,17 @@ function normalizeSkillAttachmentDrafts(
 function skillToDraft(skill: SkillDefinition, effectList: EffectOption[]): SkillDraft {
   const healMode = normalizeDraftHealMode(skill.type, skill.healMode ?? 'none');
   const persistentHealMode = skill.persistentHealMode ?? 'none';
+  const targetKind =
+    skill.type === 'damage'
+      ? (SKILL_TARGET_KIND_DAMAGE.includes((skill.targetKind ?? 'select_enemies') as SkillTargetKindDamage)
+          ? skill.targetKind
+          : 'select_enemies')
+      : (SKILL_TARGET_KIND_SUPPORT.includes((skill.targetKind ?? 'select_allies') as SkillTargetKindSupport)
+          ? skill.targetKind
+          : 'select_allies');
+  const targetTeamOption = SKILL_TARGET_TEAM_OPTIONS.includes((skill.targetTeamOption ?? 'user_only') as SkillTargetTeamOption)
+    ? skill.targetTeamOption
+    : 'user_only';
   return {
     skill_id: skill.skill_id,
     skill_name: skill.skill_name,
@@ -405,6 +429,9 @@ function skillToDraft(skill: SkillDefinition, effectList: EffectOption[]): Skill
     persistentHealDurationTurns:
       skill.persistentHealDurationTurns != null ? String(skill.persistentHealDurationTurns) : '1',
     effectAttachments: normalizeSkillAttachmentDrafts(skill, effectList),
+    targetKind: targetKind ?? (skill.type === 'damage' ? 'select_enemies' : 'select_allies'),
+    targetTeamOption: targetTeamOption ?? 'user_only',
+    targetSelectCount: skill.targetSelectCount != null ? String(skill.targetSelectCount) : '1',
   };
 }
 
@@ -461,6 +488,7 @@ interface EffectOption {
 export function MoveTool() {
   const [skills, setSkills] = useState<SkillDefinition[]>([]);
   const [effectList, setEffectList] = useState<EffectOption[]>([]);
+  const [gameElements, setGameElements] = useState<string[]>(() => [...CRITTER_ELEMENTS]);
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
   const [draft, setDraft] = useState<SkillDraft>(emptyDraft);
   const [status, setStatus] = useState('');
@@ -607,6 +635,12 @@ export function MoveTool() {
 
   useEffect(() => {
     void loadAll();
+    void (async () => {
+      const loaded = await loadAdminGameElements();
+      if (loaded.length > 0) {
+        setGameElements(loaded.map((e) => e.element_id));
+      }
+    })();
   }, []);
 
   const applyDraft = () => {
@@ -634,6 +668,9 @@ export function MoveTool() {
         persistentHealMode: s.persistentHealMode,
         persistentHealValue: s.persistentHealValue,
         persistentHealDurationTurns: s.persistentHealDurationTurns,
+        targetKind: s.targetKind,
+        targetTeamOption: s.targetTeamOption,
+        targetSelectCount: s.targetSelectCount,
         effectAttachments: s.effectAttachments?.length ? s.effectAttachments : undefined,
         effectIds: s.effectAttachments?.length
           ? s.effectAttachments.map((attachment) => attachment.effectId)
@@ -706,6 +743,11 @@ export function MoveTool() {
       ...(persistentHealDurationTurns != null && { persistentHealDurationTurns }),
       ...(effectAttachments.length > 0 && { effectAttachments }),
       ...(effectIds.length > 0 && { effectIds }),
+      targetKind: (draft.targetKind as SkillTargetKindDamage | SkillTargetKindSupport) || (draft.type === 'damage' ? 'select_enemies' : 'select_allies'),
+      ...(draft.targetKind === 'target_team' && { targetTeamOption: draft.targetTeamOption as SkillTargetTeamOption }),
+      ...((draft.targetKind === 'select_enemies' || draft.targetKind === 'select_allies') && {
+        targetSelectCount: Math.max(1, Math.min(3, parseInt(draft.targetSelectCount, 10) || 1)),
+      }),
     };
     const existingIndex = skills.findIndex((s) => s.skill_id === id);
     let next: SkillDefinition[];
@@ -818,7 +860,7 @@ export function MoveTool() {
                 value={draft.element}
                 onChange={(e) => setDraft((d) => ({ ...d, element: e.target.value }))}
               >
-                {CRITTER_ELEMENTS.map((el) => (
+                {gameElements.map((el) => (
                   <option key={el} value={el}>{el}</option>
                 ))}
               </select>
@@ -834,6 +876,9 @@ export function MoveTool() {
                       ...d,
                       type: nextType,
                       healMode: normalizeDraftHealMode(nextType, d.healMode),
+                      targetKind: nextType === 'damage' ? 'select_enemies' : 'select_allies',
+                      targetTeamOption: 'user_only',
+                      targetSelectCount: '1',
                     };
                   })
                 }
@@ -854,6 +899,68 @@ export function MoveTool() {
                 onChange={(e) => setDraft((d) => ({ ...d, priority: e.target.value }))}
               />
             </label>
+          </div>
+          <div className="admin-grid-2">
+            <label>
+              Target
+              <select
+                value={draft.targetKind}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d,
+                    targetKind: e.target.value,
+                    targetTeamOption: e.target.value === 'target_team' ? d.targetTeamOption : 'user_only',
+                    targetSelectCount: e.target.value === 'select_enemies' || e.target.value === 'select_allies' ? d.targetSelectCount : '1',
+                  }))
+                }
+              >
+                {draft.type === 'damage'
+                  ? [
+                      { value: 'target_all', label: 'Target All' },
+                      { value: 'target_all_enemies', label: 'Target All Enemies' },
+                      { value: 'select_enemies', label: 'Select Enemies' },
+                    ].map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))
+                  : [
+                      { value: 'target_self', label: 'Target Self' },
+                      { value: 'target_team', label: 'Target Team' },
+                      { value: 'select_allies', label: 'Select Allies' },
+                    ].map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+              </select>
+            </label>
+            {draft.targetKind === 'target_team' && (
+              <label>
+                Target team
+                <select
+                  value={draft.targetTeamOption}
+                  onChange={(e) => setDraft((d) => ({ ...d, targetTeamOption: e.target.value }))}
+                >
+                  {[
+                    { value: 'user_only', label: 'User only' },
+                    { value: 'user_and_partner', label: 'User and partner' },
+                    { value: 'partner_only', label: 'Partner only' },
+                  ].map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {(draft.targetKind === 'select_enemies' || draft.targetKind === 'select_allies') && (
+              <label>
+                Select count (1–3)
+                <input
+                  type="number"
+                  min={1}
+                  max={3}
+                  step={1}
+                  value={draft.targetSelectCount}
+                  onChange={(e) => setDraft((d) => ({ ...d, targetSelectCount: e.target.value }))}
+                />
+              </label>
+            )}
           </div>
           {draft.type === 'damage' && (
             <label>

@@ -22,6 +22,8 @@ describe('sanitizeSkillDefinition', () => {
       damage: 25,
       healMode: 'percent_damage',
       healValue: 0.2,
+      targetKind: 'select_enemies',
+      targetSelectCount: 1,
     });
   });
 
@@ -44,6 +46,8 @@ describe('sanitizeSkillDefinition', () => {
       damage: 24,
       healMode: 'percent_max_hp',
       healValue: 0.25,
+      targetKind: 'select_enemies',
+      targetSelectCount: 1,
     });
   });
 
@@ -61,6 +65,8 @@ describe('sanitizeSkillDefinition', () => {
       element: 'spark',
       type: 'support',
       priority: 1,
+      targetKind: 'select_allies',
+      targetSelectCount: 1,
     });
   });
 

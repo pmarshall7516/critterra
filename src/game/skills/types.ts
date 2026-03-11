@@ -21,6 +21,18 @@ export type SkillRecoilMode = (typeof SKILL_RECOIL_MODES)[number];
 export const SKILL_TYPES = ['damage', 'support'] as const;
 export type SkillType = (typeof SKILL_TYPES)[number];
 
+/** Damage skill target: all critters on field, all enemies only, or select N enemies. */
+export const SKILL_TARGET_KIND_DAMAGE = ['target_all', 'target_all_enemies', 'select_enemies'] as const;
+export type SkillTargetKindDamage = (typeof SKILL_TARGET_KIND_DAMAGE)[number];
+
+/** Support skill target: self only, fixed team subset, or select N allies. */
+export const SKILL_TARGET_KIND_SUPPORT = ['target_self', 'target_team', 'select_allies'] as const;
+export type SkillTargetKindSupport = (typeof SKILL_TARGET_KIND_SUPPORT)[number];
+
+/** When target_team: which ally/allies (user, user+partner, partner only). */
+export const SKILL_TARGET_TEAM_OPTIONS = ['user_only', 'user_and_partner', 'partner_only'] as const;
+export type SkillTargetTeamOption = (typeof SKILL_TARGET_TEAM_OPTIONS)[number];
+
 export const DAMAGE_SKILL_HEAL_MODES = ['none', 'flat', 'percent_max_hp', 'percent_damage'] as const;
 export type DamageSkillHealMode = (typeof DAMAGE_SKILL_HEAL_MODES)[number];
 
@@ -79,6 +91,12 @@ export interface SkillDefinition {
   effectAttachments?: SkillEffectAttachment[];
   /** Legacy effect IDs from skill-effects table (kept for rollout compatibility). */
   effectIds?: string[];
+  /** Damage: target_all | target_all_enemies | select_enemies. Support: target_self | target_team | select_allies. */
+  targetKind?: SkillTargetKindDamage | SkillTargetKindSupport;
+  /** When target_team (support): user_only | user_and_partner | partner_only. */
+  targetTeamOption?: SkillTargetTeamOption;
+  /** When select_enemies or select_allies: number of targets (1–3). */
+  targetSelectCount?: number;
 }
 
 export function getSkillHealDisplayNumber(
@@ -140,6 +158,8 @@ export const ELEMENT_SKILL_COLORS: Record<CritterElement, string> = {
   shade: '#b8a0e0',
   gust: '#b0bec5',
   stone: '#d7ccc8',
+  primal: '#6A4ACD',
+  mystic: '#FFD1DC',
 };
 
 /** Built-in skill used by opponent/wild when no movepool. */
@@ -150,4 +170,6 @@ export const DEFAULT_TACKLE_SKILL: SkillDefinition = {
   type: 'damage',
   priority: 1,
   damage: 20,
+  targetKind: 'select_enemies',
+  targetSelectCount: 1,
 };

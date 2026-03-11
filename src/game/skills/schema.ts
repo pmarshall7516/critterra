@@ -13,6 +13,9 @@ import type {
   SkillHealMode,
   SkillPersistentHealMode,
   SkillRecoilMode,
+  SkillTargetKindDamage,
+  SkillTargetKindSupport,
+  SkillTargetTeamOption,
   SkillType,
   SupportSkillHealMode,
 } from '@/game/skills/types';
@@ -21,6 +24,9 @@ import {
   SKILL_EFFECT_TYPES,
   SKILL_PERSISTENT_HEAL_MODES,
   SKILL_RECOIL_MODES,
+  SKILL_TARGET_KIND_DAMAGE,
+  SKILL_TARGET_KIND_SUPPORT,
+  SKILL_TARGET_TEAM_OPTIONS,
   SKILL_TYPES,
   SUPPORT_SKILL_HEAL_MODES,
 } from '@/game/skills/types';
@@ -32,6 +38,9 @@ const SKILL_TYPE_SET = new Set<SkillType>(SKILL_TYPES);
 const DAMAGE_SKILL_HEAL_MODE_SET = new Set<DamageSkillHealMode>(DAMAGE_SKILL_HEAL_MODES);
 const SUPPORT_SKILL_HEAL_MODE_SET = new Set<SupportSkillHealMode>(SUPPORT_SKILL_HEAL_MODES);
 const SKILL_RECOIL_MODE_SET = new Set<SkillRecoilMode>(SKILL_RECOIL_MODES);
+const SKILL_TARGET_KIND_DAMAGE_SET = new Set<SkillTargetKindDamage>(SKILL_TARGET_KIND_DAMAGE);
+const SKILL_TARGET_KIND_SUPPORT_SET = new Set<SkillTargetKindSupport>(SKILL_TARGET_KIND_SUPPORT);
+const SKILL_TARGET_TEAM_OPTIONS_SET = new Set<SkillTargetTeamOption>(SKILL_TARGET_TEAM_OPTIONS);
 const STAT_OR_CRIT_EFFECT_TYPE_SET = new Set<SkillEffectType>([
   'atk_buff',
   'def_buff',
@@ -472,6 +481,45 @@ export function sanitizeSkillDefinition(
     effectIds = effectAttachments.map((entry) => entry.effectId);
   }
 
+  const rawTargetKind = typeof record.targetKind === 'string'
+    ? (record.targetKind as string).trim().toLowerCase()
+    : typeof record.target_kind === 'string'
+      ? (record.target_kind as string).trim().toLowerCase()
+      : '';
+  const rawTargetTeamOption = typeof record.targetTeamOption === 'string'
+    ? (record.targetTeamOption as string).trim().toLowerCase()
+    : typeof record.target_team_option === 'string'
+      ? (record.target_team_option as string).trim().toLowerCase()
+      : '';
+  const rawTargetSelectCount = record.targetSelectCount ?? record.target_select_count;
+
+  let targetKind: SkillTargetKindDamage | SkillTargetKindSupport | undefined;
+  let targetTeamOption: SkillTargetTeamOption | undefined;
+  let targetSelectCount: number | undefined;
+
+  if (type === 'damage') {
+    targetKind = SKILL_TARGET_KIND_DAMAGE_SET.has(rawTargetKind as SkillTargetKindDamage)
+      ? (rawTargetKind as SkillTargetKindDamage)
+      : 'select_enemies';
+    targetSelectCount = clampInt(rawTargetSelectCount, 1, 3, targetKind === 'select_enemies' ? 1 : 1);
+    if (targetKind !== 'select_enemies') {
+      targetSelectCount = undefined;
+    }
+  } else {
+    targetKind = SKILL_TARGET_KIND_SUPPORT_SET.has(rawTargetKind as SkillTargetKindSupport)
+      ? (rawTargetKind as SkillTargetKindSupport)
+      : 'select_allies';
+    if (targetKind === 'target_team') {
+      targetTeamOption = SKILL_TARGET_TEAM_OPTIONS_SET.has(rawTargetTeamOption as SkillTargetTeamOption)
+        ? (rawTargetTeamOption as SkillTargetTeamOption)
+        : 'user_only';
+    }
+    targetSelectCount = clampInt(rawTargetSelectCount, 1, 3, targetKind === 'select_allies' ? 1 : 1);
+    if (targetKind !== 'select_allies') {
+      targetSelectCount = undefined;
+    }
+  }
+
   return {
     skill_id,
     skill_name,
@@ -486,6 +534,9 @@ export function sanitizeSkillDefinition(
     ...(persistentHealDurationTurns != null && { persistentHealDurationTurns }),
     ...(effectAttachments && effectAttachments.length > 0 && { effectAttachments }),
     ...(effectIds && effectIds.length > 0 && { effectIds }),
+    ...(targetKind && { targetKind }),
+    ...(targetTeamOption && { targetTeamOption }),
+    ...(targetSelectCount != null && { targetSelectCount }),
   };
 }
 
@@ -551,6 +602,38 @@ export function sanitizeElementChart(raw: unknown): ElementChart {
       const key = `${attacker}:${defender}`;
       const existing = byKey.get(key);
       result.push(existing ?? { attacker, defender, multiplier: 1 });
+    }
+  }
+  return result;
+}
+
+export function sanitizeElementChartWithElements(raw: unknown, elements: string[]): ElementChart {
+  const normalizedElements = elements
+    .filter((e): e is string => typeof e === 'string' && e.trim().length > 0)
+    .map((e) => e.trim().toLowerCase());
+  const unique = Array.from(new Set(normalizedElements));
+  if (unique.length === 0) {
+    return sanitizeElementChart(raw);
+  }
+  const set = new Set<string>(unique);
+  const byKey = new Map<string, ElementChartEntry>();
+  if (Array.isArray(raw)) {
+    for (const entry of raw) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+      const record = entry as Record<string, unknown>;
+      const attacker = typeof record.attacker === 'string' ? record.attacker.trim().toLowerCase() : '';
+      const defender = typeof record.defender === 'string' ? record.defender.trim().toLowerCase() : '';
+      if (!set.has(attacker) || !set.has(defender)) continue;
+      const multiplier = clampFloat(record.multiplier, 0, 4, 1);
+      byKey.set(`${attacker}:${defender}`, { attacker: attacker as CritterElement, defender: defender as CritterElement, multiplier });
+    }
+  }
+  const result: ElementChartEntry[] = [];
+  for (const attacker of unique) {
+    for (const defender of unique) {
+      const key = `${attacker}:${defender}`;
+      const existing = byKey.get(key);
+      result.push(existing ?? { attacker: attacker as CritterElement, defender: defender as CritterElement, multiplier: 1 });
     }
   }
   return result;

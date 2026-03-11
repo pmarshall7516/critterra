@@ -346,6 +346,89 @@ describe('GameRuntime mission action tracking', () => {
     expect(readMissionProgress(runtime.playerCritterProgress, 2, 2, 'swap-1')).toBe(1);
   });
 
+  it('increments Swap Out when a critter is swapped out of battle', () => {
+    const critterA = createCritter({
+      id: 1,
+      name: 'Frontliner',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+        {
+          level: 2,
+          missions: [{ id: 'swap-out-1', type: 'swap_out', targetValue: 4 }],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const critterB = createCritter({
+      id: 2,
+      name: 'Switcher',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const runtime = createRuntimeHarness({
+      critters: [critterA, critterB],
+      collection: [createCollectionEntry(critterA, { level: 1 }), createCollectionEntry(critterB, { level: 1 })],
+      squad: [1, 2, null, null, null, null, null, null],
+    });
+    runtime.activeBattle = {
+      phase: 'choose-swap',
+      activeNarration: null,
+      pendingForcedSwap: false,
+      playerActiveIndex: 0,
+      turnNumber: 0,
+      playerTeam: [
+        {
+          slotIndex: 0,
+          critterId: 1,
+          name: 'Frontliner',
+          currentHp: 20,
+          fainted: false,
+          consecutiveSuccessfulGuardCount: 0,
+          attackModifier: 1,
+          defenseModifier: 1,
+          speedModifier: 1,
+          activeEffectIds: [],
+        },
+        {
+          slotIndex: 1,
+          critterId: 2,
+          name: 'Switcher',
+          currentHp: 20,
+          fainted: false,
+          consecutiveSuccessfulGuardCount: 0,
+          attackModifier: 1,
+          defenseModifier: 1,
+          speedModifier: 1,
+          activeEffectIds: [],
+        },
+      ],
+    };
+
+    expect(runtime.battleSelectSquadSlot(1)).toBe(true);
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'swap-out-1')).toBe(1);
+  });
+
   it('increments Heal Critter for a general healing-item mission', () => {
     const critter = createCritter({
       id: 1,

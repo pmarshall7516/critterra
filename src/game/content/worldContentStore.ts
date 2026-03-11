@@ -8,10 +8,13 @@ import { sanitizeCritterDatabase } from '@/game/critters/schema';
 import { sanitizeEncounterTableLibrary } from '@/game/encounters/schema';
 import type { EncounterTableDefinition } from '@/game/encounters/types';
 import type { SkillDefinition, SkillEffectDefinition, ElementChart } from '@/game/skills/types';
+import type { GameElementDefinition } from '@/game/elements/types';
+import { sanitizeGameElements } from '@/game/elements/schema';
 import {
   sanitizeSkillLibrary,
   sanitizeSkillEffectLibrary,
   sanitizeElementChart,
+  sanitizeElementChartWithElements,
   buildDefaultElementChart,
 } from '@/game/skills/schema';
 import type { GameItemDefinition } from '@/game/items/types';
@@ -53,6 +56,7 @@ export interface StoredWorldContent {
   critterSkills: SkillDefinition[];
   skillEffects: SkillEffectDefinition[];
   elementChart: ElementChart;
+  gameElements: GameElementDefinition[];
   items: GameItemDefinition[];
   shops: ShopDefinition[];
   equipmentEffects: EquipmentEffectDefinition[];
@@ -145,6 +149,7 @@ export function readStoredWorldContent(): StoredWorldContent | null {
         cells: Array.isArray(entry.cells) ? (entry.cells as StoredWorldContent['savedPaintTiles'][0]['cells']) : [],
       };
     });
+    const gameElements = sanitizeGameElements((parsed as Partial<StoredWorldContent>).gameElements);
     return {
       maps: Array.isArray(parsed.maps) ? (parsed.maps as WorldMapInput[]) : [],
       savedPaintTiles,
@@ -164,7 +169,8 @@ export function readStoredWorldContent(): StoredWorldContent | null {
       encounterTables: sanitizeEncounterTableLibrary(parsed.encounterTables),
       critterSkills: sanitizeStoredSkills(parsed.critterSkills, parsed.skillEffects),
       skillEffects: sanitizeSkillEffectLibrary(parsed.skillEffects),
-      elementChart: sanitizeElementChart(parsed.elementChart),
+      gameElements,
+      elementChart: sanitizeElementChartWithElements(parsed.elementChart, gameElements.map((e) => e.id)),
       items: sanitizeItemCatalog(parsed.items),
       shops: sanitizeShopCatalog(parsed.shops),
       equipmentEffects: sanitizeEquipmentEffectLibrary(parsed.equipmentEffects),
@@ -217,6 +223,7 @@ export async function hydrateWorldContentFromServer(): Promise<void> {
 
   const content = result.data.content;
   const skillEffects = sanitizeSkillEffectLibrary(content.skillEffects);
+  const gameElements = sanitizeGameElements((content as Record<string, unknown>).gameElements);
   const knownEffectIds = new Set(skillEffects.map((e) => e.effect_id));
   const effectTypeById = new Map(skillEffects.map((effect) => [effect.effect_id, effect.effect_type] as const));
   const legacyEffectBuffPercentById = new Map(
@@ -266,7 +273,8 @@ export async function hydrateWorldContentFromServer(): Promise<void> {
       effectTypeById,
     ),
     skillEffects,
-    elementChart: sanitizeElementChart(content.elementChart),
+    gameElements,
+    elementChart: sanitizeElementChartWithElements(content.elementChart, gameElements.map((e) => e.id)),
     items: sanitizeItemCatalog(content.items),
     shops: sanitizeShopCatalog(content.shops),
     equipmentEffects: sanitizeEquipmentEffectLibrary(content.equipmentEffects),
