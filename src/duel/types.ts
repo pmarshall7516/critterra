@@ -3,6 +3,7 @@ import type { GameItemDefinition } from '@/game/items/types';
 import type { SkillDefinition, SkillEffectDefinition, ElementChart } from '@/game/skills/types';
 import type { EquipmentEffectDefinition } from '@/game/equipmentEffects/types';
 import type { EquipmentEffectInstance } from '@/game/equipmentEffects/resolver';
+import type { FlinchStatusCondition, PersistentStatusCondition } from '@/game/battle/statusConditions';
 
 export type DuelBattleFormat = 'singles' | 'doubles' | 'triples';
 export type DuelControlMode = 'human' | 'random-agent';
@@ -140,6 +141,10 @@ export interface DuelBattleCritterState {
   equipmentDefensePositiveBonus?: number;
   /** Pending crit chance bonus from crit_buff effects (consumed on next attack). 0–1. */
   pendingCritChanceBonus?: number;
+  /** Persistent status carried in battle (Toxic/Stun). */
+  persistentStatus: PersistentStatusCondition | null;
+  /** One-turn volatile flinch marker. */
+  flinch: FlinchStatusCondition | null;
   /** Active skill-applied persistent heal state. Cleared on swap/KO/battle end. */
   persistentHeal: {
     effectId: string;
@@ -148,6 +153,14 @@ export interface DuelBattleCritterState {
     value: number;
     remainingTurns: number;
   } | null;
+  /** Tracks whether this critter already attempted an action this turn. */
+  actedThisTurn: boolean;
+  /** First turn number this critter can act after entering the field. */
+  firstActionableTurnNumber: number;
+  /** Damage-skill uses since this critter last entered the field. */
+  damageSkillUseCountSinceSwitchIn: number;
+  /** Per-skill use counts since this critter last entered the field. */
+  skillUseCountBySkillId: Record<string, number>;
   /** Consecutive successful guard streak (RPG-aligned). */
   consecutiveSuccessfulGuardCount: number;
 }

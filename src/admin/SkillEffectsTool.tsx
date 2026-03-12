@@ -310,7 +310,7 @@ export function SkillEffectsTool() {
             Buff values and proc chances are configured per skill attachment in the Skills editor.
           </p>
           <p className="admin-note">
-            Description placeholders: <code>{'<buff>'}</code> for stat percent values, <code>{'<recoil>'}</code> + <code>{'<mode>'}</code> for recoil effects, and <code>{'<heal>'}</code> + <code>{'<heal_mode>'}</code> + <code>{'<turns>'}</code> for persistent-heal effects.
+            Description placeholders: <code>{'<buff>'}</code> (stat %), <code>{'<recoil>'}</code> + <code>{'<mode>'}</code> (recoil), <code>{'<heal>'}</code> + <code>{'<heal_mode>'}</code> + <code>{'<turns>'}</code> (persistent heal), <code>{'<toxic_base>'}</code> + <code>{'<toxic_ramp>'}</code> (toxic), <code>{'<stun>'}</code>/<code>{'<stun_fail>'}</code> (stun fail %), and <code>{'<stun_slow>'}</code> (stun slowdown %).
           </p>
           <section className="admin-panel" style={{ marginTop: '0.5rem' }}>
             <h4>Icon (Supabase bucket: {ICONS_BUCKET})</h4>

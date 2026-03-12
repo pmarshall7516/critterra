@@ -137,6 +137,7 @@ function createRuntimeHarness(input: {
     squad: [...input.squad],
     collection: input.collection,
     lockedKnockoutTargetCritterId: null,
+    lockedDamageTargetCritterId: null,
   } as PlayerCritterProgress;
   runtime.itemDatabase = input.items;
   runtime.itemById = input.items.reduce<Record<string, GameItemDefinition>>((registry, item) => {

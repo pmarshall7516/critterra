@@ -108,6 +108,18 @@ function effectUsesPersistentHealConfig(effectType: SkillEffectType | undefined)
   return effectType === 'persistent_heal';
 }
 
+function effectUsesToxicConfig(effectType: SkillEffectType | undefined): boolean {
+  return effectType === 'inflict_toxic';
+}
+
+function effectUsesStunConfig(effectType: SkillEffectType | undefined): boolean {
+  return effectType === 'inflict_stun';
+}
+
+function effectUsesFlinchConfig(effectType: SkillEffectType | undefined): boolean {
+  return effectType === 'flinch_chance';
+}
+
 function formatSkillValue(skill: Pick<SkillDefinition, 'type' | 'damage'>): string | null {
   if (skill.type === 'damage' && skill.damage != null) {
     return String(skill.damage);
@@ -158,6 +170,10 @@ function formatAttachmentDescription(
     ? Math.max(1, Math.floor(attachment.persistentHealValue ?? 1))
     : Math.round((attachment.persistentHealValue ?? 0.05) * 100);
   const persistentTurns = Math.max(1, Math.floor(attachment.persistentHealDurationTurns ?? 1));
+  const toxicBase = Math.round((attachment.toxicPotencyBase ?? 0.05) * 100);
+  const toxicRamp = Math.round((attachment.toxicPotencyPerTurn ?? 0.05) * 100);
+  const stunFail = Math.round((attachment.stunFailChance ?? 0.25) * 100);
+  const stunSlow = Math.round((attachment.stunSlowdown ?? 0.5) * 100);
   return effectDescription
     .replace(/<buff>/g, String(buffLabel))
     .replace(/<recoil>/g, String(recoilLabel))
@@ -166,7 +182,13 @@ function formatAttachmentDescription(
     .replace(/<heal_value>/g, String(persistentValue))
     .replace(/<heal_mode>/g, persistentMode)
     .replace(/<turns>/g, String(persistentTurns))
-    .replace(/<duration>/g, String(persistentTurns));
+    .replace(/<duration>/g, String(persistentTurns))
+    .replace(/<toxic_base>/g, String(toxicBase))
+    .replace(/<toxic_ramp>/g, String(toxicRamp))
+    .replace(/<stun>/g, String(stunFail))
+    .replace(/<stun_fail>/g, String(stunFail))
+    .replace(/<stun_slow>/g, String(stunSlow))
+    .replace(/<stun_slowdown>/g, String(stunSlow));
 }
 
 function buildSkillTooltip(skill: SkillDefinition, effectList: EffectOption[]): string {
@@ -202,6 +224,30 @@ function buildSkillTooltip(skill: SkillDefinition, effectList: EffectOption[]): 
               persistentHealMode: 'percent_max_hp' as const,
               persistentHealValue: 0.05,
               persistentHealDurationTurns: 1,
+            };
+          }
+          if (effect?.effectType === 'inflict_toxic') {
+            return {
+              effectId,
+              procChance: 1,
+              toxicPotencyBase: 0.05,
+              toxicPotencyPerTurn: 0.05,
+            };
+          }
+          if (effect?.effectType === 'inflict_stun') {
+            return {
+              effectId,
+              procChance: 1,
+              stunFailChance: 0.25,
+              stunSlowdown: 0.5,
+            };
+          }
+          if (effect?.effectType === 'flinch_chance') {
+            return {
+              effectId,
+              procChance: 1,
+              flinchFirstUseOnly: false,
+              flinchFirstOverallOnly: false,
             };
           }
           return {
@@ -303,6 +349,12 @@ interface SkillEffectAttachmentDraft {
   persistentHealMode: 'flat' | 'percent_max_hp';
   persistentHealValue: string;
   persistentHealDurationTurns: string;
+  toxicPotencyBase: string;
+  toxicPotencyPerTurn: string;
+  stunFailChance: string;
+  stunSlowdown: string;
+  flinchFirstUseOnly: boolean;
+  flinchFirstOverallOnly: boolean;
 }
 
 const emptyDraft: SkillDraft = {
@@ -378,6 +430,14 @@ function sanitizePersistentHealDuration(rawValue: string): number {
   return Math.max(1, Math.min(999, Math.floor(parsed)));
 }
 
+function sanitizeToxicValue(rawValue: string, fallback: number): number {
+  const parsed = Number.parseFloat(rawValue);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(1, parsed));
+}
+
 function normalizeSkillAttachmentDrafts(
   skill: SkillDefinition,
   effectList: EffectOption[],
@@ -409,6 +469,12 @@ function normalizeSkillAttachmentDrafts(
           attachment.persistentHealValue ?? (persistentHealMode === 'flat' ? 1 : 0.05),
         ),
         persistentHealDurationTurns: String(Math.max(1, Math.floor(attachment.persistentHealDurationTurns ?? 1))),
+        toxicPotencyBase: String(Math.max(0, Math.min(1, attachment.toxicPotencyBase ?? 0.05))),
+        toxicPotencyPerTurn: String(Math.max(0, Math.min(1, attachment.toxicPotencyPerTurn ?? 0.05))),
+        stunFailChance: String(Math.max(0, Math.min(1, attachment.stunFailChance ?? 0.25))),
+        stunSlowdown: String(Math.max(0, Math.min(1, attachment.stunSlowdown ?? 0.5))),
+        flinchFirstUseOnly: attachment.flinchFirstUseOnly === true,
+        flinchFirstOverallOnly: attachment.flinchFirstUseOnly === true && attachment.flinchFirstOverallOnly === true,
       });
       if (effectType === 'recoil') {
         const existing = normalized.get(id);
@@ -421,6 +487,46 @@ function normalizeSkillAttachmentDrafts(
           existing.buffPercent = String(fallbackBuff);
           existing.recoilPercent = '0.1';
           existing.recoilMode = 'percent_max_hp';
+        }
+      } else if (effectType === 'inflict_toxic') {
+        const existing = normalized.get(id);
+        if (existing) {
+          existing.buffPercent = String(fallbackBuff);
+          existing.recoilPercent = '0.1';
+          existing.recoilMode = 'percent_max_hp';
+          existing.persistentHealMode = 'percent_max_hp';
+          existing.persistentHealValue = '0.05';
+          existing.persistentHealDurationTurns = '1';
+          existing.stunFailChance = '0.25';
+          existing.stunSlowdown = '0.5';
+        }
+      } else if (effectType === 'inflict_stun') {
+        const existing = normalized.get(id);
+        if (existing) {
+          existing.buffPercent = String(fallbackBuff);
+          existing.recoilPercent = '0.1';
+          existing.recoilMode = 'percent_max_hp';
+          existing.persistentHealMode = 'percent_max_hp';
+          existing.persistentHealValue = '0.05';
+          existing.persistentHealDurationTurns = '1';
+          existing.toxicPotencyBase = '0.05';
+          existing.toxicPotencyPerTurn = '0.05';
+          existing.flinchFirstUseOnly = false;
+          existing.flinchFirstOverallOnly = false;
+        }
+      } else if (effectType === 'flinch_chance') {
+        const existing = normalized.get(id);
+        if (existing) {
+          existing.buffPercent = String(fallbackBuff);
+          existing.recoilPercent = '0.1';
+          existing.recoilMode = 'percent_max_hp';
+          existing.persistentHealMode = 'percent_max_hp';
+          existing.persistentHealValue = '0.05';
+          existing.persistentHealDurationTurns = '1';
+          existing.toxicPotencyBase = '0.05';
+          existing.toxicPotencyPerTurn = '0.05';
+          existing.stunFailChance = '0.25';
+          existing.stunSlowdown = '0.5';
         }
       }
     }
@@ -442,6 +548,12 @@ function normalizeSkillAttachmentDrafts(
         persistentHealMode: 'percent_max_hp',
         persistentHealValue: '0.05',
         persistentHealDurationTurns: '1',
+        toxicPotencyBase: effectType === 'inflict_toxic' ? '0.05' : '0',
+        toxicPotencyPerTurn: effectType === 'inflict_toxic' ? '0.05' : '0',
+        stunFailChance: effectType === 'inflict_stun' ? '0.25' : '0',
+        stunSlowdown: effectType === 'inflict_stun' ? '0.5' : '0',
+        flinchFirstUseOnly: false,
+        flinchFirstOverallOnly: false,
       });
     }
   }
@@ -504,6 +616,16 @@ function buildSkillEffectAttachmentsFromDraft(
         entry.persistentHealValue,
       );
       normalized.persistentHealDurationTurns = sanitizePersistentHealDuration(entry.persistentHealDurationTurns);
+    } else if (effectType === 'inflict_toxic') {
+      normalized.toxicPotencyBase = sanitizeToxicValue(entry.toxicPotencyBase, 0.05);
+      normalized.toxicPotencyPerTurn = sanitizeToxicValue(entry.toxicPotencyPerTurn, 0.05);
+    } else if (effectType === 'inflict_stun') {
+      normalized.stunFailChance = sanitizeToxicValue(entry.stunFailChance, 0.25);
+      normalized.stunSlowdown = sanitizeToxicValue(entry.stunSlowdown, 0.5);
+    } else if (effectType === 'flinch_chance') {
+      const firstUse = entry.flinchFirstUseOnly === true;
+      normalized.flinchFirstUseOnly = firstUse;
+      normalized.flinchFirstOverallOnly = firstUse && entry.flinchFirstOverallOnly === true;
     } else {
       normalized.buffPercent = sanitizeAttachmentNumber(entry.buffPercent, 0.1);
     }
@@ -525,6 +647,12 @@ function buildAttachmentDraftFromEffectOption(effect: EffectOption): SkillEffect
     persistentHealMode: 'percent_max_hp',
     persistentHealValue: '0.05',
     persistentHealDurationTurns: '1',
+    toxicPotencyBase: effect.effectType === 'inflict_toxic' ? '0.05' : '0',
+    toxicPotencyPerTurn: effect.effectType === 'inflict_toxic' ? '0.05' : '0',
+    stunFailChance: effect.effectType === 'inflict_stun' ? '0.25' : '0',
+    stunSlowdown: effect.effectType === 'inflict_stun' ? '0.5' : '0',
+    flinchFirstUseOnly: false,
+    flinchFirstOverallOnly: false,
   };
 }
 
@@ -1054,6 +1182,9 @@ export function MoveTool() {
                   const usesRecoil = effectUsesRecoilConfig(opt?.effectType);
                   const usesBuff = effectUsesBuffPercent(opt?.effectType);
                   const usesPersistentHeal = effectUsesPersistentHealConfig(opt?.effectType);
+                  const usesToxic = effectUsesToxicConfig(opt?.effectType);
+                  const usesStun = effectUsesStunConfig(opt?.effectType);
+                  const usesFlinch = effectUsesFlinchConfig(opt?.effectType);
                   const valueLabel = usesRecoil
                     ? `recoil ${Math.round(sanitizeAttachmentNumber(attachment.recoilPercent, 0.1) * 100)}% (${attachment.recoilMode})`
                     : usesPersistentHeal
@@ -1067,6 +1198,12 @@ export function MoveTool() {
                           attachment.persistentHealDurationTurns,
                         ),
                       })
+                    : usesToxic
+                      ? `toxic ${Math.round(sanitizeToxicValue(attachment.toxicPotencyBase, 0.05) * 100)}% +${Math.round(sanitizeToxicValue(attachment.toxicPotencyPerTurn, 0.05) * 100)}%/turn`
+                    : usesStun
+                      ? `stun ${Math.round(sanitizeToxicValue(attachment.stunFailChance, 0.25) * 100)}% fail, -${Math.round(sanitizeToxicValue(attachment.stunSlowdown, 0.5) * 100)}% SPD`
+                    : usesFlinch
+                      ? `flinch chance${attachment.flinchFirstUseOnly ? ` (${attachment.flinchFirstOverallOnly ? 'first overall' : 'first use'})` : ''}`
                     : usesBuff
                       ? `buff ${Math.round(sanitizeAttachmentNumber(attachment.buffPercent, 0.1) * 100)}%`
                       : 'config';
@@ -1170,6 +1307,9 @@ export function MoveTool() {
                   const usesRecoil = effectUsesRecoilConfig(effect?.effectType);
                   const usesBuff = effectUsesBuffPercent(effect?.effectType);
                   const usesPersistentHeal = effectUsesPersistentHealConfig(effect?.effectType);
+                  const usesToxic = effectUsesToxicConfig(effect?.effectType);
+                  const usesStun = effectUsesStunConfig(effect?.effectType);
+                  const usesFlinch = effectUsesFlinchConfig(effect?.effectType);
                   return (
                     <div key={attachment.effectId} className="admin-panel" style={{ margin: 0 }}>
                       <h5 style={{ marginTop: 0, marginBottom: '0.4rem' }}>
@@ -1306,6 +1446,140 @@ export function MoveTool() {
                                 }))
                               }
                             />
+                          </label>
+                        </>
+                      )}
+                      {usesToxic && (
+                        <>
+                          <label>
+                            Toxic Base (0-1)
+                            <input
+                              type="number"
+                              min={0}
+                              max={1}
+                              step={0.01}
+                              value={attachment.toxicPotencyBase}
+                              onChange={(e) =>
+                                setDraft((d) => ({
+                                  ...d,
+                                  effectAttachments: d.effectAttachments.map((entry) =>
+                                    entry.effectId === attachment.effectId
+                                      ? { ...entry, toxicPotencyBase: e.target.value }
+                                      : entry,
+                                  ),
+                                }))
+                              }
+                            />
+                          </label>
+                          <label>
+                            Toxic Ramp / Turn (0-1)
+                            <input
+                              type="number"
+                              min={0}
+                              max={1}
+                              step={0.01}
+                              value={attachment.toxicPotencyPerTurn}
+                              onChange={(e) =>
+                                setDraft((d) => ({
+                                  ...d,
+                                  effectAttachments: d.effectAttachments.map((entry) =>
+                                    entry.effectId === attachment.effectId
+                                      ? { ...entry, toxicPotencyPerTurn: e.target.value }
+                                      : entry,
+                                  ),
+                                }))
+                              }
+                            />
+                          </label>
+                        </>
+                      )}
+                      {usesStun && (
+                        <>
+                          <label>
+                            Stun Fail Chance (0-1)
+                            <input
+                              type="number"
+                              min={0}
+                              max={1}
+                              step={0.01}
+                              value={attachment.stunFailChance}
+                              onChange={(e) =>
+                                setDraft((d) => ({
+                                  ...d,
+                                  effectAttachments: d.effectAttachments.map((entry) =>
+                                    entry.effectId === attachment.effectId
+                                      ? { ...entry, stunFailChance: e.target.value }
+                                      : entry,
+                                  ),
+                                }))
+                              }
+                            />
+                          </label>
+                          <label>
+                            Stun Slowdown (0-1)
+                            <input
+                              type="number"
+                              min={0}
+                              max={1}
+                              step={0.01}
+                              value={attachment.stunSlowdown}
+                              onChange={(e) =>
+                                setDraft((d) => ({
+                                  ...d,
+                                  effectAttachments: d.effectAttachments.map((entry) =>
+                                    entry.effectId === attachment.effectId
+                                      ? { ...entry, stunSlowdown: e.target.value }
+                                      : entry,
+                                  ),
+                                }))
+                              }
+                            />
+                          </label>
+                        </>
+                      )}
+                      {usesFlinch && (
+                        <>
+                          <label className="admin-inline-toggle">
+                            <input
+                              type="checkbox"
+                              checked={attachment.flinchFirstUseOnly}
+                              onChange={(e) =>
+                                setDraft((d) => ({
+                                  ...d,
+                                  effectAttachments: d.effectAttachments.map((entry) =>
+                                    entry.effectId === attachment.effectId
+                                      ? {
+                                        ...entry,
+                                        flinchFirstUseOnly: e.target.checked,
+                                        flinchFirstOverallOnly: e.target.checked ? entry.flinchFirstOverallOnly : false,
+                                      }
+                                      : entry,
+                                  ),
+                                }))
+                              }
+                            />
+                            First Use
+                          </label>
+                          <label className="admin-inline-toggle">
+                            <input
+                              type="checkbox"
+                              checked={attachment.flinchFirstUseOnly && attachment.flinchFirstOverallOnly}
+                              disabled={!attachment.flinchFirstUseOnly}
+                              onChange={(e) =>
+                                setDraft((d) => ({
+                                  ...d,
+                                  effectAttachments: d.effectAttachments.map((entry) =>
+                                    entry.effectId === attachment.effectId
+                                      ? {
+                                        ...entry,
+                                        flinchFirstOverallOnly: entry.flinchFirstUseOnly ? e.target.checked : false,
+                                      }
+                                      : entry,
+                                  ),
+                                }))
+                              }
+                            />
+                            First Overall
                           </label>
                         </>
                       )}

@@ -1126,7 +1126,18 @@ function parseSavedPaintTiles(raw: unknown): SavedPaintTilePayload[] {
   return parsed;
 }
 
-const CRITTER_ELEMENT_OPTIONS = new Set(['bloom', 'ember', 'tide', 'gust', 'stone', 'spark', 'shade', 'normal']);
+const CRITTER_ELEMENT_OPTIONS = new Set([
+  'bloom',
+  'ember',
+  'tide',
+  'gust',
+  'stone',
+  'spark',
+  'shade',
+  'normal',
+  'primal',
+  'mystic',
+]);
 const CRITTER_RARITY_OPTIONS = new Set(['common', 'uncommon', 'rare', 'legendary']);
 const CRITTER_ABILITY_KIND_OPTIONS = new Set(['passive', 'active']);
 const CRITTER_MISSION_TYPE_OPTIONS = new Set([
@@ -1135,12 +1146,24 @@ const CRITTER_MISSION_TYPE_OPTIONS = new Set([
   'pay_item',
   'use_guard',
   'swap_in',
+  'swap_out',
   'heal_critter',
   'heal_with_skills',
   'land_critical_hits',
+  'use_skill',
+  'deal_damage',
   'ascension',
   'story_flag',
+  // Legacy mission type kept for compatibility with existing content.
+  'effect_buffed_actions',
+  'skill_effect_buffed_actions',
+  'equip_effect_buffed_actions',
+  'absorb_damage',
 ]);
+const USE_SKILL_MODE_OPTIONS = new Set(['any', 'element', 'specific']);
+const DEAL_DAMAGE_MODE_OPTIONS = new Set(['any', 'element']);
+const EFFECT_BUFF_MODE_OPTIONS = new Set(['knockouts', 'deal_damage', 'damage_absorbed']);
+const ABSORB_MODE_OPTIONS = new Set(['knockout', 'damage']);
 const BUDDO_NAME = 'buddo';
 const BUDDO_STORY_MISSION_ID = 'select-bloom-partner-critter';
 const BUDDO_STORY_FLAG_ID = 'selected-bloom-starter';
@@ -1372,7 +1395,23 @@ function parseCritterLevelMissions(raw: unknown, level: number): Array<Record<st
     const normalizedMissionTypeRaw =
       missionTypeRaw === 'pay' || missionTypeRaw === 'pay-item' || missionTypeRaw === 'payitem'
         ? 'pay_item'
-        : missionTypeRaw;
+        : missionTypeRaw === 'swap' || missionTypeRaw === 'swaps' || missionTypeRaw === 'swap-in' || missionTypeRaw === 'swapin'
+          ? 'swap_in'
+          : missionTypeRaw === 'swap-out' || missionTypeRaw === 'swapout'
+            ? 'swap_out'
+            : missionTypeRaw === 'heal-with-skills' || missionTypeRaw === 'healwithskills'
+              ? 'heal_with_skills'
+              : missionTypeRaw === 'land-critical-hits' || missionTypeRaw === 'landcriticalhits'
+                ? 'land_critical_hits'
+                : missionTypeRaw === 'use-skill' || missionTypeRaw === 'useskill'
+                  ? 'use_skill'
+                  : missionTypeRaw === 'deal-damage' || missionTypeRaw === 'dealdamage'
+                    ? 'deal_damage'
+              : missionTypeRaw === 'effect-buffed-actions' || missionTypeRaw === 'effectbuffedactions'
+                      ? 'skill_effect_buffed_actions'
+                      : missionTypeRaw === 'absorb-damage' || missionTypeRaw === 'absorbdamage'
+                        ? 'absorb_damage'
+                        : missionTypeRaw;
     const type = CRITTER_MISSION_TYPE_OPTIONS.has(normalizedMissionTypeRaw)
       ? normalizedMissionTypeRaw
       : 'opposing_knockouts';
@@ -1447,6 +1486,103 @@ function parseCritterLevelMissions(raw: unknown, level: number): Array<Record<st
       if (requiredPaymentItemId) {
         mission.requiredPaymentItemId = requiredPaymentItemId;
       }
+    }
+    if (type === 'use_skill') {
+      const useSkillModeRaw =
+        typeof record.useSkillMode === 'string' ? record.useSkillMode.trim().toLowerCase() : 'any';
+      const useSkillMode = USE_SKILL_MODE_OPTIONS.has(useSkillModeRaw) ? useSkillModeRaw : 'any';
+      mission.useSkillMode = useSkillMode;
+      if (useSkillMode === 'element') {
+        const useSkillElements = Array.isArray(record.useSkillElements)
+          ? record.useSkillElements
+              .filter((entry): entry is string => typeof entry === 'string')
+              .map((entry) => entry.trim().toLowerCase())
+              .filter((entry, index, values) => CRITTER_ELEMENT_OPTIONS.has(entry) && values.indexOf(entry) === index)
+              .slice(0, 10)
+          : [];
+        if (useSkillElements.length > 0) {
+          mission.useSkillElements = useSkillElements;
+        }
+      } else if (useSkillMode === 'specific') {
+        const useSkillIds = Array.isArray(record.useSkillIds)
+          ? record.useSkillIds
+              .filter((entry): entry is string => typeof entry === 'string')
+              .map((entry) => entry.trim())
+              .filter((entry, index, values) => entry.length > 0 && values.indexOf(entry) === index)
+              .slice(0, 60)
+          : [];
+        if (useSkillIds.length > 0) {
+          mission.useSkillIds = useSkillIds;
+        }
+      }
+    }
+    if (type === 'deal_damage') {
+      const dealDamageModeRaw =
+        typeof record.dealDamageMode === 'string' ? record.dealDamageMode.trim().toLowerCase() : 'any';
+      const dealDamageMode = DEAL_DAMAGE_MODE_OPTIONS.has(dealDamageModeRaw) ? dealDamageModeRaw : 'any';
+      mission.dealDamageMode = dealDamageMode;
+      if (dealDamageMode === 'element') {
+        const dealDamageElements = Array.isArray(record.dealDamageElements)
+          ? record.dealDamageElements
+              .filter((entry): entry is string => typeof entry === 'string')
+              .map((entry) => entry.trim().toLowerCase())
+              .filter((entry, index, values) => CRITTER_ELEMENT_OPTIONS.has(entry) && values.indexOf(entry) === index)
+              .slice(0, 10)
+          : [];
+        if (dealDamageElements.length > 0) {
+          mission.dealDamageElements = dealDamageElements;
+        }
+      }
+    }
+    const isBuffedActionsType =
+      type === 'effect_buffed_actions' ||
+      type === 'skill_effect_buffed_actions' ||
+      type === 'equip_effect_buffed_actions';
+    if (isBuffedActionsType) {
+      const effectBuffModeRaw =
+        typeof record.effectBuffMode === 'string' ? record.effectBuffMode.trim().toLowerCase() : 'deal_damage';
+      mission.effectBuffMode = EFFECT_BUFF_MODE_OPTIONS.has(effectBuffModeRaw) ? effectBuffModeRaw : 'deal_damage';
+      const effectBuffDescription =
+        typeof record.effectBuffDescription === 'string' ? record.effectBuffDescription.trim().slice(0, 200) : '';
+      if (effectBuffDescription) {
+        mission.effectBuffDescription = effectBuffDescription;
+      }
+      const effectTemplateId = typeof record.effectTemplateId === 'string' ? record.effectTemplateId.trim() : '';
+      if (effectTemplateId) {
+        mission.effectTemplateId = effectTemplateId;
+      }
+      if (type === 'skill_effect_buffed_actions' || type === 'effect_buffed_actions') {
+        const rawSkillIds = Array.isArray(record.skillEffectTemplateIds)
+          ? record.skillEffectTemplateIds
+              .filter((entry): entry is string => typeof entry === 'string')
+              .map((entry) => entry.trim())
+              .filter((entry, index, values) => entry.length > 0 && values.indexOf(entry) === index)
+              .slice(0, 30)
+          : [];
+        if (rawSkillIds.length > 0) {
+          mission.skillEffectTemplateIds = rawSkillIds;
+        } else if (effectTemplateId) {
+          mission.skillEffectTemplateIds = [effectTemplateId];
+        }
+      }
+      if (type === 'equip_effect_buffed_actions') {
+        const rawEquipIds = Array.isArray(record.equipEffectTemplateIds)
+          ? record.equipEffectTemplateIds
+              .filter((entry): entry is string => typeof entry === 'string')
+              .map((entry) => entry.trim())
+              .filter((entry, index, values) => entry.length > 0 && values.indexOf(entry) === index)
+              .slice(0, 30)
+          : [];
+        if (rawEquipIds.length > 0) {
+          mission.equipEffectTemplateIds = rawEquipIds;
+        } else if (effectTemplateId) {
+          mission.equipEffectTemplateIds = [effectTemplateId];
+        }
+      }
+    }
+    if (type === 'absorb_damage') {
+      const absorbModeRaw = typeof record.absorbMode === 'string' ? record.absorbMode.trim().toLowerCase() : 'damage';
+      mission.absorbMode = ABSORB_MODE_OPTIONS.has(absorbModeRaw) ? absorbModeRaw : 'damage';
     }
     parsed.push(mission);
   }
@@ -1768,6 +1904,83 @@ const DEFAULT_SEEDED_SHOPS: Array<Record<string, unknown>> = [
     ],
   },
 ];
+
+const REQUIRED_STATUS_SKILL_EFFECTS: Array<Record<string, unknown>> = [
+  {
+    effect_id: 'status-inflict-toxic',
+    effect_name: 'Inflict Toxic',
+    effect_type: 'inflict_toxic',
+    description: '<proc>% chance to inflict Toxic (<toxic_base>% base, +<toxic_ramp>%/turn).',
+  },
+  {
+    effect_id: 'status-inflict-stun',
+    effect_name: 'Inflict Stun',
+    effect_type: 'inflict_stun',
+    description: '<proc>% chance to inflict Stun (<stun_fail>% fail chance).',
+  },
+  {
+    effect_id: 'status-flinch-chance',
+    effect_name: 'Flinch Chance',
+    effect_type: 'flinch_chance',
+    description: '<proc>% chance to cause flinch this turn.',
+  },
+];
+
+const REQUIRED_STATUS_EQUIPMENT_EFFECTS: Array<Record<string, unknown>> = [
+  {
+    effect_id: 'status-apply-toxic',
+    effect_name: 'Apply Toxic (On Hit)',
+    effect_type: 'apply_toxic',
+    description: 'On damaging hit: <proc>% chance to apply Toxic.',
+    modifiers: [],
+  },
+  {
+    effect_id: 'status-apply-stun',
+    effect_name: 'Apply Stun (On Hit)',
+    effect_type: 'apply_stun',
+    description: 'On damaging hit: <proc>% chance to apply Stun.',
+    modifiers: [],
+  },
+  {
+    effect_id: 'status-flinch-chance',
+    effect_name: 'Flinch Chance (On Hit)',
+    effect_type: 'flinch_chance',
+    description: 'On damaging hit: <proc>% chance to cause flinch.',
+    modifiers: [],
+  },
+];
+
+async function ensureRequiredStatusEffectTemplates(client: PoolClient): Promise<void> {
+  for (const effect of REQUIRED_STATUS_SKILL_EFFECTS) {
+    const effectId = sanitizeIdentifier(typeof effect.effect_id === 'string' ? effect.effect_id : '', '');
+    if (!effectId) {
+      continue;
+    }
+    await client.query(
+      `
+        INSERT INTO game_skill_effects_catalog (effect_id, effect_data, updated_at)
+        VALUES ($1, $2::jsonb, NOW())
+        ON CONFLICT (effect_id) DO NOTHING
+      `,
+      [effectId, JSON.stringify(effect)],
+    );
+  }
+
+  for (const effect of REQUIRED_STATUS_EQUIPMENT_EFFECTS) {
+    const effectId = sanitizeIdentifier(typeof effect.effect_id === 'string' ? effect.effect_id : '', '');
+    if (!effectId) {
+      continue;
+    }
+    await client.query(
+      `
+        INSERT INTO game_equipment_effects_catalog (effect_id, effect_data, updated_at)
+        VALUES ($1, $2::jsonb, NOW())
+        ON CONFLICT (effect_id) DO NOTHING
+      `,
+      [effectId, JSON.stringify(effect)],
+    );
+  }
+}
 
 function parseItemCatalog(
   raw: unknown,
@@ -4947,6 +5160,8 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
           );
         }
       }
+
+      await ensureRequiredStatusEffectTemplates(client);
 
       const npcCatalogResult = await client.query<{ character_library: unknown }>(
         'SELECT character_library FROM game_npc_libraries WHERE catalog_key = $1',

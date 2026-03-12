@@ -92,6 +92,16 @@ import {
   resolveRequestedSkillRecoilAmount,
   resolveSkillEffectAttachmentsForRuntime,
 } from '@/game/battle/damageAndEffects';
+import {
+  STATUS_CONDITION_PRESENTATION,
+  clampUnitInterval,
+  clonePersistentStatusCondition,
+  resolveStunSpeedMultiplier,
+  resolveToxicTickDamage,
+  sanitizeStatusSource,
+  type FlinchStatusCondition,
+  type PersistentStatusCondition,
+} from '@/game/battle/statusConditions';
 import { rollGuard } from '@/game/battle/guard';
 import { resolveEffectiveSpeed as resolveEffectiveSpeedShared, resolveSkillPriority as resolveSkillPriorityShared } from '@/game/battle/ordering';
 import {
@@ -298,6 +308,10 @@ interface BattleCritterState {
   equipmentEffectInstances: EquipmentEffectInstance[];
   /** Source equipment item names keyed by effect id (for tooltip context). */
   equipmentEffectSourceById: Record<string, string[]>;
+  /** Persistent status carried in-battle (Toxic/Stun). */
+  persistentStatus: PersistentStatusCondition | null;
+  /** One-turn volatile flinch marker. */
+  flinch: FlinchStatusCondition | null;
   /** Active skill-applied end-of-turn healing. Cleared on switch, KO, or battle end. */
   persistentHeal: {
     effectId: string;
@@ -308,6 +322,14 @@ interface BattleCritterState {
     /** When set, this persistent heal was from a player skill; credit this critter for heal_with_skills on tick. */
     playerSourceCritterId?: number;
   } | null;
+  /** Tracks whether this critter already attempted an action this turn. */
+  actedThisTurn: boolean;
+  /** First turn number this critter can act after entering the field. */
+  firstActionableTurnNumber: number;
+  /** Damage-skill uses since this critter last entered the field. */
+  damageSkillUseCountSinceSwitchIn: number;
+  /** Per-skill use counts since this critter last entered the field. */
+  skillUseCountBySkillId: Record<string, number>;
   consecutiveSuccessfulGuardCount: number;
   /** Player team only: skill ids for 4 slots. */
   equippedSkillIds?: BattleEquippedSkillSlots;
@@ -383,6 +405,10 @@ interface BattleNarrationEvent {
   /** When present, apply this damage to the defender when this event is shown (so HP bars update in attack order). */
   applyDamageDefender?: 'player' | 'opponent';
   applyDamageAmount?: number;
+  /** Identifies what produced applyDamageAmount (used by mission mode filters). */
+  damageSource?: 'skill';
+  /** Element token for applyDamageAmount when damageSource is "skill". */
+  damageElement?: string;
   /** When present and attacker was player, used for mission tracking (e.g. land_critical_hits). */
   playerAttackerCritterId?: number | null;
   /** When true with playerAttackerCritterId, the damage move was a critical hit. */
@@ -629,8 +655,17 @@ export interface RuntimeSnapshot {
       requiredPaymentAffordable?: boolean;
       requiredHealingItemIds?: string[];
       requiredHealingItemNames?: string[];
+      useSkillMode?: string;
+      useSkillElements?: string[];
+      useSkillIds?: string[];
+      dealDamageMode?: string;
+      dealDamageElements?: string[];
+      absorbMode?: string;
+      absorbDamageElements?: string[];
       storyFlagId?: string;
       label?: string;
+      effectBuffMode?: string;
+      effectBuffDescription?: string;
     }>;
     lockedKnockoutTracker: {
       selectedCritterId: number | null;
@@ -654,6 +689,27 @@ export interface RuntimeSnapshot {
         requiredPaymentAffordable?: boolean;
         requiredHealingItemIds?: string[];
         requiredHealingItemNames?: string[];
+        useSkillMode?: string;
+        useSkillElements?: string[];
+        useSkillIds?: string[];
+        dealDamageMode?: string;
+        dealDamageElements?: string[];
+        absorbMode?: string;
+        absorbDamageElements?: string[];
+      }>;
+    };
+    lockedDamageTracker: {
+      selectedCritterId: number | null;
+      selectedCritterName: string | null;
+      eligibleCritterIds: number[];
+      missionRows: Array<{
+        id: string;
+        type: string;
+        targetValue: number;
+        currentValue: number;
+        completed: boolean;
+        dealDamageMode?: string;
+        dealDamageElements?: string[];
       }>;
     };
     squadSlots: Array<{
@@ -690,6 +746,8 @@ export interface RuntimeSnapshot {
       unlocked: boolean;
       lockedKnockoutTargetEligible: boolean;
       lockedKnockoutTargetSelected: boolean;
+      lockedDamageTargetEligible: boolean;
+      lockedDamageTargetSelected: boolean;
       level: number;
       maxLevel: number;
       currentHp: number | null;
@@ -735,7 +793,17 @@ export interface RuntimeSnapshot {
         effectIconUrls?: string[];
       } | null>;
       unlockedSkillIds: string[];
-      unlockedSkillOptions: Array<{ skillId: string; name: string }>;
+      unlockedSkillOptions: Array<{
+        skillId: string;
+        name: string;
+        element: string;
+        type: SkillDefinition['type'];
+        damage?: number;
+        healMode?: SkillHealMode;
+        healValue?: number;
+        effectDescriptions?: string;
+        effectIconUrls?: string[];
+      }>;
       levelProgress: Array<{
         level: number;
         requiredMissionCount: number;
@@ -761,8 +829,17 @@ export interface RuntimeSnapshot {
           requiredPaymentAffordable?: boolean;
           requiredHealingItemIds?: string[];
           requiredHealingItemNames?: string[];
+          useSkillMode?: string;
+          useSkillElements?: string[];
+          useSkillIds?: string[];
+          dealDamageMode?: string;
+          dealDamageElements?: string[];
+          absorbMode?: string;
+          absorbDamageElements?: string[];
           storyFlagId?: string;
           label?: string;
+          effectBuffMode?: string;
+          effectBuffDescription?: string;
         }>;
       }>;
       activeRequirement: {
@@ -791,8 +868,17 @@ export interface RuntimeSnapshot {
           requiredPaymentAffordable?: boolean;
           requiredHealingItemIds?: string[];
           requiredHealingItemNames?: string[];
+          useSkillMode?: string;
+          useSkillElements?: string[];
+          useSkillIds?: string[];
+          dealDamageMode?: string;
+          dealDamageElements?: string[];
+          absorbMode?: string;
+          absorbDamageElements?: string[];
           storyFlagId?: string;
           label?: string;
+          effectBuffMode?: string;
+          effectBuffDescription?: string;
         }>;
       } | null;
     }>;
@@ -959,6 +1045,7 @@ export class GameRuntime {
     url: null,
     image: null,
   };
+  private fishingBiteIconFallbackTried = false;
   private lastEncounter: RuntimeSnapshot['lastEncounter'] = null;
   private activeBattle: BattleRuntimeState | null = null;
   private starterSelection: StarterSelectionState | null = null;
@@ -1100,6 +1187,9 @@ export class GameRuntime {
       this.critterDatabase,
     );
     if (this.ensureLockedKnockoutTargetSelectionValid()) {
+      this.dirty = true;
+    }
+    if (this.ensureLockedDamageTargetSelectionValid()) {
       this.dirty = true;
     }
     this.playerItemInventory = sanitizePlayerItemInventory(state.playerItemInventory, this.itemDatabase);
@@ -1557,7 +1647,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     }
 
     this.drawFishingCastIndicator(ctx, cameraPixelX, cameraPixelY, playerRenderPos);
-    this.drawFishingBiteIndicator(ctx, cameraPixelX, cameraPixelY);
+    this.drawFishingBiteIndicator(ctx, cameraPixelX, cameraPixelY, playerRenderPos);
 
     ctx.restore();
 
@@ -1579,13 +1669,15 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     ctx: CanvasRenderingContext2D,
     cameraPixelX: number,
     cameraPixelY: number,
+    playerRenderPos: Vector2,
   ): void {
     const session = this.fishingSession;
     if (!session?.hasPendingBite) {
       return;
     }
-    const drawX = session.targetTile.x * TILE_SIZE - cameraPixelX + TILE_SIZE / 2;
-    const drawY = session.targetTile.y * TILE_SIZE - cameraPixelY - TILE_SIZE * 0.56;
+    const drawX = playerRenderPos.x * TILE_SIZE - cameraPixelX + TILE_SIZE / 2;
+    const baseBottomY = (playerRenderPos.y + 1) * TILE_SIZE - cameraPixelY;
+    const drawY = baseBottomY - TILE_SIZE * 2 + TILE_SIZE * 0.25;
     if (this.fishingBiteIcon.status === 'ready' && this.fishingBiteIcon.image) {
       const iconSize = Math.round(TILE_SIZE * 0.8);
       ctx.drawImage(
@@ -1685,6 +1777,17 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       }
     };
     image.onerror = () => {
+      const fallbackUrl = this.resolveFishingBiteIconUrl(true);
+      if (!this.fishingBiteIconFallbackTried && fallbackUrl && fallbackUrl !== resolvedUrl) {
+        this.fishingBiteIconFallbackTried = true;
+        this.fishingBiteIcon = {
+          status: 'idle',
+          url: null,
+          image: null,
+        };
+        this.ensureFishingBiteIconLoaded();
+        return;
+      }
       this.fishingBiteIcon = {
         status: 'error',
         url: resolvedUrl,
@@ -1694,7 +1797,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     image.src = resolveAssetUrl(resolvedUrl);
   }
 
-  private resolveFishingBiteIconUrl(): string | null {
+  private resolveFishingBiteIconUrl(useLegacyIcon = false): string | null {
     const knownUrls: string[] = [];
     if (this.customTilesetConfig?.url) {
       knownUrls.push(this.customTilesetConfig.url);
@@ -1721,7 +1824,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     for (const url of knownUrls) {
       const root = extractSupabasePublicRoot(url);
       if (root) {
-        return `${root}/icons/exclaim-icon.png`;
+        return `${root}/icons/${useLegacyIcon ? 'exclaim-icon.png' : 'fishing-exclaim-icon.png'}`;
       }
     }
     try {
@@ -1729,7 +1832,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         (import.meta as { env?: { VITE_SUPABASE_URL?: string } }).env?.VITE_SUPABASE_URL) as string | undefined;
       const base = typeof envUrl === 'string' && envUrl.trim() ? envUrl.trim().replace(/\/+$/, '') : '';
       if (base) {
-        return `${base}/storage/v1/object/public/icons/exclaim-icon.png`;
+        return `${base}/storage/v1/object/public/icons/${useLegacyIcon ? 'exclaim-icon.png' : 'fishing-exclaim-icon.png'}`;
       }
     } catch {
       // ignore
@@ -2137,6 +2240,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     }
     const autoAssignedToSquad = currentLevel === 0 && this.tryAutoAssignFirstUnlockedCritter(critter.id);
     this.ensureLockedKnockoutTargetSelectionValid();
+    this.ensureLockedDamageTargetSelectionValid();
 
     this.markProgressDirty();
     this.showMessage(
@@ -2534,6 +2638,55 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       return false;
     }
 
+    if (battle.phase === 'choose-swap' && !battle.pendingForcedSwap) {
+      const swapCancellation = this.consumePreActionStatusCancellation(battle, 'player', 'swap');
+      if (swapCancellation.blocked) {
+        battle.phase = 'player-turn';
+        battle.turnNumber += 1;
+        const narration: BattleNarrationEvent[] = [];
+        if (swapCancellation.message) {
+          narration.push({
+            message: swapCancellation.message,
+            attacker: null,
+          });
+        }
+        const opponent = this.getActiveBattleCritter(battle, 'opponent');
+        if (opponent) {
+          opponent.actedThisTurn = false;
+        }
+        const opponentCancellation = this.consumePreActionStatusCancellation(battle, 'opponent', 'use a skill');
+        if (opponentCancellation.blocked) {
+          if (opponentCancellation.message) {
+            narration.push({
+              message: opponentCancellation.message,
+              attacker: null,
+            });
+          }
+          if (opponent) {
+            opponent.actedThisTurn = true;
+          }
+        } else {
+          const opponentAttack = this.executeBattleSkill(battle, 'opponent', false, false);
+          if (opponentAttack.narrationEvents.length > 0) {
+            narration.push(...opponentAttack.narrationEvents);
+          }
+          if (opponent) {
+            opponent.actedThisTurn = true;
+          }
+        }
+        if (
+          battle.result === 'ongoing' &&
+          battle.phase === 'player-turn' &&
+          battle.pendingKnockoutResolution === null &&
+          battle.pendingOpponentSwitchIndex === null
+        ) {
+          battle.pendingEndTurnResolution = true;
+        }
+        this.startBattleNarration(battle, narration);
+        return true;
+      }
+    }
+
     const previousIndex = battle.playerActiveIndex;
     const previousCritterId =
       previousIndex !== null && battle.playerTeam[previousIndex]
@@ -2549,11 +2702,17 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       prev.activeEffectIds = [];
       prev.activeEffectValueById = {};
       prev.activeEffectSourceById = {};
+      prev.flinch = null;
+      prev.actedThisTurn = false;
+      prev.damageSkillUseCountSinceSwitchIn = 0;
+      prev.skillUseCountBySkillId = {};
+      prev.firstActionableTurnNumber = 1;
       this.clearPersistentHealStateForCritter(prev);
     }
     battle.playerActiveIndex = teamIndex;
 
     if (battle.phase === 'choose-starter') {
+      this.resetSwitchInUsageTracking(selected, 1);
       if (battle.source.type === 'npc' && battle.opponentActiveIndex === null) {
         const opponentIndex = this.findFirstAliveTeamIndex(battle.opponentTeam);
         if (opponentIndex < 0) {
@@ -2561,6 +2720,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
           return true;
         }
         battle.opponentActiveIndex = opponentIndex;
+        if (battle.opponentTeam[opponentIndex]) {
+          this.resetSwitchInUsageTracking(battle.opponentTeam[opponentIndex], 1);
+        }
         battle.logLine = `${battle.source.label} selected ${battle.opponentTeam[opponentIndex].name}. Choose your move.`;
       } else {
         battle.logLine = `${selected.name}, I choose you!`;
@@ -2573,6 +2735,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       battle.pendingForcedSwap = false;
       battle.phase = 'player-turn';
       battle.logLine = `${selected.name} stepped in after the knockout.`;
+      this.resetSwitchInUsageTracking(selected, battle.turnNumber + 1);
       if (this.incrementSimpleCritterMissionProgress(selected.critterId, (mission) => mission.type === 'swap_in')) {
         this.markProgressDirty();
       }
@@ -2581,6 +2744,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
 
     battle.phase = 'player-turn';
     battle.turnNumber += 1;
+    this.resetSwitchInUsageTracking(selected, battle.turnNumber + 1);
     const didUpdateSwapIn = this.incrementSimpleCritterMissionProgress(
       selected.critterId,
       (mission) => mission.type === 'swap_in',
@@ -4726,7 +4890,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       return;
     }
 
-    if (this.getRng()() >= session.fishFrequency) {
+    const power = clamp(session.power, FISHING_POWER_MIN, FISHING_POWER_MAX);
+    const effectiveFishChance = clamp(lerp(session.fishFrequency, 1, power), 0, 1);
+    if (this.getRng()() >= effectiveFishChance) {
       this.clearFishingSession();
       this.startDialogue('Fishing', ['No bites right now.']);
       return;
@@ -5432,6 +5598,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         return;
       }
       battle.opponentActiveIndex = nextIndex;
+      if (battle.opponentTeam[nextIndex]) {
+        this.resetSwitchInUsageTracking(battle.opponentTeam[nextIndex], battle.turnNumber + 1);
+      }
       battle.pendingOpponentSwitchIndex = null;
       battle.pendingOpponentSwitchDelayMs = 0;
       battle.pendingOpponentSwitchAnnouncementShown = false;
@@ -5546,7 +5715,13 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         equipmentEffectIds,
         equipmentEffectInstances: equipmentEffects.map((effect) => ({ ...effect })),
         equipmentEffectSourceById,
+        persistentStatus: clonePersistentStatusCondition(progress.persistentStatus),
+        flinch: null,
         persistentHeal: null,
+        actedThisTurn: false,
+        firstActionableTurnNumber: 1,
+        damageSkillUseCountSinceSwitchIn: 0,
+        skillUseCountBySkillId: {},
         consecutiveSuccessfulGuardCount: 0,
         equippedSkillIds: progress.equippedSkillIds,
       });
@@ -5634,7 +5809,13 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       equipmentEffectIds: [],
       equipmentEffectInstances: [],
       equipmentEffectSourceById: {},
+      persistentStatus: null,
+      flinch: null,
       persistentHeal: null,
+      actedThisTurn: false,
+      firstActionableTurnNumber: 1,
+      damageSkillUseCountSinceSwitchIn: 0,
+      skillUseCountBySkillId: {},
       consecutiveSuccessfulGuardCount: 0,
       equippedSkillIds,
     };
@@ -5658,31 +5839,64 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
 
     battle.turnNumber += 1;
     battle.pendingEndTurnResolution = false;
+    player.actedThisTurn = false;
+    opponent.actedThisTurn = false;
 
     const narration: BattleNarrationEvent[] = [];
 
     if (action === 'guard') {
-      const guardResult = rollGuard(player.consecutiveSuccessfulGuardCount, this.getRng());
-      const guardSucceeded = guardResult.succeeded;
-      player.consecutiveSuccessfulGuardCount = guardResult.nextConsecutiveSuccessfulCount;
-      if (guardSucceeded) {
-        if (this.incrementSimpleCritterMissionProgress(player.critterId, (mission) => mission.type === 'use_guard')) {
-          this.markProgressDirty();
+      const guardCancellation = this.consumePreActionStatusCancellation(battle, 'player', 'guard');
+      let guardSucceeded = false;
+      if (guardCancellation.blocked) {
+        if (guardCancellation.message) {
+          narration.push({
+            message: guardCancellation.message,
+            attacker: null,
+          });
+        }
+      } else {
+        const guardResult = rollGuard(player.consecutiveSuccessfulGuardCount, this.getRng());
+        guardSucceeded = guardResult.succeeded;
+        player.consecutiveSuccessfulGuardCount = guardResult.nextConsecutiveSuccessfulCount;
+        if (guardSucceeded) {
+          if (this.incrementSimpleCritterMissionProgress(player.critterId, (mission) => mission.type === 'use_guard')) {
+            this.markProgressDirty();
+          }
+        }
+        narration.push({
+          message: `Your ${player.name} used Guard!`,
+          attacker: null,
+        });
+        if (!guardSucceeded) {
+          narration.push({ message: "Guard failed!", attacker: null });
         }
       }
-      narration.push({
-        message: `Your ${player.name} used Guard!`,
-        attacker: null,
-      });
-      if (!guardSucceeded) {
-        narration.push({ message: "Guard failed!", attacker: null });
+      player.actedThisTurn = true;
+
+      const opponentCancellation = this.consumePreActionStatusCancellation(battle, 'opponent', 'use a skill');
+      let opponentDefenderFainted = false;
+      if (opponentCancellation.blocked) {
+        if (opponentCancellation.message) {
+          narration.push({
+            message: opponentCancellation.message,
+            attacker: null,
+          });
+        }
+      } else {
+        const opponentResult = this.executeBattleSkill(
+          battle,
+          'opponent',
+          !guardCancellation.blocked,
+          !guardCancellation.blocked && guardSucceeded,
+        );
+        if (opponentResult.narrationEvents.length > 0) {
+          narration.push(...opponentResult.narrationEvents);
+        }
+        opponentDefenderFainted = Boolean(opponentResult.defenderFainted);
       }
-      const opponentResult = this.executeBattleSkill(battle, 'opponent', true, guardSucceeded);
-      if (opponentResult.narrationEvents.length > 0) {
-        narration.push(...opponentResult.narrationEvents);
-      }
+      opponent.actedThisTurn = true;
       if (
-        !opponentResult.defenderFainted &&
+        !opponentDefenderFainted &&
         battle.result === 'ongoing' &&
         battle.phase === 'player-turn'
       ) {
@@ -5708,8 +5922,19 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         (playerEffectiveSpeed > opponentEffectiveSpeed ||
           (playerEffectiveSpeed === opponentEffectiveSpeed)));
 
-    if (playerActsFirst) {
-      const playerResult = this.executeBattleSkillWithSkill(
+    const executePlayerAttack = (): { defenderFainted: boolean } => {
+      const cancellation = this.consumePreActionStatusCancellation(battle, 'player', 'use a skill');
+      if (cancellation.blocked) {
+        if (cancellation.message) {
+          narration.push({
+            message: cancellation.message,
+            attacker: null,
+          });
+        }
+        player.actedThisTurn = true;
+        return { defenderFainted: false };
+      }
+      const result = this.executeBattleSkillWithSkill(
         battle,
         'player',
         playerSkill,
@@ -5717,15 +5942,27 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         false,
         false,
       );
-      if (playerResult.narrationEvents.length > 0) {
-        narration.push(...playerResult.narrationEvents);
+      if (result.narrationEvents.length > 0) {
+        narration.push(...result.narrationEvents);
       }
-      if (playerResult.defenderFainted || battle.result !== 'ongoing' || battle.phase !== 'player-turn') {
-        this.startBattleNarration(battle, narration);
-        return;
-      }
+      this.advanceUseSkillMissions(player.critterId, playerSkill.skill_id, playerSkill.element ?? '');
+      player.actedThisTurn = true;
+      return { defenderFainted: Boolean(result.defenderFainted) };
+    };
 
-      const opponentResult = this.executeBattleSkillWithSkill(
+    const executeOpponentAttack = (): { defenderFainted: boolean } => {
+      const cancellation = this.consumePreActionStatusCancellation(battle, 'opponent', 'use a skill');
+      if (cancellation.blocked) {
+        if (cancellation.message) {
+          narration.push({
+            message: cancellation.message,
+            attacker: null,
+          });
+        }
+        opponent.actedThisTurn = true;
+        return { defenderFainted: false };
+      }
+      const result = this.executeBattleSkillWithSkill(
         battle,
         'opponent',
         opponentSkillSelection.skill,
@@ -5733,9 +5970,21 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         false,
         false,
       );
-      if (opponentResult.narrationEvents.length > 0) {
-        narration.push(...opponentResult.narrationEvents);
+      if (result.narrationEvents.length > 0) {
+        narration.push(...result.narrationEvents);
       }
+      opponent.actedThisTurn = true;
+      return { defenderFainted: Boolean(result.defenderFainted) };
+    };
+
+    if (playerActsFirst) {
+      const playerResult = executePlayerAttack();
+      if (playerResult.defenderFainted || battle.result !== 'ongoing' || battle.phase !== 'player-turn') {
+        this.startBattleNarration(battle, narration);
+        return;
+      }
+
+      const opponentResult = executeOpponentAttack();
       if (
         !opponentResult.defenderFainted &&
         battle.result === 'ongoing' &&
@@ -5747,33 +5996,13 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       return;
     }
 
-    const opponentResult = this.executeBattleSkillWithSkill(
-      battle,
-      'opponent',
-      opponentSkillSelection.skill,
-      opponentSkillSelection.skillSlotIndex,
-      false,
-      false,
-    );
-    if (opponentResult.narrationEvents.length > 0) {
-      narration.push(...opponentResult.narrationEvents);
-    }
+    const opponentResult = executeOpponentAttack();
     if (opponentResult.defenderFainted || battle.result !== 'ongoing' || battle.phase !== 'player-turn') {
       this.startBattleNarration(battle, narration);
       return;
     }
 
-    const playerResult = this.executeBattleSkillWithSkill(
-      battle,
-      'player',
-      playerSkill,
-      playerSkillSlotIndex ?? 0,
-      false,
-      false,
-    );
-    if (playerResult.narrationEvents.length > 0) {
-      narration.push(...playerResult.narrationEvents);
-    }
+    const playerResult = executePlayerAttack();
     if (
       !playerResult.defenderFainted &&
       battle.result === 'ongoing' &&
@@ -5799,15 +6028,53 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         attacker: null,
       },
     ];
-    const opponentAttack = this.executeBattleSkill(battle, 'opponent', false, false);
-    if (opponentAttack.narrationEvents.length > 0) {
-      narration.push(...opponentAttack.narrationEvents);
+    const player = this.getActiveBattleCritter(battle, 'player');
+    const opponent = this.getActiveBattleCritter(battle, 'opponent');
+    if (player) {
+      player.actedThisTurn = true;
+    }
+    if (opponent) {
+      opponent.actedThisTurn = false;
+    }
+    const opponentCancellation = this.consumePreActionStatusCancellation(battle, 'opponent', 'use a skill');
+    if (opponentCancellation.blocked) {
+      if (opponentCancellation.message) {
+        narration.push({
+          message: opponentCancellation.message,
+          attacker: null,
+        });
+      }
+      if (opponent) {
+        opponent.actedThisTurn = true;
+      }
+    } else {
+      const opponentAttack = this.executeBattleSkill(battle, 'opponent', false, false);
+      if (opponentAttack.narrationEvents.length > 0) {
+        narration.push(...opponentAttack.narrationEvents);
+      }
+      if (opponent) {
+        opponent.actedThisTurn = true;
+      }
+    }
+    if (
+      battle.result === 'ongoing' &&
+      battle.phase === 'player-turn' &&
+      battle.pendingKnockoutResolution === null &&
+      battle.pendingOpponentSwitchIndex === null
+    ) {
+      battle.pendingEndTurnResolution = true;
     }
     this.startBattleNarration(battle, narration);
   }
 
-  private getEffectiveBattleSpeed(critter: Pick<BattleCritterState, 'speed' | 'speedModifier'>): number {
-    return resolveEffectiveSpeedShared(critter.speed, critter.speedModifier);
+  private getEffectiveBattleSpeed(
+    critter: Pick<BattleCritterState, 'speed' | 'speedModifier' | 'persistentStatus'>,
+  ): number {
+    const base = resolveEffectiveSpeedShared(critter.speed, critter.speedModifier);
+    if (critter.persistentStatus?.kind !== 'stun') {
+      return base;
+    }
+    return Math.max(1, base * resolveStunSpeedMultiplier(critter.persistentStatus));
   }
 
   private resolveSkillPriority(skill: Pick<SkillDefinition, 'priority'>): number {
@@ -5839,6 +6106,269 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     skill = foundSkill;
     skillSlotIndex = attacker.equippedSkillIds.indexOf(selectedSkillId);
     return { skill, skillSlotIndex };
+  }
+
+  private formatBattleCritterReference(
+    battle: BattleRuntimeState,
+    team: 'player' | 'opponent',
+    critterName: string,
+  ): string {
+    if (team === 'player') {
+      return `Your ${critterName}`;
+    }
+    if (battle.source.type === 'wild') {
+      return `The wild ${critterName}`;
+    }
+    return `${battle.source.label}'s ${critterName}`;
+  }
+
+  private consumePreActionStatusCancellation(
+    battle: BattleRuntimeState,
+    team: 'player' | 'opponent',
+    actionVerb: 'use a skill' | 'guard' | 'swap',
+  ): { blocked: boolean; message?: string } {
+    const actor = this.getActiveBattleCritter(battle, team);
+    if (!actor || actor.fainted || actor.currentHp <= 0) {
+      return { blocked: true };
+    }
+    if (actor.flinch && actor.flinch.turnNumber === battle.turnNumber) {
+      const source = sanitizeStatusSource(actor.flinch.source, 'an effect');
+      actor.flinch = null;
+      actor.actedThisTurn = true;
+      return {
+        blocked: true,
+        message: `${this.formatBattleCritterReference(battle, team, actor.name)} flinched and couldn't act due to ${source}.`,
+      };
+    }
+    if (actor.persistentStatus?.kind === 'stun') {
+      const failChance = clampUnitInterval(actor.persistentStatus.stunFailChance, 0.25);
+      if (failChance > 0 && this.getRng()() < failChance) {
+        actor.actedThisTurn = true;
+        return {
+          blocked: true,
+          message: `${this.formatBattleCritterReference(battle, team, actor.name)} is stunned and cannot ${actionVerb}.`,
+        };
+      }
+    }
+    return { blocked: false };
+  }
+
+  private clearPersistentStatusForCritter(target: BattleCritterState): void {
+    target.persistentStatus = null;
+  }
+
+  private clearFlinchForCritter(target: BattleCritterState): void {
+    target.flinch = null;
+  }
+
+  private resetSwitchInUsageTracking(target: BattleCritterState, firstActionableTurnNumber: number): void {
+    target.flinch = null;
+    target.actedThisTurn = false;
+    target.damageSkillUseCountSinceSwitchIn = 0;
+    target.skillUseCountBySkillId = {};
+    target.firstActionableTurnNumber = Math.max(1, Math.floor(firstActionableTurnNumber));
+  }
+
+  private getSkillUseCountSinceSwitchIn(target: BattleCritterState, skillId: string): number {
+    const key = typeof skillId === 'string' ? skillId.trim() : '';
+    if (!key) {
+      return 0;
+    }
+    const usageBySkill =
+      target.skillUseCountBySkillId && typeof target.skillUseCountBySkillId === 'object'
+        ? target.skillUseCountBySkillId
+        : {};
+    const raw = usageBySkill[key];
+    return typeof raw === 'number' && Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 0;
+  }
+
+  private canApplyFlinchForCurrentUse(
+    battle: BattleRuntimeState,
+    attacker: BattleCritterState,
+    options: {
+      firstUseOnly: boolean;
+      firstOverallOnly: boolean;
+      priorUseCount: number;
+    },
+  ): boolean {
+    if (!options.firstUseOnly) {
+      return true;
+    }
+    const priorUseCount =
+      typeof options.priorUseCount === 'number' && Number.isFinite(options.priorUseCount)
+        ? Math.max(0, Math.floor(options.priorUseCount))
+        : 0;
+    if (priorUseCount > 0) {
+      return false;
+    }
+    if (!options.firstOverallOnly) {
+      return true;
+    }
+    const firstActionable = Math.max(1, Math.floor(attacker.firstActionableTurnNumber));
+    // Lead critters have firstActionableTurnNumber 1, but turnNumber is incremented at the start of
+    // resolvePlayerTurnAction, so the first resolution runs with turnNumber === 2.
+    const isFirstOverallTurn =
+      battle.turnNumber === firstActionable ||
+      (firstActionable === 1 && battle.turnNumber === 2);
+    return isFirstOverallTurn;
+  }
+
+  private recordBattleSkillUsage(target: BattleCritterState, skill: Pick<SkillDefinition, 'skill_id' | 'type'>): void {
+    const skillId = typeof skill.skill_id === 'string' ? skill.skill_id.trim() : '';
+    if (!skillId) {
+      return;
+    }
+    if (!target.skillUseCountBySkillId || typeof target.skillUseCountBySkillId !== 'object') {
+      target.skillUseCountBySkillId = {};
+    }
+    const priorSkillUses = this.getSkillUseCountSinceSwitchIn(target, skillId);
+    target.skillUseCountBySkillId[skillId] = priorSkillUses + 1;
+    if (skill.type !== 'damage') {
+      return;
+    }
+    const priorDamageSkillUses =
+      typeof target.damageSkillUseCountSinceSwitchIn === 'number' && Number.isFinite(target.damageSkillUseCountSinceSwitchIn)
+        ? Math.max(0, Math.floor(target.damageSkillUseCountSinceSwitchIn))
+        : 0;
+    target.damageSkillUseCountSinceSwitchIn = priorDamageSkillUses + 1;
+  }
+
+  private applyOnHitStatusEffects(
+    battle: BattleRuntimeState,
+    attacker: BattleCritterState,
+    defender: BattleCritterState,
+    skill: SkillDefinition,
+    appliedSkillAttachments: SkillEffectAttachment[],
+    attackingTeam: 'player' | 'opponent',
+    damageDealt: number,
+  ): BattleNarrationEvent[] {
+    if (skill.type !== 'damage' || damageDealt <= 0 || defender.fainted || defender.currentHp <= 0) {
+      return [];
+    }
+
+    const events: BattleNarrationEvent[] = [];
+    const defenderLabel = this.formatBattleCritterReference(
+      battle,
+      attackingTeam === 'player' ? 'opponent' : 'player',
+      defender.name,
+    );
+
+    const applyToxic = (sourceName: string, potencyBase: number, potencyPerTurn: number): void => {
+      if (defender.persistentStatus) {
+        return;
+      }
+      defender.persistentStatus = {
+        kind: 'toxic',
+        potencyBase: clampUnitInterval(potencyBase, 0.05),
+        potencyPerTurn: clampUnitInterval(potencyPerTurn, 0.05),
+        turnCount: 0,
+        source: sanitizeStatusSource(sourceName, skill.skill_name),
+      };
+      events.push({
+        message: `${defenderLabel} was afflicted with Toxic!`,
+        attacker: null,
+      });
+    };
+
+    const applyStun = (sourceName: string, stunFailChance: number, stunSlowdown: number): void => {
+      if (defender.persistentStatus) {
+        return;
+      }
+      defender.persistentStatus = {
+        kind: 'stun',
+        stunFailChance: clampUnitInterval(stunFailChance, 0.25),
+        stunSlowdown: clampUnitInterval(stunSlowdown, 0.5),
+        source: sanitizeStatusSource(sourceName, skill.skill_name),
+      };
+      events.push({
+        message: `${defenderLabel} was stunned!`,
+        attacker: null,
+      });
+    };
+
+    const applyFlinch = (sourceName: string): void => {
+      if (defender.actedThisTurn) {
+        return;
+      }
+      defender.flinch = {
+        turnNumber: battle.turnNumber,
+        source: sanitizeStatusSource(sourceName, skill.skill_name),
+      };
+    };
+
+    for (const attachment of appliedSkillAttachments) {
+      const effect = this.skillEffectLookupById[attachment.effectId];
+      if (!effect) {
+        continue;
+      }
+      if (effect.effect_type === 'inflict_toxic') {
+        applyToxic(
+          skill.skill_name,
+          attachment.toxicPotencyBase ?? 0.05,
+          attachment.toxicPotencyPerTurn ?? 0.05,
+        );
+      } else if (effect.effect_type === 'inflict_stun') {
+        applyStun(
+          skill.skill_name,
+          attachment.stunFailChance ?? 0.25,
+          attachment.stunSlowdown ?? 0.5,
+        );
+      } else if (effect.effect_type === 'flinch_chance') {
+        if (!this.canApplyFlinchForCurrentUse(battle, attacker, {
+          firstUseOnly: attachment.flinchFirstUseOnly === true,
+          firstOverallOnly: attachment.flinchFirstUseOnly === true && attachment.flinchFirstOverallOnly === true,
+          priorUseCount: this.getSkillUseCountSinceSwitchIn(attacker, skill.skill_id),
+        })) {
+          continue;
+        }
+        applyFlinch(skill.skill_name);
+      }
+    }
+
+    const equipmentSourceById = attacker.equipmentEffectSourceById ?? {};
+    for (const effect of attacker.equipmentEffectInstances ?? []) {
+      if (
+        effect.effectType !== 'apply_toxic' &&
+        effect.effectType !== 'apply_stun' &&
+        effect.effectType !== 'flinch_chance'
+      ) {
+        continue;
+      }
+      if (
+        effect.effectType === 'flinch_chance' &&
+        !this.canApplyFlinchForCurrentUse(battle, attacker, {
+          firstUseOnly: effect.flinchFirstUseOnly === true,
+          firstOverallOnly: effect.flinchFirstUseOnly === true && effect.flinchFirstOverallOnly === true,
+          priorUseCount: attacker.damageSkillUseCountSinceSwitchIn,
+        })
+      ) {
+        continue;
+      }
+      const procChance = clampUnitInterval(effect.procChance ?? 0.2, 0.2);
+      if (procChance <= 0 || this.getRng()() >= procChance) {
+        continue;
+      }
+      const sourceName =
+        sanitizeStatusSource(equipmentSourceById[effect.effectId]?.[0], '') ||
+        effect.effectId;
+      if (effect.effectType === 'apply_toxic') {
+        applyToxic(
+          sourceName,
+          effect.toxicPotencyBase ?? 0.05,
+          effect.toxicPotencyPerTurn ?? 0.05,
+        );
+      } else if (effect.effectType === 'apply_stun') {
+        applyStun(
+          sourceName,
+          effect.stunFailChance ?? 0.25,
+          effect.stunSlowdown ?? 0.5,
+        );
+      } else {
+        applyFlinch(sourceName);
+      }
+    }
+
+    return events;
   }
 
   private executeBattleSkill(
@@ -5923,6 +6453,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         persistentHealResolutions,
       );
       const message = this.formatBattleSupportSkillMessage(battle, attackingTeam, attacker.name, skill.skill_name);
+      this.recordBattleSkillUsage(attacker, skill);
       return {
         narrationEvents: [
           {
@@ -5980,6 +6511,17 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       skill.skill_name,
       persistentHealResolutions,
     );
+    const statusEvents = !wouldFaint
+      ? this.applyOnHitStatusEffects(
+        battle,
+        attacker,
+        defender,
+        skill,
+        appliedAttachments,
+        attackingTeam,
+        damageDealt,
+      )
+      : [];
 
     const guardSuffix =
       defenderGuarded && guardSucceeded
@@ -6007,19 +6549,22 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     );
     const message = `${attackPrefix} dealt ${damage} damage.${critSuffix}${typeEffectSuffix}${guardSuffix}`.trim();
 
+    this.recordBattleSkillUsage(attacker, skill);
     return {
       narrationEvents: [
         {
           message,
           attacker: attackingTeam,
           applyDamageDefender,
-          applyDamageAmount: damage,
+          applyDamageAmount: damageDealt,
+          damageSource: 'skill',
+          damageElement: skill.element,
           ...(attackingTeam === 'player' &&
             battle.playerActiveIndex != null && {
               playerAttackerCritterId: battle.playerTeam[battle.playerActiveIndex]?.critterId ?? null,
             }),
           ...(isCrit && { wasCriticalHit: true }),
-          followUpEvents,
+          followUpEvents: [...followUpEvents, ...statusEvents],
           pendingKnockoutResolution:
             wouldFaint && defenderActiveIndex !== null
               ? {
@@ -6239,6 +6784,8 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       if (attacker.currentHp <= 0) {
         attacker.fainted = true;
         this.clearPersistentHealStateForCritter(attacker);
+        this.clearPersistentStatusForCritter(attacker);
+        this.clearFlinchForCritter(attacker);
       }
     }
     return {
@@ -6385,6 +6932,34 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       const critter = this.getActiveBattleCritter(battle, team);
       if (!critter || critter.fainted || critter.currentHp <= 0) {
         continue;
+      }
+      this.clearFlinchForCritter(critter);
+      if (critter.persistentStatus?.kind === 'toxic') {
+        const toxicDamage = resolveToxicTickDamage(critter.maxHp, critter.persistentStatus).damage;
+        if (toxicDamage > 0) {
+          const beforeHp = critter.currentHp;
+          critter.currentHp = Math.max(0, critter.currentHp - toxicDamage);
+          const actualDamage = Math.max(0, beforeHp - critter.currentHp);
+          if (actualDamage > 0) {
+            events.push({
+              message:
+                team === 'player'
+                  ? `Your ${critter.name} took ${actualDamage} damage from Toxic.`
+                  : `${critter.name} took ${actualDamage} damage from Toxic.`,
+              attacker: null,
+            });
+          }
+          if (critter.currentHp <= 0) {
+            critter.fainted = true;
+            this.clearPersistentHealStateForCritter(critter);
+            this.clearPersistentStatusForCritter(critter);
+            events.push(...this.buildBattleKnockoutNarrationEvents(battle, team, null));
+            continue;
+          }
+        }
+        if (critter.persistentStatus?.kind === 'toxic') {
+          critter.persistentStatus.turnCount = Math.max(0, Math.floor(critter.persistentStatus.turnCount) + 1);
+        }
       }
       let requestedHeal = 0;
       let skillHealRequested = 0;
@@ -6595,15 +7170,41 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       const team = next.applyDamageDefender === 'player' ? battle.playerTeam : battle.opponentTeam;
       const activeIndex = next.applyDamageDefender === 'player' ? battle.playerActiveIndex : battle.opponentActiveIndex;
       const defender = activeIndex !== null ? team[activeIndex] : null;
+      let damageApplied = 0;
       if (defender) {
-        defender.currentHp = Math.max(0, defender.currentHp - next.applyDamageAmount);
+        const hpBefore = Math.max(0, defender.currentHp);
+        defender.currentHp = Math.max(0, hpBefore - next.applyDamageAmount);
+        damageApplied = hpBefore - defender.currentHp;
         defender.fainted = defender.currentHp <= 0;
         if (defender.fainted) {
           this.clearPersistentHealStateForCritter(defender);
+          this.clearPersistentStatusForCritter(defender);
+          this.clearFlinchForCritter(defender);
+          if (next.applyDamageDefender === 'player') {
+            this.recordSelfKnockoutProgress(defender.critterId);
+          }
+        }
+        if (next.applyDamageDefender === 'player' && damageApplied > 0) {
+          this.recordAbsorbDamageProgress(
+            defender.critterId,
+            damageApplied,
+            next.damageSource,
+            next.damageElement,
+          );
+          this.recordDamageTakenWhileBuffedProgress(defender.critterId, damageApplied);
         }
       }
-      if (next.playerAttackerCritterId != null && next.wasCriticalHit === true) {
+      if (next.playerAttackerCritterId != null && next.wasCriticalHit === true && damageApplied > 0) {
         this.advanceLandCriticalHitsMissions(next.playerAttackerCritterId, 1);
+      }
+      if (next.playerAttackerCritterId != null && damageApplied > 0) {
+        this.recordDealDamageProgress(
+          next.playerAttackerCritterId,
+          damageApplied,
+          next.damageSource,
+          next.damageElement,
+        );
+        this.recordEffectBuffedDealDamageProgress(next.playerAttackerCritterId, damageApplied);
       }
     }
 
@@ -6682,6 +7283,10 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       battle.pendingOpponentSwitchIndex = null;
       battle.pendingOpponentSwitchDelayMs = 0;
       battle.pendingOpponentSwitchAnnouncementShown = false;
+      const nextOpponent = battle.opponentTeam[stateChange.opponentActiveIndex];
+      if (nextOpponent) {
+        this.resetSwitchInUsageTracking(nextOpponent, battle.turnNumber + 1);
+      }
     }
 
     if (stateChange.phase) {
@@ -6842,6 +7447,8 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     battle.pendingEndTurnResolution = false;
     for (const entry of [...battle.playerTeam, ...battle.opponentTeam]) {
       this.clearPersistentHealStateForCritter(entry);
+      this.clearFlinchForCritter(entry);
+      entry.actedThisTurn = false;
     }
     if (!options?.preserveLogLine) {
       battle.logLine = message;
@@ -6938,6 +7545,12 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       const nextHp = clamp(battleEntry.currentHp, 0, maxHp);
       if (progress.currentHp !== nextHp) {
         progress.currentHp = nextHp;
+        updated = true;
+      }
+      const nextPersistentStatus = clonePersistentStatusCondition(battleEntry.persistentStatus);
+      const currentPersistentStatus = clonePersistentStatusCondition(progress.persistentStatus);
+      if (JSON.stringify(currentPersistentStatus) !== JSON.stringify(nextPersistentStatus)) {
+        progress.persistentStatus = nextPersistentStatus;
         updated = true;
       }
     }
@@ -7096,6 +7709,37 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         );
       }
     }
+    if (entry.persistentStatus) {
+      const statusKind = entry.persistentStatus.kind;
+      const statusPresentation = STATUS_CONDITION_PRESENTATION[statusKind];
+      if (statusPresentation) {
+        const statusId = `status-${statusKind}`;
+        if (!activeEffectIds.includes(statusId)) {
+          activeEffectIds.push(statusId);
+        }
+        activeEffectIconUrls.push(statusPresentation.iconUrl);
+        activeEffectDescriptions.push(
+          this.formatBattleEffectTooltip(
+            this.describePersistentStatusTooltip(entry.persistentStatus),
+            entry.persistentStatus.source ? [entry.persistentStatus.source] : [],
+          ),
+        );
+      }
+    }
+    if (entry.flinch) {
+      const statusId = 'status-flinch';
+      if (!activeEffectIds.includes(statusId)) {
+        activeEffectIds.push(statusId);
+      }
+      const flinchPresentation = STATUS_CONDITION_PRESENTATION.flinch;
+      activeEffectIconUrls.push(flinchPresentation.iconUrl);
+      activeEffectDescriptions.push(
+        this.formatBattleEffectTooltip(
+          flinchPresentation.description,
+          entry.flinch.source ? [entry.flinch.source] : [],
+        ),
+      );
+    }
     return {
       slotIndex: entry.slotIndex,
       critterId: entry.critterId,
@@ -7167,6 +7811,16 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       return `Total stacked: ${isDebuff ? '-' : '+'}${magnitude}% ${statLabel}`;
     }
     return `Total stacked: ${isDebuff ? '-' : '+'}${magnitude}%`;
+  }
+
+  private describePersistentStatusTooltip(status: PersistentStatusCondition): string {
+    if (status.kind === 'toxic') {
+      const potency = clampUnitInterval(status.potencyBase + status.potencyPerTurn * Math.max(0, Math.floor(status.turnCount)), 0);
+      return `Toxic: ${Math.round(potency * 100)}% max HP end-turn damage`;
+    }
+    const failChance = clampUnitInterval(status.stunFailChance, 0.25);
+    const slowdown = clampUnitInterval(status.stunSlowdown, 0.5);
+    return `Stun: ${Math.round(failChance * 100)}% action fail chance, -${Math.round(slowdown * 100)}% speed`;
   }
 
   private getBattleSnapshot(): RuntimeBattleSnapshot | null {
@@ -8166,7 +8820,13 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         equipmentEffectIds,
         equipmentEffectInstances: equipmentEffects.map((effect) => ({ ...effect })),
         equipmentEffectSourceById,
+        persistentStatus: null,
+        flinch: null,
         persistentHeal: null,
+        actedThisTurn: false,
+        firstActionableTurnNumber: 1,
+        damageSkillUseCountSinceSwitchIn: 0,
+        skillUseCountBySkillId: {},
         consecutiveSuccessfulGuardCount: 0,
         equippedSkillIds,
       });
@@ -8290,6 +8950,93 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     return true;
   }
 
+  private getLockedDamageTargetContext(
+    critterId: number,
+  ): {
+    critter: CritterDefinition;
+    progress: PlayerCritterProgress['collection'][number];
+    levelRow: CritterDefinition['levels'][number];
+    damageMissions: CritterLevelMissionRequirement[];
+  } | null {
+    const critter = this.critterLookup[critterId];
+    const progress = this.playerCritterProgress.collection.find((entry) => entry.critterId === critterId);
+    if (!critter || !progress || progress.unlocked) {
+      return null;
+    }
+    const currentLevel = Math.max(0, progress.level);
+    const targetLevel = currentLevel + 1;
+    const levelRow = critter.levels.find((entry) => entry.level === targetLevel);
+    if (!levelRow || targetLevel !== 1) {
+      return null;
+    }
+    if (this.hasPendingStoryFlagMission(levelRow.missions, levelRow.level, progress.missionProgress)) {
+      return null;
+    }
+    const damageMissions = levelRow.missions.filter(
+      (entry): entry is CritterLevelMissionRequirement => entry.type === 'deal_damage',
+    );
+    if (damageMissions.length === 0) {
+      return null;
+    }
+    return {
+      critter,
+      progress,
+      levelRow,
+      damageMissions,
+    };
+  }
+
+  private getEligibleLockedDamageTargetCritterIds(): number[] {
+    const eligible: number[] = [];
+    for (const entry of this.playerCritterProgress.collection) {
+      if (this.getLockedDamageTargetContext(entry.critterId)) {
+        eligible.push(entry.critterId);
+      }
+    }
+    return eligible;
+  }
+
+  private ensureLockedDamageTargetSelectionValid(): boolean {
+    const selectedCritterId = this.playerCritterProgress.lockedDamageTargetCritterId;
+    if (selectedCritterId === null) {
+      return false;
+    }
+    if (this.getLockedDamageTargetContext(selectedCritterId)) {
+      return false;
+    }
+    this.playerCritterProgress.lockedDamageTargetCritterId = null;
+    return true;
+  }
+
+  public setLockedDamageTargetCritter(critterId: number | null): boolean {
+    if (critterId === null) {
+      if (this.playerCritterProgress.lockedDamageTargetCritterId === null) {
+        return false;
+      }
+      this.playerCritterProgress.lockedDamageTargetCritterId = null;
+      this.markProgressDirty();
+      this.showMessage('Cleared locked damage mission target.', 2200);
+      return true;
+    }
+
+    const normalizedCritterId = Number.isFinite(critterId) ? Math.max(1, Math.floor(critterId)) : -1;
+    if (normalizedCritterId < 1) {
+      return false;
+    }
+    const context = this.getLockedDamageTargetContext(normalizedCritterId);
+    if (!context) {
+      return false;
+    }
+    if (this.playerCritterProgress.lockedDamageTargetCritterId === normalizedCritterId) {
+      return false;
+    }
+
+    this.playerCritterProgress.lockedDamageTargetCritterId = normalizedCritterId;
+    this.markProgressDirty();
+    this.showMessage(`Tracking ${context.critter.name}'s damage missions.`, 2200);
+    return true;
+  }
+
   private incrementSimpleCritterMissionProgress(
     critterId: number,
     missionMatcher: (mission: CritterLevelMissionRequirement) => boolean,
@@ -8370,6 +9117,57 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     return updated;
   }
 
+  private advanceUseSkillMissions(critterId: number, skillId: string, element: string): boolean {
+    const critter = this.critterLookup?.[critterId];
+    const progress = this.playerCritterProgress?.collection?.find((entry) => entry.critterId === critterId);
+    if (!critter || !progress?.unlocked) {
+      return false;
+    }
+    const currentLevel = Math.max(1, progress.level);
+    const targetLevel = currentLevel + 1;
+    const levelRow = critter.levels.find((entry) => entry.level === targetLevel);
+    if (!levelRow) {
+      return false;
+    }
+    if (this.hasPendingStoryFlagMission(levelRow.missions, levelRow.level, progress.missionProgress)) {
+      return false;
+    }
+    let updated = false;
+    const elementNorm = element?.trim().toLowerCase() ?? '';
+    for (const mission of levelRow.missions) {
+      if (mission.type !== 'use_skill') {
+        continue;
+      }
+      const mode = mission.useSkillMode ?? 'any';
+      const matches =
+        mode === 'any' ||
+        (mode === 'element' &&
+          Array.isArray(mission.useSkillElements) &&
+          mission.useSkillElements.length > 0 &&
+          mission.useSkillElements.some((e) => e.toLowerCase() === elementNorm)) ||
+        (mode === 'specific' &&
+          Array.isArray(mission.useSkillIds) &&
+          mission.useSkillIds.length > 0 &&
+          mission.useSkillIds.includes(skillId));
+      if (!matches) {
+        continue;
+      }
+      const key = missionProgressKey(levelRow.level, mission.id);
+      const currentValue = Math.max(0, progress.missionProgress[key] ?? 0);
+      const nextValue = Math.min(mission.targetValue, currentValue + 1);
+      if (nextValue <= currentValue) {
+        continue;
+      }
+      progress.missionProgress[key] = nextValue;
+      updated = true;
+    }
+    if (updated) {
+      progress.lastProgressAt = new Date().toISOString();
+      this.markProgressDirty();
+    }
+    return updated;
+  }
+
   private advanceLandCriticalHitsMissions(critterId: number, count: number): boolean {
     if (!Number.isFinite(count) || count <= 0) {
       return false;
@@ -8409,6 +9207,90 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     return updated;
   }
 
+  private hasEffectTemplateActive(critterId: number, effectTemplateId: string): boolean {
+    const normalizedId = typeof effectTemplateId === 'string' ? effectTemplateId.trim() : '';
+    if (!normalizedId) {
+      return false;
+    }
+    const battle = this.activeBattle;
+    if (!battle) {
+      return false;
+    }
+    const isMatch = (team: BattleCritterState[] | undefined): boolean => {
+      if (!Array.isArray(team)) {
+        return false;
+      }
+      return team.some(
+        (entry) =>
+          entry &&
+          entry.critterId === critterId &&
+          Array.isArray(entry.activeEffectIds) &&
+          entry.activeEffectIds.includes(normalizedId),
+      );
+    };
+    return isMatch(battle.playerTeam) || isMatch(battle.opponentTeam);
+  }
+
+  private hasAnySkillEffectTemplateActive(critterId: number, templateIds: string[]): boolean {
+    if (!Array.isArray(templateIds) || templateIds.length === 0) {
+      return false;
+    }
+    const battle = this.activeBattle;
+    if (!battle) {
+      return false;
+    }
+    const idSet = new Set(
+      templateIds
+        .map((id) => (typeof id === 'string' ? id.trim() : ''))
+        .filter((id) => id.length > 0),
+    );
+    if (idSet.size === 0) {
+      return false;
+    }
+    const isMatch = (team: BattleCritterState[] | undefined): boolean => {
+      if (!Array.isArray(team)) {
+        return false;
+      }
+      return team.some((entry) => {
+        if (!entry || entry.critterId !== critterId || !Array.isArray(entry.activeEffectIds)) {
+          return false;
+        }
+        return entry.activeEffectIds.some((effectId) => idSet.has(effectId));
+      });
+    };
+    return isMatch(battle.playerTeam) || isMatch(battle.opponentTeam);
+  }
+
+  private hasAnyEquipmentEffectTemplateActive(critterId: number, templateIds: string[]): boolean {
+    if (!Array.isArray(templateIds) || templateIds.length === 0) {
+      return false;
+    }
+    const battle = this.activeBattle;
+    if (!battle) {
+      return false;
+    }
+    const idSet = new Set(
+      templateIds
+        .map((id) => (typeof id === 'string' ? id.trim() : ''))
+        .filter((id) => id.length > 0),
+    );
+    if (idSet.size === 0) {
+      return false;
+    }
+    const isMatch = (team: BattleCritterState[] | undefined): boolean => {
+      if (!Array.isArray(team)) {
+        return false;
+      }
+      return team.some((entry) => {
+        if (!entry || entry.critterId !== critterId || !Array.isArray(entry.equipmentEffectIds)) {
+          return false;
+        }
+        return entry.equipmentEffectIds.some((effectId) => idSet.has(effectId));
+      });
+    };
+    return isMatch(battle.playerTeam) || isMatch(battle.opponentTeam);
+  }
+
   private recordOpposingKnockoutProgress(opposingCritterId: number, knockoutAttackerCritterId: number | null): void {
     const opposingCritter = this.critterLookup[opposingCritterId];
     if (!opposingCritter) {
@@ -8419,7 +9301,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     }
 
     const nowIso = new Date().toISOString();
-    let updatedAny = this.ensureLockedKnockoutTargetSelectionValid();
+    let updatedAny = this.ensureLockedKnockoutTargetSelectionValid() || this.ensureLockedDamageTargetSelectionValid();
     const knockoutAttackerProgress = this.playerCritterProgress.collection.find(
       (entry) => entry.critterId === knockoutAttackerCritterId,
     );
@@ -8455,6 +9337,35 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
 
       let updatedCritter = false;
       for (const mission of levelRow.missions) {
+        if (
+          (mission.type === 'effect_buffed_actions' ||
+            mission.type === 'skill_effect_buffed_actions' ||
+            mission.type === 'equip_effect_buffed_actions') &&
+          (mission.effectBuffMode ?? 'deal_damage') === 'knockouts'
+        ) {
+          const skillIds =
+            (mission.skillEffectTemplateIds && mission.skillEffectTemplateIds.length > 0
+              ? mission.skillEffectTemplateIds
+              : mission.effectTemplateId
+                ? [mission.effectTemplateId]
+                : []) ?? [];
+          const equipIds = mission.equipEffectTemplateIds ?? [];
+          const hasBuffActive =
+            mission.type === 'equip_effect_buffed_actions'
+              ? this.hasAnyEquipmentEffectTemplateActive(critter.id, equipIds)
+              : this.hasAnySkillEffectTemplateActive(critter.id, skillIds);
+          if (!levelLockedByStoryFlag && hasBuffActive) {
+            const key = missionProgressKey(levelRow.level, mission.id);
+            const currentValue = Math.max(0, progress.missionProgress[key] ?? 0);
+            const nextValue = Math.min(mission.targetValue, currentValue + 1);
+            if (nextValue > currentValue) {
+              progress.missionProgress[key] = nextValue;
+              updatedCritter = true;
+            }
+          }
+          // Effect-buffed missions do not sync to side-story knockout challenges.
+          continue;
+        }
         if (!isKnockoutMissionType(mission.type)) {
           continue;
         }
@@ -8528,6 +9439,286 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       updatedAt,
     };
     return true;
+  }
+
+  private recordDealDamageProgress(
+    attackerCritterId: number,
+    damageAmount: number,
+    damageSource?: 'skill',
+    damageElement?: string,
+  ): void {
+    if (!Number.isFinite(damageAmount) || damageAmount <= 0) {
+      return;
+    }
+    if (damageSource !== 'skill') {
+      return;
+    }
+    const damageElementNormalized =
+      typeof damageElement === 'string' ? damageElement.trim().toLowerCase() : '';
+    const critterIdsToCredit = new Set<number>([attackerCritterId]);
+    const lockedDamageTargetId = this.playerCritterProgress.lockedDamageTargetCritterId;
+    if (lockedDamageTargetId != null && lockedDamageTargetId !== attackerCritterId) {
+      critterIdsToCredit.add(lockedDamageTargetId);
+    }
+    const nowIso = new Date().toISOString();
+    let updatedAny = false;
+    for (const critterId of critterIdsToCredit) {
+      const critter = this.critterLookup[critterId];
+      const progress = this.playerCritterProgress.collection.find((entry) => entry.critterId === critterId);
+      if (!critter || !progress) {
+        continue;
+      }
+      const currentLevel = progress.unlocked ? Math.max(1, progress.level) : 0;
+      const targetLevel = currentLevel + 1;
+      if (progress.unlocked === false && targetLevel !== 1) {
+        continue;
+      }
+      const levelRow = critter.levels.find((entry) => entry.level === targetLevel);
+      if (!levelRow) {
+        continue;
+      }
+      if (this.hasPendingStoryFlagMission(levelRow.missions, levelRow.level, progress.missionProgress)) {
+        continue;
+      }
+      let remainingToAdd = damageAmount;
+      let critterUpdated = false;
+      for (const mission of levelRow.missions) {
+        if (mission.type !== 'deal_damage') {
+          continue;
+        }
+        const mode = mission.dealDamageMode ?? 'any';
+        if (mode === 'element') {
+          const allowedElements = Array.isArray(mission.dealDamageElements) ? mission.dealDamageElements : [];
+          if (
+            allowedElements.length > 0 &&
+            !allowedElements.some((element) => element.toLowerCase() === damageElementNormalized)
+          ) {
+            continue;
+          }
+        }
+        const key = missionProgressKey(levelRow.level, mission.id);
+        const currentValue = Math.max(0, progress.missionProgress[key] ?? 0);
+        const cap = Math.max(1, mission.targetValue);
+        if (currentValue >= cap) {
+          continue;
+        }
+        const delta = Math.min(cap - currentValue, remainingToAdd);
+        if (delta <= 0) {
+          continue;
+        }
+        progress.missionProgress[key] = currentValue + delta;
+        remainingToAdd -= delta;
+        critterUpdated = true;
+        updatedAny = true;
+        if (remainingToAdd <= 0) {
+          break;
+        }
+      }
+      if (critterUpdated) {
+        progress.lastProgressAt = nowIso;
+      }
+    }
+    if (updatedAny) {
+      this.markProgressDirty();
+    }
+  }
+
+  private recordEffectBuffedDealDamageProgress(attackerCritterId: number, damageAmount: number): void {
+    if (!Number.isFinite(damageAmount) || damageAmount <= 0) {
+      return;
+    }
+    const critter = this.critterLookup[attackerCritterId];
+    const progress = this.playerCritterProgress.collection.find((entry) => entry.critterId === attackerCritterId);
+    if (!critter || !progress?.unlocked) {
+      return;
+    }
+    const currentLevel = Math.max(1, progress.level);
+    const targetLevel = currentLevel + 1;
+    const levelRow = critter.levels.find((entry) => entry.level === targetLevel);
+    if (!levelRow) {
+      return;
+    }
+    if (this.hasPendingStoryFlagMission(levelRow.missions, levelRow.level, progress.missionProgress)) {
+      return;
+    }
+    let remainingToAdd = damageAmount;
+    let updated = false;
+    for (const mission of levelRow.missions) {
+      if (
+        (mission.type !== 'effect_buffed_actions' &&
+          mission.type !== 'skill_effect_buffed_actions' &&
+          mission.type !== 'equip_effect_buffed_actions') ||
+        (mission.effectBuffMode ?? 'deal_damage') !== 'deal_damage'
+      ) {
+        continue;
+      }
+      const skillIds =
+        (mission.skillEffectTemplateIds && mission.skillEffectTemplateIds.length > 0
+          ? mission.skillEffectTemplateIds
+          : mission.effectTemplateId
+            ? [mission.effectTemplateId]
+            : []) ?? [];
+      const equipIds = mission.equipEffectTemplateIds ?? [];
+      const hasBuffActive =
+        mission.type === 'equip_effect_buffed_actions'
+          ? this.hasAnyEquipmentEffectTemplateActive(attackerCritterId, equipIds)
+          : this.hasAnySkillEffectTemplateActive(attackerCritterId, skillIds);
+      if (!hasBuffActive) {
+        continue;
+      }
+      const key = missionProgressKey(levelRow.level, mission.id);
+      const currentValue = Math.max(0, progress.missionProgress[key] ?? 0);
+      const cap = Math.max(1, mission.targetValue);
+      if (currentValue >= cap) {
+        continue;
+      }
+      const delta = Math.min(cap - currentValue, remainingToAdd);
+      if (delta <= 0) {
+        continue;
+      }
+      progress.missionProgress[key] = currentValue + delta;
+      remainingToAdd -= delta;
+      updated = true;
+      if (remainingToAdd <= 0) {
+        break;
+      }
+    }
+    if (updated) {
+      progress.lastProgressAt = new Date().toISOString();
+      this.markProgressDirty();
+    }
+  }
+
+  private recordDamageTakenWhileBuffedProgress(defenderCritterId: number, damageAmount: number): void {
+    if (!Number.isFinite(damageAmount) || damageAmount <= 0) {
+      return;
+    }
+    const critter = this.critterLookup[defenderCritterId];
+    const progress = this.playerCritterProgress.collection.find((entry) => entry.critterId === defenderCritterId);
+    if (!critter || !progress?.unlocked) {
+      return;
+    }
+    const currentLevel = Math.max(1, progress.level);
+    const targetLevel = currentLevel + 1;
+    const levelRow = critter.levels.find((entry) => entry.level === targetLevel);
+    if (!levelRow) {
+      return;
+    }
+    if (this.hasPendingStoryFlagMission(levelRow.missions, levelRow.level, progress.missionProgress)) {
+      return;
+    }
+    let updated = false;
+    for (const mission of levelRow.missions) {
+      if (
+        (mission.type !== 'effect_buffed_actions' &&
+          mission.type !== 'skill_effect_buffed_actions' &&
+          mission.type !== 'equip_effect_buffed_actions') ||
+        (mission.effectBuffMode ?? 'deal_damage') !== 'damage_absorbed'
+      ) {
+        continue;
+      }
+      const skillIds =
+        (mission.skillEffectTemplateIds && mission.skillEffectTemplateIds.length > 0
+          ? mission.skillEffectTemplateIds
+          : mission.effectTemplateId
+            ? [mission.effectTemplateId]
+            : []) ?? [];
+      const equipIds = mission.equipEffectTemplateIds ?? [];
+      const hasBuffActive =
+        mission.type === 'equip_effect_buffed_actions'
+          ? this.hasAnyEquipmentEffectTemplateActive(defenderCritterId, equipIds)
+          : this.hasAnySkillEffectTemplateActive(defenderCritterId, skillIds);
+      if (!hasBuffActive) {
+        continue;
+      }
+      const key = missionProgressKey(levelRow.level, mission.id);
+      const currentValue = Math.max(0, progress.missionProgress[key] ?? 0);
+      const cap = Math.max(1, mission.targetValue);
+      if (currentValue >= cap) {
+        continue;
+      }
+      const delta = Math.min(cap - currentValue, damageAmount);
+      if (delta <= 0) {
+        continue;
+      }
+      progress.missionProgress[key] = currentValue + delta;
+      updated = true;
+    }
+    if (updated) {
+      progress.lastProgressAt = new Date().toISOString();
+      this.markProgressDirty();
+    }
+  }
+
+  private recordAbsorbDamageProgress(
+    critterId: number,
+    damageAmount: number,
+    damageSource?: 'skill',
+    damageElement?: string,
+  ): void {
+    if (!Number.isFinite(damageAmount) || damageAmount <= 0) {
+      return;
+    }
+    const damageElementNormalized =
+      typeof damageElement === 'string' ? damageElement.trim().toLowerCase() : '';
+    const critter = this.critterLookup[critterId];
+    const progress = this.playerCritterProgress.collection.find((entry) => entry.critterId === critterId);
+    if (!critter || !progress?.unlocked) {
+      return;
+    }
+    const currentLevel = Math.max(1, progress.level);
+    const targetLevel = currentLevel + 1;
+    const levelRow = critter.levels.find((entry) => entry.level === targetLevel);
+    if (!levelRow) {
+      return;
+    }
+    if (this.hasPendingStoryFlagMission(levelRow.missions, levelRow.level, progress.missionProgress)) {
+      return;
+    }
+    let updated = false;
+    for (const mission of levelRow.missions) {
+      if (mission.type !== 'absorb_damage') {
+        continue;
+      }
+      const mode = mission.absorbMode ?? 'damage';
+      if (mode === 'knockout') {
+        continue;
+      }
+      if (mode === 'element') {
+        const requiredElements = Array.isArray(mission.absorbDamageElements) ? mission.absorbDamageElements : [];
+        if (damageSource !== 'skill' || requiredElements.length === 0) {
+          continue;
+        }
+        if (!requiredElements.some((element) => element.toLowerCase() === damageElementNormalized)) {
+          continue;
+        }
+      }
+      if (mode !== 'damage' && mode !== 'element') {
+        continue;
+      }
+      const key = missionProgressKey(levelRow.level, mission.id);
+      const currentValue = Math.max(0, progress.missionProgress[key] ?? 0);
+      const cap = Math.max(1, mission.targetValue);
+      if (currentValue >= cap) {
+        continue;
+      }
+      const delta = Math.min(cap - currentValue, damageAmount);
+      if (delta <= 0) {
+        continue;
+      }
+      progress.missionProgress[key] = currentValue + delta;
+      updated = true;
+    }
+    if (updated) {
+      progress.lastProgressAt = new Date().toISOString();
+      this.markProgressDirty();
+    }
+  }
+
+  private recordSelfKnockoutProgress(critterId: number): void {
+    this.incrementSimpleCritterMissionProgress(critterId, (mission) => {
+      return mission.type === 'absorb_damage' && (mission.absorbMode ?? 'damage') === 'knockout';
+    });
   }
 
   private matchesOpposingKnockoutMission(
@@ -8640,6 +9831,42 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     }
   }
 
+  private resolveSkillSlotSnapshot(
+    skillId: string,
+  ): NonNullable<RuntimeSnapshot['critters']['collection'][number]['equippedSkillSlots'][number]> | null {
+    const normalizedSkillId = typeof skillId === 'string' ? skillId.trim() : '';
+    if (!normalizedSkillId) {
+      return null;
+    }
+    const skill = this.skillLookupById[normalizedSkillId];
+    if (!skill) {
+      return null;
+    }
+    const effectAttachments = resolveSkillEffectAttachmentsForRuntime(skill, this.skillEffectLookupById);
+    const effectDescriptions = effectAttachments
+      .map((attachment) => {
+        const effect = this.skillEffectLookupById[attachment.effectId];
+        if (!effect) return null;
+        return formatSkillEffectDescription(effect, attachment);
+      })
+      .filter(Boolean)
+      .join(' ');
+    const effectIconUrls = effectAttachments
+      .map((attachment) => this.skillEffectLookupById[attachment.effectId]?.iconUrl)
+      .filter((url): url is string => typeof url === 'string' && url.length > 0);
+    return {
+      skillId: skill.skill_id,
+      name: skill.skill_name,
+      element: skill.element,
+      type: skill.type,
+      ...(skill.type === 'damage' && skill.damage != null && { damage: skill.damage }),
+      ...(skill.healMode && { healMode: skill.healMode }),
+      ...(typeof skill.healValue === 'number' && { healValue: skill.healValue }),
+      ...(effectDescriptions && { effectDescriptions }),
+      ...(effectIconUrls.length > 0 && { effectIconUrls }),
+    };
+  }
+
   private resolveEquippedSkillSlotsForSnapshot(
     equippedSkillIds: EquippedSkillSlots | undefined,
   ): RuntimeSnapshot['critters']['collection'][number]['equippedSkillSlots'] {
@@ -8653,31 +9880,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     for (let i = 0; i < 4; i += 1) {
       const skillId = equippedSkillIds[i];
       if (!skillId) continue;
-      const skill = this.skillLookupById[skillId];
-      if (!skill) continue;
-      const effectAttachments = resolveSkillEffectAttachmentsForRuntime(skill, this.skillEffectLookupById);
-      const effectDescriptions = effectAttachments
-        .map((attachment) => {
-          const effect = this.skillEffectLookupById[attachment.effectId];
-          if (!effect) return null;
-          return formatSkillEffectDescription(effect, attachment);
-        })
-        .filter(Boolean)
-        .join(' ');
-      const effectIconUrls = effectAttachments
-        .map((attachment) => this.skillEffectLookupById[attachment.effectId]?.iconUrl)
-        .filter((url): url is string => typeof url === 'string' && url.length > 0);
-      slots[i] = {
-        skillId: skill.skill_id,
-        name: skill.skill_name,
-        element: skill.element,
-        type: skill.type,
-        ...(skill.type === 'damage' && skill.damage != null && { damage: skill.damage }),
-        ...(skill.healMode && { healMode: skill.healMode }),
-        ...(typeof skill.healValue === 'number' && { healValue: skill.healValue }),
-        ...(effectDescriptions && { effectDescriptions }),
-        ...(effectIconUrls.length > 0 && { effectIconUrls }),
-      };
+      const resolved = this.resolveSkillSlotSnapshot(skillId);
+      if (!resolved) continue;
+      slots[i] = resolved;
     }
     return slots;
   }
@@ -8882,7 +10087,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
   }
 
   private getCritterSummary(): RuntimeSnapshot['critters'] {
-    if (this.ensureLockedKnockoutTargetSelectionValid()) {
+    if (this.ensureLockedKnockoutTargetSelectionValid() || this.ensureLockedDamageTargetSelectionValid()) {
       this.markProgressDirty();
     }
 
@@ -8895,6 +10100,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     const eligibleLockedKnockoutTargetCritterIds = this.getEligibleLockedKnockoutTargetCritterIds();
     const eligibleLockedKnockoutTargetCritterIdSet = new Set<number>(eligibleLockedKnockoutTargetCritterIds);
     const selectedLockedKnockoutTargetCritterId = this.playerCritterProgress.lockedKnockoutTargetCritterId;
+    const eligibleLockedDamageTargetCritterIds = this.getEligibleLockedDamageTargetCritterIds();
+    const eligibleLockedDamageTargetCritterIdSet = new Set<number>(eligibleLockedDamageTargetCritterIds);
+    const selectedLockedDamageTargetCritterId = this.playerCritterProgress.lockedDamageTargetCritterId;
     const equipmentStateByCritterId = new Map<number, ResolvedEquipmentState>();
     const equipmentAdjustedStatsByCritterId = new Map<number, CritterStats>();
 
@@ -8968,8 +10176,17 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
                 : undefined,
             requiredHealingItemIds,
             requiredHealingItemNames,
+            useSkillMode: mission.useSkillMode,
+            useSkillElements: mission.useSkillElements,
+            useSkillIds: mission.useSkillIds,
+            dealDamageMode: mission.dealDamageMode,
+            dealDamageElements: mission.dealDamageElements,
+            absorbMode: mission.absorbMode,
+            absorbDamageElements: mission.absorbDamageElements,
             storyFlagId: mission.storyFlagId,
             label: mission.label,
+            effectBuffMode: mission.effectBuffMode,
+            effectBuffDescription: mission.effectBuffDescription,
           };
         });
         const completedMissionCount = missions.reduce((count, mission) => count + (mission.completed ? 1 : 0), 0);
@@ -9010,6 +10227,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       const lockedKnockoutTargetEligible = eligibleLockedKnockoutTargetCritterIdSet.has(critter.id);
       const lockedKnockoutTargetSelected =
         lockedKnockoutTargetEligible && selectedLockedKnockoutTargetCritterId === critter.id;
+      const lockedDamageTargetEligible = eligibleLockedDamageTargetCritterIdSet.has(critter.id);
+      const lockedDamageTargetSelected =
+        lockedDamageTargetEligible && selectedLockedDamageTargetCritterId === critter.id;
 
       return {
         critterId: critter.id,
@@ -9020,6 +10240,8 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         unlocked,
         lockedKnockoutTargetEligible,
         lockedKnockoutTargetSelected,
+        lockedDamageTargetEligible,
+        lockedDamageTargetSelected,
         level,
         maxLevel,
         currentHp,
@@ -9040,10 +10262,14 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         unlockedAbilityIds: progress?.unlockedAbilityIds ?? derived.unlockedAbilityIds,
         equippedSkillSlots: this.resolveEquippedSkillSlotsForSnapshot(progress?.equippedSkillIds),
         unlockedSkillIds: derived.unlockedSkillIds,
-        unlockedSkillOptions: derived.unlockedSkillIds.map((id) => {
-          const skill = this.skillLookupById[id];
-          return { skillId: id, name: skill?.skill_name ?? id };
-        }),
+        unlockedSkillOptions: derived.unlockedSkillIds
+          .map((id) => this.resolveSkillSlotSnapshot(id))
+          .filter(
+            (
+              option,
+            ): option is NonNullable<RuntimeSnapshot['critters']['collection'][number]['equippedSkillSlots'][number]> =>
+              option !== null,
+          ),
         levelProgress,
         activeRequirement: activeRequirementLevelRow
           ? {
@@ -9065,6 +10291,22 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       selectedLockedKnockoutTargetEntry?.activeRequirement?.missions
         .filter((mission) => isKnockoutMissionType(mission.type))
         .map((mission) => ({ ...mission })) ?? [];
+    const selectedLockedDamageTargetEntry =
+      selectedLockedDamageTargetCritterId === null
+        ? null
+        : collection.find((entry) => entry.critterId === selectedLockedDamageTargetCritterId) ?? null;
+    const selectedLockedDamageMissionRows =
+      selectedLockedDamageTargetEntry?.activeRequirement?.missions
+        .filter((mission) => mission.type === 'deal_damage')
+        .map((mission) => ({
+          id: mission.id,
+          type: mission.type,
+          targetValue: mission.targetValue,
+          currentValue: mission.currentValue,
+          completed: mission.completed,
+          dealDamageMode: mission.dealDamageMode,
+          dealDamageElements: mission.dealDamageElements ? [...mission.dealDamageElements] : undefined,
+        })) ?? [];
     const excludedTrackedMissionIds = new Set<string>(
       selectedLockedKnockoutTargetEntry?.activeRequirement?.missions
         .filter((mission) => isKnockoutMissionType(mission.type))
@@ -9125,8 +10367,17 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
               requiredHealingItemNames: mission.requiredHealingItemNames
                 ? [...mission.requiredHealingItemNames]
                 : undefined,
+              useSkillMode: mission.useSkillMode,
+              useSkillElements: mission.useSkillElements ? [...mission.useSkillElements] : undefined,
+              useSkillIds: mission.useSkillIds ? [...mission.useSkillIds] : undefined,
+              dealDamageMode: mission.dealDamageMode,
+              dealDamageElements: mission.dealDamageElements ? [...mission.dealDamageElements] : undefined,
+              absorbMode: mission.absorbMode,
+              absorbDamageElements: mission.absorbDamageElements ? [...mission.absorbDamageElements] : undefined,
               storyFlagId: mission.storyFlagId,
               label: mission.label,
+              effectBuffMode: mission.effectBuffMode,
+              effectBuffDescription: mission.effectBuffDescription,
             },
           ];
         });
@@ -9193,6 +10444,12 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         selectedCritterName: selectedLockedKnockoutTargetEntry?.name ?? null,
         eligibleCritterIds: eligibleLockedKnockoutTargetCritterIds,
         missionRows: selectedLockedKnockoutMissionRows,
+      },
+      lockedDamageTracker: {
+        selectedCritterId: selectedLockedDamageTargetEntry?.critterId ?? null,
+        selectedCritterName: selectedLockedDamageTargetEntry?.name ?? null,
+        eligibleCritterIds: eligibleLockedDamageTargetCritterIds,
+        missionRows: selectedLockedDamageMissionRows,
       },
       squadSlots,
       collection,
@@ -9569,6 +10826,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       const adjustedStats = this.applyEquipmentEffectsToStats(entry.effectiveStats, equipmentEffects);
       const maxHp = Math.max(1, adjustedStats.hp);
       entry.currentHp = maxHp;
+      entry.persistentStatus = null;
     }
   }
 
@@ -10850,6 +12108,10 @@ function formatSkillEffectDescription(
       ? Math.max(1, Math.floor(attachment.persistentHealValue ?? 1))
       : Math.round(clamp(attachment.persistentHealValue ?? 0.05, 0, 1) * 100);
     const persistentTurns = Math.max(1, Math.floor(attachment.persistentHealDurationTurns ?? 1));
+    const toxicBase = Math.round(clamp(attachment.toxicPotencyBase ?? 0.05, 0, 1) * 100);
+    const toxicRamp = Math.round(clamp(attachment.toxicPotencyPerTurn ?? 0.05, 0, 1) * 100);
+    const stunFail = Math.round(clamp(attachment.stunFailChance ?? 0.25, 0, 1) * 100);
+    const stunSlow = Math.round(clamp(attachment.stunSlowdown ?? 0.5, 0, 1) * 100);
     return effectDescription
       .replace(/<buff>/g, String(Math.round(buffPercent * 100)))
       .replace(/<recoil>/g, String(Math.round(recoilPercent * 100)))
@@ -10858,7 +12120,13 @@ function formatSkillEffectDescription(
       .replace(/<heal_value>/g, String(persistentValue))
       .replace(/<heal_mode>/g, persistentModeLabel)
       .replace(/<turns>/g, String(persistentTurns))
-      .replace(/<duration>/g, String(persistentTurns));
+      .replace(/<duration>/g, String(persistentTurns))
+      .replace(/<toxic_base>/g, String(toxicBase))
+      .replace(/<toxic_ramp>/g, String(toxicRamp))
+      .replace(/<stun>/g, String(stunFail))
+      .replace(/<stun_fail>/g, String(stunFail))
+      .replace(/<stun_slow>/g, String(stunSlow))
+      .replace(/<stun_slowdown>/g, String(stunSlow));
   }
   return effect.effect_name;
 }

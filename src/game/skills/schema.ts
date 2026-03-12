@@ -93,6 +93,20 @@ function hasProvidedNumberLikeValue(value: unknown): boolean {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function parseBooleanFlag(value: unknown): boolean {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value !== 0;
+  }
+  return false;
+}
+
 function sanitizeSkillHealValue(
   record: Record<string, unknown>,
   healMode: Exclude<SkillHealMode, 'none'>,
@@ -142,6 +156,35 @@ function sanitizePersistentHealAttachment(
     persistentHealMode: mode,
     persistentHealValue: value,
     persistentHealDurationTurns: durationTurns,
+  };
+}
+
+function sanitizeToxicAttachment(
+  record: Record<string, unknown>,
+): Pick<SkillEffectAttachment, 'toxicPotencyBase' | 'toxicPotencyPerTurn'> {
+  return {
+    toxicPotencyBase: clampFloat(record.toxicPotencyBase ?? record.toxic_potency_base, 0, 1, 0.05),
+    toxicPotencyPerTurn: clampFloat(record.toxicPotencyPerTurn ?? record.toxic_potency_per_turn, 0, 1, 0.05),
+  };
+}
+
+function sanitizeStunAttachment(
+  record: Record<string, unknown>,
+): Pick<SkillEffectAttachment, 'stunFailChance' | 'stunSlowdown'> {
+  return {
+    stunFailChance: clampFloat(record.stunFailChance ?? record.stun_fail_chance, 0, 1, 0.25),
+    stunSlowdown: clampFloat(record.stunSlowdown ?? record.stun_slowdown, 0, 1, 0.5),
+  };
+}
+
+function sanitizeFlinchAttachment(
+  record: Record<string, unknown>,
+): Pick<SkillEffectAttachment, 'flinchFirstUseOnly' | 'flinchFirstOverallOnly'> {
+  const firstUse = parseBooleanFlag(record.flinchFirstUseOnly ?? record.flinch_first_use_only);
+  const firstOverall = firstUse && parseBooleanFlag(record.flinchFirstOverallOnly ?? record.flinch_first_overall_only);
+  return {
+    flinchFirstUseOnly: firstUse,
+    flinchFirstOverallOnly: firstOverall,
   };
 }
 
@@ -272,6 +315,21 @@ function sanitizeSkillEffectAttachments(
       record.persistent_heal_value !== undefined ||
       record.persistentHealDurationTurns !== undefined ||
       record.persistent_heal_duration_turns !== undefined;
+    const hasToxicConfig =
+      record.toxicPotencyBase !== undefined ||
+      record.toxic_potency_base !== undefined ||
+      record.toxicPotencyPerTurn !== undefined ||
+      record.toxic_potency_per_turn !== undefined;
+    const hasStunConfig =
+      record.stunFailChance !== undefined ||
+      record.stun_fail_chance !== undefined ||
+      record.stunSlowdown !== undefined ||
+      record.stun_slowdown !== undefined;
+    const hasFlinchConfig =
+      record.flinchFirstUseOnly !== undefined ||
+      record.flinch_first_use_only !== undefined ||
+      record.flinchFirstOverallOnly !== undefined ||
+      record.flinch_first_overall_only !== undefined;
     const legacyBuffFallback = legacyEffectBuffPercentById?.get(effectId);
     const procChance = clampFloat(record.procChance ?? record.proc_chance, 0, 1, 1);
     const normalized: SkillEffectAttachment = {
@@ -298,10 +356,24 @@ function sanitizeSkillEffectAttachments(
     if (effectType === 'persistent_heal' || hasPersistentHealConfig) {
       Object.assign(normalized, sanitizePersistentHealAttachment(record));
     }
+    if (effectType === 'inflict_toxic' || hasToxicConfig) {
+      Object.assign(normalized, sanitizeToxicAttachment(record));
+    }
+    if (effectType === 'inflict_stun' || hasStunConfig) {
+      Object.assign(normalized, sanitizeStunAttachment(record));
+    }
+    if (effectType === 'flinch_chance' || hasFlinchConfig) {
+      Object.assign(normalized, sanitizeFlinchAttachment(record));
+    }
     if (
       (effectType == null || STAT_OR_CRIT_EFFECT_TYPE_SET.has(effectType)) &&
       effectType !== 'persistent_heal' &&
-      !hasPersistentHealConfig
+      effectType !== 'inflict_toxic' &&
+      effectType !== 'inflict_stun' &&
+      effectType !== 'flinch_chance' &&
+      !hasPersistentHealConfig &&
+      !hasToxicConfig &&
+      !hasStunConfig
     ) {
       normalized.buffPercent = clampFloat(
         record.buffPercent ?? record.buff_percent,
@@ -522,6 +594,30 @@ export function sanitizeSkillDefinition(
           persistentHealDurationTurns: 1,
         };
       }
+      if (effectType === 'inflict_toxic') {
+        return {
+          effectId,
+          procChance: 1,
+          toxicPotencyBase: 0.05,
+          toxicPotencyPerTurn: 0.05,
+        };
+      }
+      if (effectType === 'inflict_stun') {
+        return {
+          effectId,
+          procChance: 1,
+          stunFailChance: 0.25,
+          stunSlowdown: 0.5,
+        };
+      }
+      if (effectType === 'flinch_chance') {
+        return {
+          effectId,
+          procChance: 1,
+          flinchFirstUseOnly: false,
+          flinchFirstOverallOnly: false,
+        };
+      }
       return {
         effectId,
         procChance: 1,
@@ -553,6 +649,39 @@ export function sanitizeSkillDefinition(
           effectId: attachment.effectId,
           procChance: clampFloat(attachment.procChance, 0, 1, 1),
           ...persistent,
+        };
+      }
+      if (effectType === 'inflict_toxic') {
+        const toxic = sanitizeToxicAttachment({
+          toxicPotencyBase: attachment.toxicPotencyBase,
+          toxicPotencyPerTurn: attachment.toxicPotencyPerTurn,
+        });
+        return {
+          effectId: attachment.effectId,
+          procChance: clampFloat(attachment.procChance, 0, 1, 1),
+          ...toxic,
+        };
+      }
+      if (effectType === 'inflict_stun') {
+        const stun = sanitizeStunAttachment({
+          stunFailChance: attachment.stunFailChance,
+          stunSlowdown: attachment.stunSlowdown,
+        });
+        return {
+          effectId: attachment.effectId,
+          procChance: clampFloat(attachment.procChance, 0, 1, 1),
+          ...stun,
+        };
+      }
+      if (effectType === 'flinch_chance') {
+        const flinch = sanitizeFlinchAttachment({
+          flinchFirstUseOnly: attachment.flinchFirstUseOnly,
+          flinchFirstOverallOnly: attachment.flinchFirstOverallOnly,
+        });
+        return {
+          effectId: attachment.effectId,
+          procChance: clampFloat(attachment.procChance, 0, 1, 1),
+          ...flinch,
         };
       }
       const fallbackBuff = legacyEffectBuffPercentById?.get(attachment.effectId);

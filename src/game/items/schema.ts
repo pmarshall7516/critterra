@@ -333,6 +333,20 @@ function sanitizeOptionalNumber(raw: unknown, min: number, max: number): number 
   return Math.max(min, Math.min(max, raw));
 }
 
+function parseBooleanFlag(raw: unknown): boolean {
+  if (typeof raw === 'boolean') {
+    return raw;
+  }
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return raw !== 0;
+  }
+  if (typeof raw === 'string') {
+    const normalized = raw.trim().toLowerCase();
+    return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+  }
+  return false;
+}
+
 function sanitizeEquipmentEffectAttachments(raw: unknown): EquipmentEffectAttachment[] {
   if (!Array.isArray(raw)) {
     return [];
@@ -364,6 +378,9 @@ function sanitizeEquipmentEffectAttachments(raw: unknown): EquipmentEffectAttach
     const parsedCrit = parseOptionalNumeric(record.critChanceBonus ?? record.crit_chance_bonus);
     const critChanceBonus = parsedCrit == null ? undefined : clampNumber(parsedCrit, 0, 1, 0.05);
 
+    const parsedProcChance = parseOptionalNumeric(record.procChance ?? record.proc_chance);
+    const procChance = parsedProcChance == null ? undefined : clampNumber(parsedProcChance, 0, 1, 0.2);
+
     const persistentModeRaw =
       typeof (record.persistentHealMode ?? record.persistent_heal_mode) === 'string'
         ? String(record.persistentHealMode ?? record.persistent_heal_mode).trim().toLowerCase()
@@ -379,13 +396,39 @@ function sanitizeEquipmentEffectAttachments(raw: unknown): EquipmentEffectAttach
           ? Math.max(1, Math.floor(clampNumber(parsedPersistentValue ?? 1, 1, 9999, 1)))
           : clampNumber(parsedPersistentValue ?? 0.05, 0, 1, 0.05);
 
+    const parsedToxicBase = parseOptionalNumeric(record.toxicPotencyBase ?? record.toxic_potency_base);
+    const parsedToxicRamp = parseOptionalNumeric(record.toxicPotencyPerTurn ?? record.toxic_potency_per_turn);
+    const toxicPotencyBase =
+      parsedToxicBase == null && parsedToxicRamp == null
+        ? undefined
+        : clampNumber(parsedToxicBase ?? 0.05, 0, 1, 0.05);
+    const toxicPotencyPerTurn =
+      parsedToxicBase == null && parsedToxicRamp == null
+        ? undefined
+        : clampNumber(parsedToxicRamp ?? 0.05, 0, 1, 0.05);
+    const parsedStunFailChance = parseOptionalNumeric(record.stunFailChance ?? record.stun_fail_chance);
+    const stunFailChance = parsedStunFailChance == null ? undefined : clampNumber(parsedStunFailChance, 0, 1, 0.25);
+    const parsedStunSlowdown = parseOptionalNumeric(record.stunSlowdown ?? record.stun_slowdown);
+    const stunSlowdown = parsedStunSlowdown == null ? undefined : clampNumber(parsedStunSlowdown, 0, 1, 0.5);
+    const flinchFirstUseOnly = parseBooleanFlag(record.flinchFirstUseOnly ?? record.flinch_first_use_only);
+    const flinchFirstOverallOnly = flinchFirstUseOnly && parseBooleanFlag(
+      record.flinchFirstOverallOnly ?? record.flinch_first_overall_only,
+    );
+
     parsed.push({
       effectId,
+      ...(typeof procChance === 'number' && { procChance }),
       ...(mode && { mode }),
       ...(value != null && { value }),
       ...(typeof critChanceBonus === 'number' && { critChanceBonus }),
       ...(persistentHealMode && { persistentHealMode }),
       ...(typeof persistentHealValue === 'number' && { persistentHealValue }),
+      ...(typeof toxicPotencyBase === 'number' && { toxicPotencyBase }),
+      ...(typeof toxicPotencyPerTurn === 'number' && { toxicPotencyPerTurn }),
+      ...(typeof stunFailChance === 'number' && { stunFailChance }),
+      ...(typeof stunSlowdown === 'number' && { stunSlowdown }),
+      ...(flinchFirstUseOnly && { flinchFirstUseOnly }),
+      ...(flinchFirstOverallOnly && { flinchFirstOverallOnly }),
     });
     seen.add(effectId);
     if (parsed.length >= 16) {

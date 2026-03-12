@@ -13,6 +13,9 @@ export const EQUIPMENT_EFFECT_TYPES = [
   'speed_buff',
   'crit_buff',
   'persistent_heal',
+  'apply_toxic',
+  'apply_stun',
+  'flinch_chance',
   // Compatibility-only legacy type inferred from old HP modifier templates.
   'hp_buff',
 ] as const;
@@ -24,6 +27,9 @@ export const EQUIPMENT_EFFECT_TYPES_EDITOR = [
   'speed_buff',
   'crit_buff',
   'persistent_heal',
+  'apply_toxic',
+  'apply_stun',
+  'flinch_chance',
 ] as const;
 
 export interface EquipmentEffectModifier {
@@ -39,6 +45,8 @@ export interface EquipmentPersistentHealConfig {
 
 export interface EquipmentEffectAttachment {
   effectId: string;
+  /** On-hit proc chance in 0..1 (status on-hit templates). */
+  procChance?: number;
   /** Stat buff mode (atk/def/speed/hp compatibility templates only). */
   mode?: EquipmentEffectMode;
   /** Stat buff value (atk/def/speed/hp compatibility templates only). */
@@ -49,6 +57,18 @@ export interface EquipmentEffectAttachment {
   persistentHealMode?: EquipmentPersistentHealMode;
   /** Persistent heal value (persistent heal templates only). */
   persistentHealValue?: number;
+  /** Base toxic potency in 0..1 (apply_toxic templates only). */
+  toxicPotencyBase?: number;
+  /** Per-turn toxic ramp in 0..1 (apply_toxic templates only). */
+  toxicPotencyPerTurn?: number;
+  /** Stun fail chance in 0..1 (apply_stun templates only). */
+  stunFailChance?: number;
+  /** Stun speed slowdown in 0..1 (apply_stun templates only). */
+  stunSlowdown?: number;
+  /** Flinch only attempts on first damage-skill use after switch-in (flinch_chance templates only). */
+  flinchFirstUseOnly?: boolean;
+  /** Requires first-use and first actionable turn after switch-in (Fake Out-style). */
+  flinchFirstOverallOnly?: boolean;
 }
 
 export interface EquipmentEffectDefinition {

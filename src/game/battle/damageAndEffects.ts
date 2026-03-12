@@ -206,6 +206,12 @@ export function resolveSkillEffectAttachmentsForRuntime(
     persistentHealModeRaw: unknown,
     persistentHealValueRaw: unknown,
     persistentHealDurationTurnsRaw: unknown,
+    toxicPotencyBaseRaw: unknown,
+    toxicPotencyPerTurnRaw: unknown,
+    stunFailChanceRaw: unknown,
+    stunSlowdownRaw: unknown,
+    flinchFirstUseOnlyRaw: unknown,
+    flinchFirstOverallOnlyRaw: unknown,
   ): void => {
     if (typeof effectIdRaw !== 'string') {
       return;
@@ -247,6 +253,31 @@ export function resolveSkillEffectAttachmentsForRuntime(
         ? clampInt(persistentHealValueRaw, 1, 9999, 1)
         : clamp(Number.isFinite(persistentHealPercent) ? persistentHealPercent : 0.05, 0, 1);
       next.persistentHealDurationTurns = clampInt(persistentHealDurationTurnsRaw, 1, 999, 1);
+    } else if (effectFallback.effect_type === 'inflict_toxic') {
+      next.toxicPotencyBase = clamp(
+        typeof toxicPotencyBaseRaw === 'number' && Number.isFinite(toxicPotencyBaseRaw) ? toxicPotencyBaseRaw : 0.05,
+        0,
+        1,
+      );
+      next.toxicPotencyPerTurn = clamp(
+        typeof toxicPotencyPerTurnRaw === 'number' && Number.isFinite(toxicPotencyPerTurnRaw) ? toxicPotencyPerTurnRaw : 0.05,
+        0,
+        1,
+      );
+    } else if (effectFallback.effect_type === 'inflict_stun') {
+      next.stunFailChance = clamp(
+        typeof stunFailChanceRaw === 'number' && Number.isFinite(stunFailChanceRaw) ? stunFailChanceRaw : 0.25,
+        0,
+        1,
+      );
+      next.stunSlowdown = clamp(
+        typeof stunSlowdownRaw === 'number' && Number.isFinite(stunSlowdownRaw) ? stunSlowdownRaw : 0.5,
+        0,
+        1,
+      );
+    } else if (effectFallback.effect_type === 'flinch_chance') {
+      next.flinchFirstUseOnly = toBooleanFlag(flinchFirstUseOnlyRaw);
+      next.flinchFirstOverallOnly = next.flinchFirstUseOnly && toBooleanFlag(flinchFirstOverallOnlyRaw);
     } else {
       const buffFallback = typeof effectFallback?.buffPercent === 'number' ? effectFallback.buffPercent : 0.1;
       next.buffPercent = clamp(
@@ -273,13 +304,19 @@ export function resolveSkillEffectAttachmentsForRuntime(
         attachment.persistentHealMode,
         attachment.persistentHealValue,
         attachment.persistentHealDurationTurns,
+        attachment.toxicPotencyBase,
+        attachment.toxicPotencyPerTurn,
+        attachment.stunFailChance,
+        attachment.stunSlowdown,
+        attachment.flinchFirstUseOnly,
+        attachment.flinchFirstOverallOnly,
       );
     }
     return normalized;
   }
 
   for (const effectId of skill.effectIds ?? []) {
-    pushAttachment(effectId, undefined, 1, undefined, undefined, undefined, undefined, undefined);
+    pushAttachment(effectId, undefined, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined);
   }
   return normalized;
 }
@@ -294,6 +331,20 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
     return fallback;
   }
   return Math.max(min, Math.min(max, parsed));
+}
+
+function toBooleanFlag(value: unknown): boolean {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value !== 0;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+  }
+  return false;
 }
 
 export function buildSkillEffectBuffPercentById(

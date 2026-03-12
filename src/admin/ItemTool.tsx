@@ -66,11 +66,18 @@ interface ItemDraft {
 
 interface EquipmentEffectAttachmentDraft {
   effectId: string;
+  procChance: string;
   mode: EquipmentEffectMode;
   value: string;
   critChanceBonus: string;
   persistentHealMode: EquipmentPersistentHealMode;
   persistentHealValue: string;
+  toxicPotencyBase: string;
+  toxicPotencyPerTurn: string;
+  stunFailChance: string;
+  stunSlowdown: string;
+  flinchFirstUseOnly: boolean;
+  flinchFirstOverallOnly: boolean;
 }
 
 const DEFAULT_ITEM_BUCKET = 'items';
@@ -930,6 +937,162 @@ export function ItemTool() {
                             </label>
                           </>
                         )}
+                        {(effectType === 'apply_toxic' || effectType === 'apply_stun' || effectType === 'flinch_chance') && (
+                          <label style={{ gridColumn: '1 / -1' }}>
+                            Proc Chance (0-1)
+                            <input
+                              type="number"
+                              min={0}
+                              max={1}
+                              step="0.01"
+                              value={attachment.procChance}
+                              onChange={(event) =>
+                                setDraft((current) => ({
+                                  ...current,
+                                  equipmentEffectAttachments: current.equipmentEffectAttachments.map((entry) =>
+                                    entry.effectId === attachment.effectId
+                                      ? { ...entry, procChance: event.target.value }
+                                      : entry,
+                                  ),
+                                }))
+                              }
+                            />
+                          </label>
+                        )}
+                        {effectType === 'apply_toxic' && (
+                          <>
+                            <label>
+                              Toxic Base (0-1)
+                              <input
+                                type="number"
+                                min={0}
+                                max={1}
+                                step="0.01"
+                                value={attachment.toxicPotencyBase}
+                                onChange={(event) =>
+                                  setDraft((current) => ({
+                                    ...current,
+                                    equipmentEffectAttachments: current.equipmentEffectAttachments.map((entry) =>
+                                      entry.effectId === attachment.effectId
+                                        ? { ...entry, toxicPotencyBase: event.target.value }
+                                        : entry,
+                                    ),
+                                  }))
+                                }
+                              />
+                            </label>
+                            <label>
+                              Toxic Ramp/Turn (0-1)
+                              <input
+                                type="number"
+                                min={0}
+                                max={1}
+                                step="0.01"
+                                value={attachment.toxicPotencyPerTurn}
+                                onChange={(event) =>
+                                  setDraft((current) => ({
+                                    ...current,
+                                    equipmentEffectAttachments: current.equipmentEffectAttachments.map((entry) =>
+                                      entry.effectId === attachment.effectId
+                                        ? { ...entry, toxicPotencyPerTurn: event.target.value }
+                                        : entry,
+                                    ),
+                                  }))
+                                }
+                              />
+                            </label>
+                          </>
+                        )}
+                        {effectType === 'apply_stun' && (
+                          <>
+                            <label>
+                              Stun Fail Chance (0-1)
+                              <input
+                                type="number"
+                                min={0}
+                                max={1}
+                                step="0.01"
+                                value={attachment.stunFailChance}
+                                onChange={(event) =>
+                                  setDraft((current) => ({
+                                    ...current,
+                                    equipmentEffectAttachments: current.equipmentEffectAttachments.map((entry) =>
+                                      entry.effectId === attachment.effectId
+                                        ? { ...entry, stunFailChance: event.target.value }
+                                        : entry,
+                                    ),
+                                  }))
+                                }
+                              />
+                            </label>
+                            <label>
+                              Stun Slowdown (0-1)
+                              <input
+                                type="number"
+                                min={0}
+                                max={1}
+                                step="0.01"
+                                value={attachment.stunSlowdown}
+                                onChange={(event) =>
+                                  setDraft((current) => ({
+                                    ...current,
+                                    equipmentEffectAttachments: current.equipmentEffectAttachments.map((entry) =>
+                                      entry.effectId === attachment.effectId
+                                        ? { ...entry, stunSlowdown: event.target.value }
+                                        : entry,
+                                    ),
+                                  }))
+                                }
+                              />
+                            </label>
+                          </>
+                        )}
+                        {effectType === 'flinch_chance' && (
+                          <>
+                            <label className="admin-inline-toggle">
+                              <input
+                                type="checkbox"
+                                checked={attachment.flinchFirstUseOnly}
+                                onChange={(event) =>
+                                  setDraft((current) => ({
+                                    ...current,
+                                    equipmentEffectAttachments: current.equipmentEffectAttachments.map((entry) =>
+                                      entry.effectId === attachment.effectId
+                                        ? {
+                                          ...entry,
+                                          flinchFirstUseOnly: event.target.checked,
+                                          flinchFirstOverallOnly: event.target.checked ? entry.flinchFirstOverallOnly : false,
+                                        }
+                                        : entry,
+                                    ),
+                                  }))
+                                }
+                              />
+                              First Use
+                            </label>
+                            <label className="admin-inline-toggle">
+                              <input
+                                type="checkbox"
+                                checked={attachment.flinchFirstUseOnly && attachment.flinchFirstOverallOnly}
+                                disabled={!attachment.flinchFirstUseOnly}
+                                onChange={(event) =>
+                                  setDraft((current) => ({
+                                    ...current,
+                                    equipmentEffectAttachments: current.equipmentEffectAttachments.map((entry) =>
+                                      entry.effectId === attachment.effectId
+                                        ? {
+                                          ...entry,
+                                          flinchFirstOverallOnly: entry.flinchFirstUseOnly ? event.target.checked : false,
+                                        }
+                                        : entry,
+                                    ),
+                                  }))
+                                }
+                              />
+                              First Overall
+                            </label>
+                          </>
+                        )}
                       </div>
                     );
                   })}
@@ -1054,11 +1217,18 @@ function buildEquipmentEffectAttachmentDraftFromTemplate(
   const persistentFallback = effect.persistentHeal;
   return {
     effectId: effect.effect_id,
+    procChance: String(0.2),
     mode: statFallback?.mode ?? 'percent',
     value: String(statFallback?.value ?? 0.1),
     critChanceBonus: String(0.05),
     persistentHealMode: persistentFallback?.mode ?? 'percent_max_hp',
     persistentHealValue: String(persistentFallback?.value ?? 0.05),
+    toxicPotencyBase: String(0.05),
+    toxicPotencyPerTurn: String(0.05),
+    stunFailChance: String(0.25),
+    stunSlowdown: String(0.5),
+    flinchFirstUseOnly: false,
+    flinchFirstOverallOnly: false,
   };
 }
 
@@ -1082,6 +1252,11 @@ function buildEquipmentEffectAttachmentDraft(
       : base.persistentHealMode;
   return {
     effectId: attachment.effectId,
+    procChance: String(
+      typeof attachment.procChance === 'number' && Number.isFinite(attachment.procChance)
+        ? attachment.procChance
+        : base.procChance,
+    ),
     mode,
     value: String(typeof attachment.value === 'number' && Number.isFinite(attachment.value) ? attachment.value : base.value),
     critChanceBonus: String(
@@ -1095,6 +1270,28 @@ function buildEquipmentEffectAttachmentDraft(
         ? attachment.persistentHealValue
         : base.persistentHealValue,
     ),
+    toxicPotencyBase: String(
+      typeof attachment.toxicPotencyBase === 'number' && Number.isFinite(attachment.toxicPotencyBase)
+        ? attachment.toxicPotencyBase
+        : base.toxicPotencyBase,
+    ),
+    toxicPotencyPerTurn: String(
+      typeof attachment.toxicPotencyPerTurn === 'number' && Number.isFinite(attachment.toxicPotencyPerTurn)
+        ? attachment.toxicPotencyPerTurn
+        : base.toxicPotencyPerTurn,
+    ),
+    stunFailChance: String(
+      typeof attachment.stunFailChance === 'number' && Number.isFinite(attachment.stunFailChance)
+        ? attachment.stunFailChance
+        : base.stunFailChance,
+    ),
+    stunSlowdown: String(
+      typeof attachment.stunSlowdown === 'number' && Number.isFinite(attachment.stunSlowdown)
+        ? attachment.stunSlowdown
+        : base.stunSlowdown,
+    ),
+    flinchFirstUseOnly: attachment.flinchFirstUseOnly === true,
+    flinchFirstOverallOnly: attachment.flinchFirstUseOnly === true && attachment.flinchFirstOverallOnly === true,
   };
 }
 
@@ -1133,6 +1330,40 @@ function buildEquipmentEffectAttachmentsFromDraft(
         effectId,
         persistentHealMode,
         persistentHealValue,
+      });
+      seen.add(effectId);
+      continue;
+    }
+
+    if (effectType === 'apply_toxic') {
+      parsed.push({
+        effectId,
+        procChance: clampFloatFromInput(attachment.procChance, 0, 1, 0.2),
+        toxicPotencyBase: clampFloatFromInput(attachment.toxicPotencyBase, 0, 1, 0.05),
+        toxicPotencyPerTurn: clampFloatFromInput(attachment.toxicPotencyPerTurn, 0, 1, 0.05),
+      });
+      seen.add(effectId);
+      continue;
+    }
+
+    if (effectType === 'apply_stun') {
+      parsed.push({
+        effectId,
+        procChance: clampFloatFromInput(attachment.procChance, 0, 1, 0.2),
+        stunFailChance: clampFloatFromInput(attachment.stunFailChance, 0, 1, 0.25),
+        stunSlowdown: clampFloatFromInput(attachment.stunSlowdown, 0, 1, 0.5),
+      });
+      seen.add(effectId);
+      continue;
+    }
+
+    if (effectType === 'flinch_chance') {
+      const firstUse = attachment.flinchFirstUseOnly === true;
+      parsed.push({
+        effectId,
+        procChance: clampFloatFromInput(attachment.procChance, 0, 1, 0.2),
+        flinchFirstUseOnly: firstUse,
+        flinchFirstOverallOnly: firstUse && attachment.flinchFirstOverallOnly === true,
       });
       seen.add(effectId);
       continue;
@@ -1185,6 +1416,15 @@ function getTemplateModifier(
 
 function inferEquipmentEffectTypeFromId(effectId: string): EquipmentEffectType {
   const normalized = effectId.toLowerCase();
+  if (normalized.includes('toxic') || normalized.includes('poison')) {
+    return 'apply_toxic';
+  }
+  if (normalized.includes('stun') || normalized.includes('paraly')) {
+    return 'apply_stun';
+  }
+  if (normalized.includes('flinch')) {
+    return 'flinch_chance';
+  }
   if (normalized.includes('crit')) {
     return 'crit_buff';
   }

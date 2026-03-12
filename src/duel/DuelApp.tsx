@@ -22,6 +22,7 @@ import {
 import type { SkillDefinition, SkillEffectDefinition } from '@/game/skills/types';
 import { ELEMENT_SKILL_COLORS, getSkillValueDisplayNumber } from '@/game/skills/types';
 import { MIN_BATTLE_STAT_MODIFIER } from '@/game/battle/damageAndEffects';
+import { STATUS_CONDITION_PRESENTATION } from '@/game/battle/statusConditions';
 import { apiFetchJson } from '@/shared/apiClient';
 import { setAuthToken } from '@/shared/authStorage';
 
@@ -461,6 +462,24 @@ function getDuelCritterEffectIconsAndTooltips(
         tooltips.push(`${summary} (${sourceName})`);
       }
     }
+  }
+  if (critter.persistentStatus) {
+    const presentation = STATUS_CONDITION_PRESENTATION[critter.persistentStatus.kind];
+    if (presentation) {
+      const source = (critter.persistentStatus.source ?? '').trim();
+      const detail =
+        critter.persistentStatus.kind === 'toxic'
+          ? `${presentation.description} (Turn ${Math.max(0, critter.persistentStatus.turnCount) + 1})`
+          : presentation.description;
+      iconUrls.push(presentation.iconUrl);
+      tooltips.push(source ? `${detail} (${source})` : detail);
+    }
+  }
+  if (critter.flinch) {
+    const presentation = STATUS_CONDITION_PRESENTATION.flinch;
+    const source = (critter.flinch.source ?? '').trim();
+    iconUrls.push(presentation.iconUrl);
+    tooltips.push(source ? `${presentation.description} (${source})` : presentation.description);
   }
   return { iconUrls, tooltips };
 }

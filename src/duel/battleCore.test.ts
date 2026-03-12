@@ -470,6 +470,247 @@ describe('duel battle core - singles', () => {
     const damageOnFail = Math.max(0, hpBeforeFail - hpAfterFail);
     expect(damageOnFail).toBeGreaterThan(damageOnSuccess);
   });
+
+  it('ticks toxic at end of turn, ramps each turn, and blocks replacing with stun', () => {
+    const toxicEffect: SkillEffectDefinition = {
+      effect_id: 'toxic-bite',
+      effect_name: 'Toxic Bite',
+      effect_type: 'inflict_toxic',
+      description: 'Inflict toxic',
+    };
+    const stunEffect: SkillEffectDefinition = {
+      effect_id: 'stun-zap',
+      effect_name: 'Stun Zap',
+      effect_type: 'inflict_stun',
+      description: 'Inflict stun',
+    };
+    const toxicStrike = createSkill({
+      id: 'toxic-strike',
+      name: 'Toxic Strike',
+      damage: 10,
+      effectAttachments: [
+        { effectId: 'toxic-bite', procChance: 1, toxicPotencyBase: 0.1, toxicPotencyPerTurn: 0.1 },
+      ],
+    });
+    const stunStrike = createSkill({
+      id: 'stun-strike',
+      name: 'Stun Strike',
+      damage: 10,
+      effectAttachments: [{ effectId: 'stun-zap', procChance: 1, stunFailChance: 1 }],
+    });
+    const catalogs = createCatalogs({
+      critters: [
+        createCritter({ id: 1, name: 'PlayerMon', speed: 30, unlockedSkillIds: ['toxic-strike', 'stun-strike'] }),
+        createCritter({ id: 2, name: 'OpponentMon', hp: 100, speed: 10, unlockedSkillIds: [] }),
+      ],
+      skills: [toxicStrike, stunStrike],
+      skillEffects: [toxicEffect, stunEffect],
+    });
+    const controller = startBattle({
+      format: 'singles',
+      playerSquad: createSquad('p', 'Player', [createMember(1, ['toxic-strike', 'stun-strike', null, null])]),
+      opponentSquad: createSquad('o', 'Opponent', [createMember(2, [null, null, null, null])]),
+      catalogs,
+      rngValues: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+    });
+
+    submitTurn(
+      controller,
+      [{ kind: 'skill', actorMemberIndex: 0, skillSlotIndex: 0, targetMemberIndex: 0 }],
+      [{ kind: 'guard', actorMemberIndex: 0 }],
+    );
+    submitTurn(
+      controller,
+      [{ kind: 'skill', actorMemberIndex: 0, skillSlotIndex: 1, targetMemberIndex: 0 }],
+      [{ kind: 'guard', actorMemberIndex: 0 }],
+    );
+
+    const turnOneToxicLog = controller.state.logs.find(
+      (entry) => entry.turn === 1 && entry.text.includes('damage from Toxic'),
+    );
+    const turnTwoToxicLog = controller.state.logs.find(
+      (entry) => entry.turn === 2 && entry.text.includes('damage from Toxic'),
+    );
+    const parseDamage = (line: string | undefined): number => {
+      const match = line?.match(/took (\d+) damage from Toxic\./);
+      return match ? Number.parseInt(match[1] ?? '0', 10) : 0;
+    };
+    const turnOneToxicDamage = parseDamage(turnOneToxicLog?.text);
+    const turnTwoToxicDamage = parseDamage(turnTwoToxicLog?.text);
+
+    expect(
+      controller.state.logs.some((entry) => entry.turn === 1 && entry.text.includes('OpponentMon was afflicted with Toxic!')),
+    ).toBe(true);
+    expect(turnOneToxicDamage).toBeGreaterThan(0);
+    expect(turnTwoToxicDamage).toBeGreaterThan(turnOneToxicDamage);
+    expect(
+      controller.state.logs.some((entry) => entry.turn === 2 && entry.text.includes('OpponentMon was stunned!')),
+    ).toBe(false);
+    const opponentStatus = controller.state.opponent.team[0].persistentStatus;
+    expect(opponentStatus?.kind).toBe('toxic');
+    if (opponentStatus?.kind === 'toxic') {
+      expect(opponentStatus.turnCount).toBe(2);
+    }
+  });
+
+  it('cancels skill, guard, and swap attempts while stunned', () => {
+    const stunEffect: SkillEffectDefinition = {
+      effect_id: 'stun-zap',
+      effect_name: 'Stun Zap',
+      effect_type: 'inflict_stun',
+      description: 'Inflict stun',
+    };
+    const jab = createSkill({ id: 'jab', name: 'Jab', damage: 10 });
+    const stunStrike = createSkill({
+      id: 'stun-strike',
+      name: 'Stun Strike',
+      damage: 10,
+      effectAttachments: [{ effectId: 'stun-zap', procChance: 1, stunFailChance: 1 }],
+    });
+    const catalogs = createCatalogs({
+      critters: [
+        createCritter({ id: 1, name: 'Lead', speed: 30, unlockedSkillIds: ['jab'] }),
+        createCritter({ id: 2, name: 'Bench', speed: 20, unlockedSkillIds: ['jab'] }),
+        createCritter({ id: 3, name: 'Enemy', speed: 10, unlockedSkillIds: ['stun-strike'] }),
+      ],
+      skills: [jab, stunStrike],
+      skillEffects: [stunEffect],
+    });
+    const controller = startBattle({
+      format: 'singles',
+      playerSquad: createSquad('p', 'Player', [
+        createMember(1, ['jab', null, null, null]),
+        createMember(2, ['jab', null, null, null]),
+      ]),
+      opponentSquad: createSquad('o', 'Opponent', [createMember(3, ['stun-strike', null, null, null])]),
+      catalogs,
+      rngValues: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+    });
+
+    submitTurn(
+      controller,
+      [{ kind: 'guard', actorMemberIndex: 0 }],
+      [{ kind: 'skill', actorMemberIndex: 0, skillSlotIndex: 0, targetMemberIndex: 0 }],
+    );
+    submitTurn(
+      controller,
+      [{ kind: 'skill', actorMemberIndex: 0, skillSlotIndex: 0, targetMemberIndex: 0 }],
+      [{ kind: 'guard', actorMemberIndex: 0 }],
+    );
+    submitTurn(
+      controller,
+      [{ kind: 'guard', actorMemberIndex: 0 }],
+      [{ kind: 'guard', actorMemberIndex: 0 }],
+    );
+    submitTurn(
+      controller,
+      [{ kind: 'swap', actorMemberIndex: 0, benchMemberIndex: 1 }],
+      [{ kind: 'guard', actorMemberIndex: 0 }],
+    );
+
+    expect(
+      controller.state.logs.some((entry) => entry.turn === 2 && entry.text.includes('Lead is stunned and cannot use a skill.')),
+    ).toBe(true);
+    expect(
+      controller.state.logs.some((entry) => entry.turn === 3 && entry.text.includes('Lead is stunned and cannot guard.')),
+    ).toBe(true);
+    expect(
+      controller.state.logs.some((entry) => entry.turn === 4 && entry.text.includes('Lead is stunned and cannot swap.')),
+    ).toBe(true);
+    expect(controller.state.player.activeMemberIndices).toEqual([0]);
+  });
+
+  it('cancels later-in-turn actions when flinch is applied first', () => {
+    const flinchEffect: SkillEffectDefinition = {
+      effect_id: 'flinch-hit',
+      effect_name: 'Flinch Hit',
+      effect_type: 'flinch_chance',
+      description: 'Flinch target',
+    };
+    const flinchJab = createSkill({
+      id: 'flinch-jab',
+      name: 'Flinch Jab',
+      damage: 10,
+      effectAttachments: [{ effectId: 'flinch-hit', procChance: 1 }],
+    });
+    const tap = createSkill({ id: 'tap', name: 'Tap', damage: 10 });
+    const catalogs = createCatalogs({
+      critters: [
+        createCritter({ id: 1, name: 'Fast', speed: 40, unlockedSkillIds: ['flinch-jab'] }),
+        createCritter({ id: 2, name: 'Slow', speed: 10, unlockedSkillIds: ['tap'] }),
+      ],
+      skills: [flinchJab, tap],
+      skillEffects: [flinchEffect],
+    });
+    const controller = startBattle({
+      format: 'singles',
+      playerSquad: createSquad('p', 'Player', [createMember(1, ['flinch-jab', null, null, null])]),
+      opponentSquad: createSquad('o', 'Opponent', [createMember(2, ['tap', null, null, null])]),
+      catalogs,
+      rngValues: [0.5, 0.5, 0.5, 0.5],
+    });
+
+    submitTurn(
+      controller,
+      [{ kind: 'skill', actorMemberIndex: 0, skillSlotIndex: 0, targetMemberIndex: 0 }],
+      [{ kind: 'skill', actorMemberIndex: 0, skillSlotIndex: 0, targetMemberIndex: 0 }],
+    );
+
+    expect(
+      controller.state.logs.some(
+        (entry) => entry.turn === 1 && entry.text.includes("Slow flinched and couldn't act due to Flinch Jab."),
+      ),
+    ).toBe(true);
+    expect(
+      controller.state.logs.some((entry) => entry.turn === 1 && entry.text.includes("Opponent's Slow used Tap")),
+    ).toBe(false);
+    expect(controller.state.opponent.team[0].flinch).toBeNull();
+  });
+
+  it('does not cancel actions for targets that already acted before flinch is applied', () => {
+    const flinchEffect: SkillEffectDefinition = {
+      effect_id: 'flinch-hit',
+      effect_name: 'Flinch Hit',
+      effect_type: 'flinch_chance',
+      description: 'Flinch target',
+    };
+    const flinchJab = createSkill({
+      id: 'flinch-jab',
+      name: 'Flinch Jab',
+      damage: 10,
+      effectAttachments: [{ effectId: 'flinch-hit', procChance: 1 }],
+    });
+    const tap = createSkill({ id: 'tap', name: 'Tap', damage: 10 });
+    const catalogs = createCatalogs({
+      critters: [
+        createCritter({ id: 1, name: 'Slow', speed: 10, unlockedSkillIds: ['flinch-jab'] }),
+        createCritter({ id: 2, name: 'FastEnemy', speed: 40, unlockedSkillIds: ['tap'] }),
+      ],
+      skills: [flinchJab, tap],
+      skillEffects: [flinchEffect],
+    });
+    const controller = startBattle({
+      format: 'singles',
+      playerSquad: createSquad('p', 'Player', [createMember(1, ['flinch-jab', null, null, null])]),
+      opponentSquad: createSquad('o', 'Opponent', [createMember(2, ['tap', null, null, null])]),
+      catalogs,
+      rngValues: [0.5, 0.5, 0.5, 0.5],
+    });
+
+    submitTurn(
+      controller,
+      [{ kind: 'skill', actorMemberIndex: 0, skillSlotIndex: 0, targetMemberIndex: 0 }],
+      [{ kind: 'skill', actorMemberIndex: 0, skillSlotIndex: 0, targetMemberIndex: 0 }],
+    );
+
+    expect(
+      controller.state.logs.some((entry) => entry.turn === 1 && entry.text.includes("Opponent's FastEnemy used Tap")),
+    ).toBe(true);
+    expect(
+      controller.state.logs.some((entry) => entry.turn === 1 && entry.text.includes('flinched and couldn\'t act')),
+    ).toBe(false);
+    expect(controller.state.opponent.team[0].flinch).toBeNull();
+  });
 });
 
 describe('duel battle core - doubles and replacements', () => {

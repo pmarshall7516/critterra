@@ -115,6 +115,12 @@ export function shouldShowLockedKnockoutTargetButton(
   return !entry.unlocked && entry.lockedKnockoutTargetEligible;
 }
 
+export function shouldShowLockedDamageTargetButton(
+  entry: Pick<CritterCardEntry, 'unlocked' | 'lockedDamageTargetEligible'>,
+): boolean {
+  return !entry.unlocked && entry.lockedDamageTargetEligible;
+}
+
 export function getActionablePayMissions(
   entry: Pick<CritterCardEntry, 'activeRequirement'>,
 ): Array<NonNullable<CritterCardEntry['activeRequirement']>['missions'][number]> {
@@ -447,7 +453,23 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
 
       if (keyIntent === 'toggle-menu') {
         event.preventDefault();
-        setMenuOpen((open) => !open);
+        setMenuOpen((open) => {
+          if (!open) {
+            runtime.keyUp('w');
+            runtime.keyUp('a');
+            runtime.keyUp('s');
+            runtime.keyUp('d');
+            runtime.keyUp('W');
+            runtime.keyUp('A');
+            runtime.keyUp('S');
+            runtime.keyUp('D');
+            runtime.keyUp('ArrowUp');
+            runtime.keyUp('ArrowLeft');
+            runtime.keyUp('ArrowDown');
+            runtime.keyUp('ArrowRight');
+          }
+          return !open;
+        });
         return;
       }
 
@@ -480,7 +502,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     };
 
     const handleKeyUp = (event: KeyboardEvent) => {
-      if (menuOpenRef.current || battleActiveRef.current) {
+      if (battleActiveRef.current) {
         return;
       }
 
@@ -548,6 +570,17 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
       return;
     }
     const changed = runtime.setLockedKnockoutTargetCritter(critterId);
+    if (changed) {
+      setSnapshot(runtime.getSnapshot());
+    }
+  };
+
+  const handleSetLockedDamageTarget = (critterId: number | null) => {
+    const runtime = runtimeRef.current;
+    if (!runtime) {
+      return;
+    }
+    const changed = runtime.setLockedDamageTargetCritter(critterId);
     if (changed) {
       setSnapshot(runtime.getSnapshot());
     }
@@ -799,6 +832,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
 
   const critterState = snapshot?.critters;
   const lockedKnockoutTracker = critterState?.lockedKnockoutTracker ?? null;
+  const lockedDamageTracker = critterState?.lockedDamageTracker ?? null;
   const recentTrackedMissions = critterState?.recentTrackedMissions ?? [];
   const backpackState = snapshot?.backpack;
   const starterSelection = snapshot?.story.starterSelection ?? null;
@@ -1218,6 +1252,28 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                   )}
                 </section>
               )}
+              {lockedDamageTracker && lockedDamageTracker.eligibleCritterIds.length > 0 && (
+                <section className="side-menu__tracker">
+                  <h3>Damage Mission Tracker</h3>
+                  {lockedDamageTracker.selectedCritterId !== null ? (
+                    <>
+                      <p className="collection-card__mission-summary">
+                        Tracking: {lockedDamageTracker.selectedCritterName ?? `Critter #${lockedDamageTracker.selectedCritterId}`}
+                      </p>
+                      <ul>
+                        {(lockedDamageTracker.missionRows ?? []).map((mission) => (
+                          <li key={`damage-tracker-${mission.id}`}>
+                            <span>{formatMissionTypeLabel(mission)}</span>
+                            <span>{Math.min(mission.currentValue, mission.targetValue)}/{mission.targetValue}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : (
+                    <p className="collection-card__mission-summary">No damage target selected.</p>
+                  )}
+                </section>
+              )}
               <div className="side-menu__actions">
                 <button type="button" className="primary" onClick={handleManualSave}>
                   Save
@@ -1243,7 +1299,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
               <p className="side-menu__meta">
                 {critterState?.unlockedSquadSlots ?? 0}/{critterState?.maxSquadSlots ?? 0} slots unlocked.
               </p>
-              <p className="side-menu__meta">Click cards to assign or swap. Right-click a filled card to remove.</p>
+              <p className="side-menu__meta">Click a critter sprite to swap. Click skill/equipment slots to manage loadout. Right-click a filled card to remove.</p>
               {snapshot?.message && <p className="side-menu__notice">{snapshot.message}</p>}
               <div ref={squadGridRef} className="collection-grid squad-grid">
                 {squadSlots.map((slot) => {
@@ -1267,10 +1323,13 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                       showStatBreakdown={Boolean(expandedStatsByCritterId[slottedCritter.critterId])}
                       onToggleStatInfo={() => handleToggleStatInfo(slottedCritter.critterId)}
                       onSelectCritter={() => handleOpenSquadPicker(slot.index)}
+                      selectOnSpriteOnly
                       onCardContextMenu={(event) => {
                         event.preventDefault();
                         handleRemoveSquadCritter(slot.index);
                       }}
+                      onEquipSkill={handleEquipSkill}
+                      onUnequipSkill={handleUnequipSkill}
                       statOverride={slot.equipmentAdjustedStats ?? undefined}
                       equipmentSlots={slot.equipmentSlots}
                       equipmentOptions={equipmentPickerItems}
@@ -1551,6 +1610,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                     onAdvanceCritter={handleAdvanceCritter}
                     onPayMission={handlePayCritterMission}
                     onSetLockedKnockoutTarget={handleSetLockedKnockoutTarget}
+                    onSetLockedDamageTarget={handleSetLockedDamageTarget}
                     onEquipSkill={handleEquipSkill}
                     onUnequipSkill={handleUnequipSkill}
                     healthProgress={
@@ -1699,7 +1759,10 @@ interface CritterCardProps {
   onAdvanceCritter?: (critterId: number) => void;
   onPayMission?: (critterId: number, missionId: string) => void;
   onSetLockedKnockoutTarget?: (critterId: number | null) => void;
+  onSetLockedDamageTarget?: (critterId: number | null) => void;
   onSelectCritter?: (critterId: number) => void;
+  /** When true, only sprite clicks trigger onSelectCritter (not the full card). */
+  selectOnSpriteOnly?: boolean;
   onCardContextMenu?: (event: MouseEvent<HTMLElement>) => void;
   onEquipSkill?: (critterId: number, slotIndex: number, skillId: string | null) => void;
   onUnequipSkill?: (critterId: number, slotIndex: number) => void;
@@ -1820,7 +1883,9 @@ function CritterCard({
   onAdvanceCritter,
   onPayMission,
   onSetLockedKnockoutTarget,
+  onSetLockedDamageTarget,
   onSelectCritter,
+  selectOnSpriteOnly = false,
   onCardContextMenu,
   onEquipSkill,
   onUnequipSkill,
@@ -1833,6 +1898,7 @@ function CritterCard({
   healthProgress,
 }: CritterCardProps) {
   const [skillPopup, setSkillPopup] = useState<{ slotIndex: number } | null>(null);
+  const [skillPopupSearch, setSkillPopupSearch] = useState('');
   const [equipmentPopupSlotIndex, setEquipmentPopupSlotIndex] = useState<number | null>(null);
   const equippedSlots = entry.equippedSkillSlots ?? [null, null, null, null];
   const unlockedOptions = entry.unlockedSkillOptions ?? [];
@@ -1879,6 +1945,10 @@ function CritterCard({
     actionablePayMissions.length === 0 && shouldShowLockedKnockoutTargetButton(entry);
   const showLockedKnockoutClearButton =
     shouldShowLockedKnockoutTargetButton(entry) && entry.lockedKnockoutTargetSelected;
+  const showLockedDamageTargetButton =
+    actionablePayMissions.length === 0 && shouldShowLockedDamageTargetButton(entry);
+  const showLockedDamageClearButton =
+    shouldShowLockedDamageTargetButton(entry) && entry.lockedDamageTargetSelected;
   const equippedEquipmentItemIds = new Set(
     equipmentSlots
       .map((slot) => slot?.itemId ?? null)
@@ -1890,13 +1960,41 @@ function CritterCard({
     }
     return (option.quantityEquippable ?? option.quantityOwned) > 0;
   });
+  const filteredUnlockedOptions = useMemo(() => {
+    const query = skillPopupSearch.trim().toLowerCase();
+    if (!query) {
+      return unlockedOptions;
+    }
+    return unlockedOptions.filter((option) => {
+      const searchable = [
+        option.skillId,
+        option.name,
+        option.element,
+        option.type,
+        typeof option.damage === 'number' ? String(option.damage) : '',
+      ]
+        .join(' ')
+        .toLowerCase();
+      return searchable.includes(query);
+    });
+  }, [skillPopupSearch, unlockedOptions]);
+  const canSelectCritter = Boolean(onSelectCritter && !isSelectionDisabled);
+  const handleSpriteSelect = (event: MouseEvent<HTMLElement>): void => {
+    if (!canSelectCritter || !selectOnSpriteOnly || !onSelectCritter) {
+      return;
+    }
+    event.stopPropagation();
+    onSelectCritter(entry.critterId);
+  };
   return (
     <article
       className={`collection-card ${entry.unlocked ? 'is-unlocked' : 'is-locked'} ${
-        onSelectCritter ? 'collection-card--selectable' : ''
+        canSelectCritter && !selectOnSpriteOnly ? 'collection-card--selectable' : ''
+      } ${
+        canSelectCritter && selectOnSpriteOnly ? 'collection-card--sprite-select-only' : ''
       } ${isSelectionDisabled ? 'collection-card--disabled' : ''}`}
       style={cardStyle}
-      onClick={onSelectCritter && !isSelectionDisabled ? () => onSelectCritter(entry.critterId) : undefined}
+      onClick={canSelectCritter && !selectOnSpriteOnly && onSelectCritter ? () => onSelectCritter(entry.critterId) : undefined}
       onContextMenu={onCardContextMenu}
     >
       <div className="collection-card__body">
@@ -1930,12 +2028,20 @@ function CritterCard({
         <img
           src={entry.spriteUrl}
           alt={entry.name}
-          className="collection-card__sprite"
+          className={`collection-card__sprite ${canSelectCritter && selectOnSpriteOnly ? 'collection-card__sprite--clickable' : ''}`}
           loading="lazy"
           decoding="async"
+          onClick={canSelectCritter && selectOnSpriteOnly ? handleSpriteSelect : undefined}
         />
       ) : (
-        <div className="collection-card__sprite collection-card__sprite--missing">No Sprite</div>
+        <div
+          className={`collection-card__sprite collection-card__sprite--missing ${
+            canSelectCritter && selectOnSpriteOnly ? 'collection-card__sprite--clickable' : ''
+          }`}
+          onClick={canSelectCritter && selectOnSpriteOnly ? handleSpriteSelect : undefined}
+        >
+          No Sprite
+        </div>
       )}
       <div
         className={`collection-card__level-progress ${
@@ -1979,6 +2085,7 @@ function CritterCard({
                     onClick={(e) => {
                       if (onEquipSkill) {
                         e.stopPropagation();
+                        setSkillPopupSearch('');
                         setSkillPopup({ slotIndex: index });
                       }
                     }}
@@ -2011,21 +2118,37 @@ function CritterCard({
             onClick={(e) => e.stopPropagation()}
           >
             <p className="collection-card__skill-popup-title">Equip or replace skill (slot {skillPopup.slotIndex + 1})</p>
+            <input
+              type="search"
+              className="collection-card__skill-popup-search"
+              placeholder="Search skills"
+              value={skillPopupSearch}
+              onChange={(event) => setSkillPopupSearch(event.target.value)}
+            />
             <div className="collection-card__skill-popup-list">
-              {unlockedOptions.map((opt) => (
+              {filteredUnlockedOptions.map((opt) => {
+                const color = ELEMENT_SKILL_COLORS[opt.element] ?? undefined;
+                return (
                 <button
                   key={opt.skillId}
                   type="button"
-                  className="secondary collection-card__skill-popup-option"
+                  className="collection-card__skill-slot collection-card__skill-popup-skill-option"
+                  style={color ? { backgroundColor: color, color: '#1a1a1a' } : undefined}
                   onClick={(e) => {
                     e.stopPropagation();
                     onEquipSkill(entry.critterId, skillPopup.slotIndex, opt.skillId);
                     setSkillPopup(null);
+                    setSkillPopupSearch('');
                   }}
+                  title={buildSkillSlotTooltip(opt)}
                 >
-                  {opt.skillId} – {opt.name}
+                  <SkillCellContent slot={opt} iconsBucketRoot={iconsBucketRoot} />
                 </button>
-              ))}
+              );
+              })}
+              {filteredUnlockedOptions.length === 0 && (
+                <p className="collection-card__mission-summary">No skills match your search.</p>
+              )}
               <button
                 type="button"
                 className="secondary collection-card__skill-popup-option"
@@ -2033,6 +2156,7 @@ function CritterCard({
                   e.stopPropagation();
                   onEquipSkill(entry.critterId, skillPopup.slotIndex, null);
                   setSkillPopup(null);
+                  setSkillPopupSearch('');
                 }}
               >
                 Clear slot
@@ -2044,6 +2168,7 @@ function CritterCard({
               onClick={(e) => {
                 e.stopPropagation();
                 setSkillPopup(null);
+                setSkillPopupSearch('');
               }}
             >
               Cancel
@@ -2190,7 +2315,9 @@ function CritterCard({
       </section>
       {((actionablePayMissions.length > 0 && onPayMission) ||
         (showLockedKnockoutTargetButton && onSetLockedKnockoutTarget) ||
-        (showLockedKnockoutClearButton && onSetLockedKnockoutTarget)) && (
+        (showLockedKnockoutClearButton && onSetLockedKnockoutTarget) ||
+        (showLockedDamageTargetButton && onSetLockedDamageTarget) ||
+        (showLockedDamageClearButton && onSetLockedDamageTarget)) && (
         <div className="collection-card__tracker-actions">
           {actionablePayMissions.length > 0 && onPayMission && actionablePayMissions.map((mission) => (
             <button
@@ -2234,6 +2361,31 @@ function CritterCard({
               }}
             >
               Clear KO Target
+            </button>
+          )}
+          {showLockedDamageTargetButton && onSetLockedDamageTarget && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={(event) => {
+                event.stopPropagation();
+                onSetLockedDamageTarget(entry.critterId);
+              }}
+              disabled={entry.lockedDamageTargetSelected}
+            >
+              {entry.lockedDamageTargetSelected ? 'Tracking Damage Mission' : 'Track Damage Mission'}
+            </button>
+          )}
+          {showLockedDamageClearButton && onSetLockedDamageTarget && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={(event) => {
+                event.stopPropagation();
+                onSetLockedDamageTarget(null);
+              }}
+            >
+              Clear Damage Target
             </button>
           )}
         </div>
@@ -3049,8 +3201,17 @@ function formatMissionTypeLabel(mission: {
   requiredPaymentAffordable?: boolean;
   requiredHealingItemIds?: string[];
   requiredHealingItemNames?: string[];
+  useSkillMode?: string;
+  useSkillElements?: string[];
+  useSkillIds?: string[];
+  dealDamageMode?: string;
+  dealDamageElements?: string[];
   storyFlagId?: string;
   label?: string;
+  effectBuffMode?: string;
+  effectBuffDescription?: string;
+  absorbMode?: string;
+  absorbDamageElements?: string[];
 }): string {
   if (mission.type === 'opposing_knockouts_with_item') {
     const knockoutCritterNames = Array.isArray(mission.knockoutCritterNames) ? mission.knockoutCritterNames : [];
@@ -3112,6 +3273,67 @@ function formatMissionTypeLabel(mission: {
   }
   if (mission.type === 'land_critical_hits') {
     return 'Land Critical Hits';
+  }
+  if (mission.type === 'use_skill') {
+    const mode = mission.useSkillMode ?? 'any';
+    if (mode === 'element') {
+      const elements = Array.isArray(mission.useSkillElements) ? mission.useSkillElements : [];
+      if (elements.length > 0) {
+        return `Use Skill (${elements.map(capitalizeToken).join(', ')})`;
+      }
+    }
+    if (mode === 'specific') {
+      const skillIds = Array.isArray(mission.useSkillIds) ? mission.useSkillIds : [];
+      if (skillIds.length > 0) {
+        return `Use Skill (${skillIds.join(', ')})`;
+      }
+    }
+    return 'Use Skill';
+  }
+  if (mission.type === 'deal_damage') {
+    const mode = mission.dealDamageMode ?? 'any';
+    if (mode === 'element') {
+      const elements = Array.isArray(mission.dealDamageElements) ? mission.dealDamageElements : [];
+      if (elements.length > 0) {
+        return `Deal Damage (${elements.map(capitalizeToken).join(', ')})`;
+      }
+    }
+    return 'Deal Damage';
+  }
+  if (
+    mission.type === 'effect_buffed_actions' ||
+    mission.type === 'skill_effect_buffed_actions' ||
+    mission.type === 'equip_effect_buffed_actions'
+  ) {
+    if (mission.effectBuffDescription && mission.effectBuffDescription.trim()) {
+      return mission.effectBuffDescription.trim();
+    }
+    const mode = mission.effectBuffMode ?? 'deal_damage';
+    const sourceLabel =
+      mission.type === 'equip_effect_buffed_actions'
+        ? 'Equip Buffed'
+        : 'Skill Buffed';
+    if (mode === 'knockouts') {
+      return `${sourceLabel} Knockouts`;
+    }
+    if (mode === 'damage_absorbed') {
+      return `${sourceLabel} Damage Taken`;
+    }
+    return `${sourceLabel} Damage Dealt`;
+  }
+  if (mission.type === 'absorb_damage') {
+    const mode = mission.absorbMode ?? 'damage';
+    if (mode === 'knockout') {
+      return 'Get Knocked Out';
+    }
+    if (mode === 'element') {
+      const elements = Array.isArray(mission.absorbDamageElements) ? mission.absorbDamageElements : [];
+      if (elements.length > 0) {
+        return `Absorb Damage (${elements.map(capitalizeToken).join(', ')})`;
+      }
+      return 'Absorb Damage';
+    }
+    return 'Absorb Damage';
   }
   if (mission.type === 'ascension') {
     const sourceLabel = mission.ascendsFromCritterName

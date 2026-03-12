@@ -112,6 +112,7 @@ function createRuntimeHarness(input: {
     squad: input.squad ?? [null, null, null, null, null, null, null, null],
     collection: input.collection,
     lockedKnockoutTargetCritterId: null,
+    lockedDamageTargetCritterId: null,
   } as PlayerCritterProgress;
   runtime.itemDatabase = items;
   runtime.itemById = items.reduce<Record<string, GameItemDefinition>>((registry, item) => {
@@ -652,5 +653,509 @@ describe('GameRuntime mission action tracking', () => {
     expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'crits-1')).toBe(1);
     (runtime as any).advanceLandCriticalHitsMissions(1, 1);
     expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'crits-1')).toBe(2);
+  });
+
+  it('advances use_skill mission in any mode for any skill use', () => {
+    const critter = createCritter({
+      id: 1,
+      name: 'Skill User',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+        {
+          level: 2,
+          missions: [{ id: 'use-any-1', type: 'use_skill', targetValue: 3, useSkillMode: 'any' }],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [createCollectionEntry(critter, { level: 1 })],
+    });
+    (runtime as any).advanceUseSkillMissions(1, 'tackle', 'normal');
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'use-any-1')).toBe(1);
+    (runtime as any).advanceUseSkillMissions(1, 'vine-whip', 'bloom');
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'use-any-1')).toBe(2);
+  });
+
+  it('advances use_skill mission in element mode only when element matches', () => {
+    const critter = createCritter({
+      id: 1,
+      name: 'Bloom User',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+        {
+          level: 2,
+          missions: [
+            {
+              id: 'use-bloom-1',
+              type: 'use_skill',
+              targetValue: 2,
+              useSkillMode: 'element',
+              useSkillElements: ['bloom', 'ember'],
+            },
+          ],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [createCollectionEntry(critter, { level: 1 })],
+    });
+    (runtime as any).advanceUseSkillMissions(1, 'vine-whip', 'bloom');
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'use-bloom-1')).toBe(1);
+    (runtime as any).advanceUseSkillMissions(1, 'tackle', 'normal');
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'use-bloom-1')).toBe(1);
+    (runtime as any).advanceUseSkillMissions(1, 'ember-shot', 'ember');
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'use-bloom-1')).toBe(2);
+  });
+
+  it('advances use_skill mission in specific mode only when skillId in list', () => {
+    const critter = createCritter({
+      id: 1,
+      name: 'Tackle User',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+        {
+          level: 2,
+          missions: [
+            {
+              id: 'use-tackle-1',
+              type: 'use_skill',
+              targetValue: 2,
+              useSkillMode: 'specific',
+              useSkillIds: ['tackle', 'vine-whip'],
+            },
+          ],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [createCollectionEntry(critter, { level: 1 })],
+    });
+    (runtime as any).advanceUseSkillMissions(1, 'tackle', 'normal');
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'use-tackle-1')).toBe(1);
+    (runtime as any).advanceUseSkillMissions(1, 'ember-shot', 'ember');
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'use-tackle-1')).toBe(1);
+    (runtime as any).advanceUseSkillMissions(1, 'vine-whip', 'bloom');
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'use-tackle-1')).toBe(2);
+  });
+
+  it('does not advance use_skill for locked critters', () => {
+    const critter = createCritter({
+      id: 1,
+      name: 'Locked',
+      levels: [
+        {
+          level: 1,
+          missions: [{ id: 'use-1', type: 'use_skill', targetValue: 1, useSkillMode: 'any' }],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [createCollectionEntry(critter, { unlocked: false, level: 0 })],
+    });
+    (runtime as any).advanceUseSkillMissions(1, 'tackle', 'normal');
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 1, 'use-1')).toBe(0);
+  });
+
+  it('recordDealDamageProgress credits attacker and caps at targetValue', () => {
+    const critter = createCritter({
+      id: 1,
+      name: 'Brawler',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+        {
+          level: 2,
+          missions: [
+            { id: 'deal-1', type: 'deal_damage', targetValue: 100 },
+            {
+              id: 'deal-bloom',
+              type: 'deal_damage',
+              targetValue: 50,
+              dealDamageMode: 'element',
+              dealDamageElements: ['bloom'],
+            },
+          ],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [createCollectionEntry(critter, { level: 1 })],
+    });
+    (runtime as any).recordDealDamageProgress(1, 50, 'skill', 'ember');
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'deal-1')).toBe(50);
+    // Ember damage does not match the bloom element filter.
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'deal-bloom')).toBe(0);
+    (runtime as any).recordDealDamageProgress(1, 60, 'skill', 'bloom');
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'deal-1')).toBe(100);
+    // Remaining damage after capping generic mission is applied to the element-filtered mission.
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'deal-bloom')).toBe(10);
+  });
+
+  it('recordDealDamageProgress credits locked damage target when set', () => {
+    const critterA = createCritter({
+      id: 1,
+      name: 'Attacker',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+        {
+          level: 2,
+          missions: [{ id: 'deal-1', type: 'deal_damage', targetValue: 200 }],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const critterB = createCritter({
+      id: 2,
+      name: 'Tracker',
+      levels: [
+        {
+          level: 1,
+          missions: [{ id: 'deal-l1', type: 'deal_damage', targetValue: 150 }],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const runtime = createRuntimeHarness({
+      critters: [critterA, critterB],
+      collection: [
+        createCollectionEntry(critterA, { level: 1 }),
+        createCollectionEntry(critterB, { unlocked: false, level: 0 }),
+      ],
+    });
+    runtime.playerCritterProgress.lockedDamageTargetCritterId = 2;
+    (runtime as any).recordDealDamageProgress(1, 100, 'skill', 'normal');
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'deal-1')).toBe(100);
+    expect(readMissionProgress(runtime.playerCritterProgress, 2, 1, 'deal-l1')).toBe(100);
+    (runtime as any).recordDealDamageProgress(1, 80, 'skill', 'normal');
+    expect(readMissionProgress(runtime.playerCritterProgress, 2, 1, 'deal-l1')).toBe(150);
+  });
+
+  it('recordDealDamageProgress ignores non-skill damage sources', () => {
+    const critter = createCritter({
+      id: 1,
+      name: 'Tracker',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+        {
+          level: 2,
+          missions: [{ id: 'deal-1', type: 'deal_damage', targetValue: 100 }],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [createCollectionEntry(critter, { level: 1 })],
+    });
+    (runtime as any).recordDealDamageProgress(1, 50);
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'deal-1')).toBe(0);
+    (runtime as any).recordDealDamageProgress(1, 50, 'skill', 'normal');
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'deal-1')).toBe(50);
+  });
+
+  it('advances effect_buffed_actions mission for damage dealt while effect is active', () => {
+    const critter = createCritter({
+      id: 1,
+      name: 'Buffer',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+        {
+          level: 2,
+          missions: [
+            {
+              id: 'buffed-deal-1',
+              type: 'effect_buffed_actions',
+              targetValue: 100,
+              effectTemplateId: 'atk_buff',
+              effectBuffMode: 'deal_damage',
+            },
+          ],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [createCollectionEntry(critter, { level: 1 })],
+    });
+    (runtime as any).hasAnySkillEffectTemplateActive = vi.fn(() => true);
+    (runtime as any).recordEffectBuffedDealDamageProgress(1, 60);
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'buffed-deal-1')).toBe(60);
+    (runtime as any).recordEffectBuffedDealDamageProgress(1, 60);
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'buffed-deal-1')).toBe(100);
+  });
+
+  it('advances effect_buffed_actions mission for damage absorbed while effect is active', () => {
+    const critter = createCritter({
+      id: 1,
+      name: 'Wall',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+        {
+          level: 2,
+          missions: [
+            {
+              id: 'buffed-tank-1',
+              type: 'effect_buffed_actions',
+              targetValue: 80,
+              effectTemplateId: 'def_buff',
+              effectBuffMode: 'damage_absorbed',
+            },
+          ],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [createCollectionEntry(critter, { level: 1 })],
+    });
+    (runtime as any).hasAnySkillEffectTemplateActive = vi.fn(() => true);
+    (runtime as any).recordDamageTakenWhileBuffedProgress(1, 50);
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'buffed-tank-1')).toBe(50);
+    (runtime as any).recordDamageTakenWhileBuffedProgress(1, 50);
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'buffed-tank-1')).toBe(80);
+  });
+
+  it('advances absorb_damage mission in damage mode when critter takes damage', () => {
+    const critter = createCritter({
+      id: 1,
+      name: 'Punching Bag',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+        {
+          level: 2,
+          missions: [
+            {
+              id: 'absorb-dmg-1',
+              type: 'absorb_damage',
+              targetValue: 100,
+              absorbMode: 'damage',
+            },
+          ],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [createCollectionEntry(critter, { level: 1 })],
+    });
+    (runtime as any).recordAbsorbDamageProgress(1, 40);
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'absorb-dmg-1')).toBe(40);
+    (runtime as any).recordAbsorbDamageProgress(1, 80);
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'absorb-dmg-1')).toBe(100);
+  });
+
+  it('advances absorb_damage mission in knockout mode when critter faints', () => {
+    const critter = createCritter({
+      id: 1,
+      name: 'Glass Cannon',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+        {
+          level: 2,
+          missions: [
+            {
+              id: 'absorb-ko-1',
+              type: 'absorb_damage',
+              targetValue: 2,
+              absorbMode: 'knockout',
+            },
+          ],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [createCollectionEntry(critter, { level: 1 })],
+    });
+    (runtime as any).recordSelfKnockoutProgress(1);
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'absorb-ko-1')).toBe(1);
+    (runtime as any).recordSelfKnockoutProgress(1);
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'absorb-ko-1')).toBe(2);
+  });
+
+  it('advances absorb_damage mission in element mode only for matching skill element damage', () => {
+    const critter = createCritter({
+      id: 1,
+      name: 'Element Tank',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+        {
+          level: 2,
+          missions: [
+            {
+              id: 'absorb-ember',
+              type: 'absorb_damage',
+              targetValue: 90,
+              absorbMode: 'element',
+              absorbDamageElements: ['ember', 'bloom'],
+            },
+          ],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [createCollectionEntry(critter, { level: 1 })],
+    });
+    (runtime as any).recordAbsorbDamageProgress(1, 40, 'skill', 'tide');
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'absorb-ember')).toBe(0);
+    (runtime as any).recordAbsorbDamageProgress(1, 40, 'skill', 'ember');
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'absorb-ember')).toBe(40);
+    (runtime as any).recordAbsorbDamageProgress(1, 60, 'skill', 'bloom');
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'absorb-ember')).toBe(90);
   });
 });

@@ -109,6 +109,15 @@ function sanitizeEquipmentEffectType(
   }
 
   const haystack = `${effectId} ${effectName}`.toLowerCase();
+  if (haystack.includes('toxic') || haystack.includes('poison')) {
+    return 'apply_toxic';
+  }
+  if (haystack.includes('stun') || haystack.includes('paraly')) {
+    return 'apply_stun';
+  }
+  if (haystack.includes('flinch')) {
+    return 'flinch_chance';
+  }
   if (haystack.includes('crit')) {
     return 'crit_buff';
   }

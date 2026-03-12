@@ -25,11 +25,18 @@ const STAT_BY_EFFECT_TYPE: Partial<Record<EquipmentEffectType, EquipmentEffectSt
 export interface EquipmentEffectInstance {
   effectId: string;
   effectType: EquipmentEffectType;
+  procChance?: number;
   mode?: EquipmentEffectMode;
   value?: number;
   critChanceBonus?: number;
   persistentHealMode?: EquipmentPersistentHealMode;
   persistentHealValue?: number;
+  toxicPotencyBase?: number;
+  toxicPotencyPerTurn?: number;
+  stunFailChance?: number;
+  stunSlowdown?: number;
+  flinchFirstUseOnly?: boolean;
+  flinchFirstOverallOnly?: boolean;
 }
 
 export type EquipmentEffectLookup =
@@ -113,6 +120,32 @@ export function summarizeEquipmentEffectInstanceValues(
       lines.push(`End turn heal +${Math.round(percent * 100)}% max HP while equipped`);
     }
     return lines.join(', ');
+  }
+
+  if (effectType === 'apply_toxic') {
+    const chance = instances.reduce((sum, entry) => sum + clamp(entry.procChance ?? 0, 0, 1), 0);
+    const base = instances.reduce((sum, entry) => sum + clamp(entry.toxicPotencyBase ?? 0, 0, 1), 0);
+    const ramp = instances.reduce((sum, entry) => sum + clamp(entry.toxicPotencyPerTurn ?? 0, 0, 1), 0);
+    return `On hit: ${Math.round(chance * 100)}% Toxic (${Math.round(base * 100)}% +${Math.round(ramp * 100)}%/turn)`;
+  }
+
+  if (effectType === 'apply_stun') {
+    const chance = instances.reduce((sum, entry) => sum + clamp(entry.procChance ?? 0, 0, 1), 0);
+    const fail = instances.reduce((sum, entry) => sum + clamp(entry.stunFailChance ?? 0, 0, 1), 0);
+    const slow = instances.reduce((sum, entry) => sum + clamp(entry.stunSlowdown ?? 0, 0, 1), 0);
+    return `On hit: ${Math.round(chance * 100)}% Stun (${Math.round(fail * 100)}% fail, -${Math.round(slow * 100)}% SPD)`;
+  }
+
+  if (effectType === 'flinch_chance') {
+    const chance = instances.reduce((sum, entry) => sum + clamp(entry.procChance ?? 0, 0, 1), 0);
+    const firstUseOnly = instances.some((entry) => entry.flinchFirstUseOnly);
+    const firstOverallOnly = instances.some((entry) => entry.flinchFirstUseOnly && entry.flinchFirstOverallOnly);
+    const qualifiers: string[] = [];
+    if (firstUseOnly) {
+      qualifiers.push(firstOverallOnly ? 'first use on switch-in turn only' : 'first use only');
+    }
+    const suffix = qualifiers.length > 0 ? ` (${qualifiers.join(', ')})` : '';
+    return `On hit: ${Math.round(chance * 100)}% Flinch chance${suffix}`;
   }
 
   const stat = STAT_BY_EFFECT_TYPE[effectType];
@@ -213,6 +246,66 @@ function resolveInstanceForTemplate(
     };
   }
 
+  if (template.effect_type === 'apply_toxic') {
+    const procChance = resolveStatusProcChance(attachmentRecord);
+    const toxicPotencyBase = clamp(parseNumeric(
+      attachmentRecord?.toxicPotencyBase ??
+      attachmentRecord?.toxic_potency_base,
+      0.05,
+    ), 0, 1);
+    const toxicPotencyPerTurn = clamp(parseNumeric(
+      attachmentRecord?.toxicPotencyPerTurn ??
+      attachmentRecord?.toxic_potency_per_turn,
+      0.05,
+    ), 0, 1);
+    return {
+      effectId,
+      effectType: template.effect_type,
+      procChance,
+      toxicPotencyBase,
+      toxicPotencyPerTurn,
+    };
+  }
+
+  if (template.effect_type === 'apply_stun') {
+    const procChance = resolveStatusProcChance(attachmentRecord);
+    const stunFailChance = clamp(parseNumeric(
+      attachmentRecord?.stunFailChance ??
+      attachmentRecord?.stun_fail_chance,
+      0.25,
+    ), 0, 1);
+    const stunSlowdown = clamp(parseNumeric(
+      attachmentRecord?.stunSlowdown ??
+      attachmentRecord?.stun_slowdown,
+      0.5,
+    ), 0, 1);
+    return {
+      effectId,
+      effectType: template.effect_type,
+      procChance,
+      stunFailChance,
+      stunSlowdown,
+    };
+  }
+
+  if (template.effect_type === 'flinch_chance') {
+    const flinchFirstUseOnly = parseBooleanFlag(
+      attachmentRecord?.flinchFirstUseOnly ??
+      attachmentRecord?.flinch_first_use_only,
+    );
+    const flinchFirstOverallOnly = flinchFirstUseOnly && parseBooleanFlag(
+      attachmentRecord?.flinchFirstOverallOnly ??
+      attachmentRecord?.flinch_first_overall_only,
+    );
+    return {
+      effectId,
+      effectType: template.effect_type,
+      procChance: resolveStatusProcChance(attachmentRecord),
+      flinchFirstUseOnly,
+      flinchFirstOverallOnly,
+    };
+  }
+
   const { mode, value } = resolveStatConfig(template, attachmentRecord);
   return {
     effectId,
@@ -220,6 +313,16 @@ function resolveInstanceForTemplate(
     mode,
     value,
   };
+}
+
+function resolveStatusProcChance(
+  attachmentRecord: Record<string, unknown> | null,
+): number {
+  return clamp(parseNumeric(
+    attachmentRecord?.procChance ??
+    attachmentRecord?.proc_chance,
+    0.2,
+  ), 0, 1);
 }
 
 function resolveCritChanceBonus(
@@ -360,6 +463,20 @@ function parseNumeric(raw: unknown, fallback = Number.NaN): number {
         ? Number.parseFloat(raw)
         : Number.NaN;
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseBooleanFlag(raw: unknown): boolean {
+  if (typeof raw === 'boolean') {
+    return raw;
+  }
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return raw !== 0;
+  }
+  if (typeof raw === 'string') {
+    const normalized = raw.trim().toLowerCase();
+    return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+  }
+  return false;
 }
 
 function clamp(value: number, min: number, max: number): number {

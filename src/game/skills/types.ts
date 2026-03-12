@@ -11,6 +11,9 @@ export const SKILL_EFFECT_TYPES = [
   'crit_buff',
   'recoil',
   'persistent_heal',
+  'inflict_toxic',
+  'inflict_stun',
+  'flinch_chance',
 ] as const;
 export type SkillEffectType = (typeof SKILL_EFFECT_TYPES)[number];
 
@@ -60,6 +63,18 @@ export interface SkillEffectAttachment {
   persistentHealValue?: number;
   /** Duration in turns (persistent_heal effects only). */
   persistentHealDurationTurns?: number;
+  /** Base toxic potency in 0..1 (inflict_toxic effects only). */
+  toxicPotencyBase?: number;
+  /** Per-turn toxic ramp in 0..1 (inflict_toxic effects only). */
+  toxicPotencyPerTurn?: number;
+  /** Stun fail chance in 0..1 (inflict_stun effects only). */
+  stunFailChance?: number;
+  /** Stun speed slowdown in 0..1 (inflict_stun effects only). */
+  stunSlowdown?: number;
+  /** Flinch only attempts on this critter's first use of the skill after switch-in. */
+  flinchFirstUseOnly?: boolean;
+  /** Requires first use and first actionable turn after switch-in (Fake Out-style). */
+  flinchFirstOverallOnly?: boolean;
 }
 
 export interface SkillEffectDefinition {
