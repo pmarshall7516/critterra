@@ -1,5 +1,9 @@
 import { BASE_CRITTER_DATABASE } from '@/game/critters/baseDatabase';
 import {
+  clonePersistentStatusCondition,
+  sanitizePersistentStatusCondition,
+} from '@/game/battle/statusConditions';
+import {
   CRITTER_ABILITY_KINDS,
   CRITTER_ELEMENTS,
   CRITTER_MISSION_TYPES,
@@ -21,7 +25,20 @@ import {
   type EquippedSkillSlots,
   type PlayerCritterCollectionEntry,
   type PlayerCritterProgress,
+  type DealDamageMode,
+  type UseSkillMode,
+  type EffectBuffMode,
+  type AbsorbDamageMode,
+  USE_SKILL_MODES,
+  DEAL_DAMAGE_MODES,
+  EFFECT_BUFF_MODES,
+  ABSORB_DAMAGE_MODES,
 } from '@/game/critters/types';
+
+const USE_SKILL_MODE_SET = new Set<string>(USE_SKILL_MODES);
+const DEAL_DAMAGE_MODE_SET = new Set<string>(DEAL_DAMAGE_MODES);
+const EFFECT_BUFF_MODE_SET = new Set<string>(EFFECT_BUFF_MODES);
+const ABSORB_MODE_SET = new Set<string>(ABSORB_DAMAGE_MODES);
 
 const DEFAULT_CRITTER_STATS: CritterStats = {
   hp: 12,
@@ -184,6 +201,7 @@ export function createDefaultPlayerCritterProgress(database: CritterDefinition[]
     squad: Array.from({ length: MAX_SQUAD_SLOTS }, () => null),
     collection: database.map((critter) => createDefaultCollectionEntry(critter)),
     lockedKnockoutTargetCritterId: null,
+    lockedDamageTargetCritterId: null,
   };
 }
 
@@ -255,6 +273,7 @@ export function sanitizePlayerCritterProgress(
               computeCritterUnlockedEquipSlots(critter, level),
             )
           : [],
+      persistentStatus: unlocked ? clonePersistentStatusCondition(existing.persistentStatus) : null,
       lastProgressAt: existing.lastProgressAt,
     };
   });
@@ -281,12 +300,22 @@ export function sanitizePlayerCritterProgress(
       ? rawLockedKnockoutTargetCritterId
       : null;
 
+  const rawLockedDamageTargetCritterId = parseNumberish(record.lockedDamageTargetCritterId);
+  const lockedDamageTargetCritterId =
+    rawLockedDamageTargetCritterId !== null &&
+    collection.some(
+      (entry) => entry.critterId === rawLockedDamageTargetCritterId && !entry.unlocked,
+    )
+      ? rawLockedDamageTargetCritterId
+      : null;
+
   return {
     version: PLAYER_CRITTER_PROGRESS_VERSION,
     unlockedSquadSlots,
     squad,
     collection,
     lockedKnockoutTargetCritterId,
+    lockedDamageTargetCritterId,
   };
 }
 
@@ -305,6 +334,7 @@ function createDefaultCollectionEntry(critter: CritterDefinition): PlayerCritter
     unlockedAbilityIds: derived.unlockedAbilityIds,
     equippedSkillIds: [null, null, null, null],
     equippedEquipmentAnchors: [],
+    persistentStatus: null,
     lastProgressAt: null,
   };
 }
@@ -349,6 +379,9 @@ function sanitizeCollectionEntry(
   const equippedEquipmentAnchors = sanitizeEquippedEquipmentAnchors(
     record.equippedEquipmentAnchors ?? record.equippedEquipmentItems,
   );
+  const persistentStatus = sanitizePersistentStatusCondition(
+    record.persistentStatus ?? record.persistent_status,
+  );
 
   return {
     critterId,
@@ -374,6 +407,7 @@ function sanitizeCollectionEntry(
     unlockedAbilityIds: [],
     equippedSkillIds,
     equippedEquipmentAnchors,
+    persistentStatus,
     lastProgressAt: sanitizeIsoTimestamp(record.lastProgressAt),
   };
 }
@@ -543,7 +577,19 @@ function sanitizeLevelMission(raw: unknown, index: number, level: number): Critt
         ? 'swap_in'
         : typeRaw === 'swap-out' || typeRaw === 'swapout'
           ? 'swap_out'
-      : typeRaw;
+          : typeRaw === 'heal-with-skills' || typeRaw === 'healwithskills'
+            ? 'heal_with_skills'
+            : typeRaw === 'land-critical-hits' || typeRaw === 'landcriticalhits'
+              ? 'land_critical_hits'
+              : typeRaw === 'use-skill' || typeRaw === 'useskill'
+                ? 'use_skill'
+                : typeRaw === 'deal-damage' || typeRaw === 'dealdamage'
+                  ? 'deal_damage'
+                  : typeRaw === 'effect-buffed-actions' || typeRaw === 'effect_buffed_actions'
+                    ? 'skill_effect_buffed_actions'
+                    : typeRaw === 'absorb-damage' || typeRaw === 'absorb_damage'
+                      ? 'absorb_damage'
+                      : typeRaw;
   const type = MISSION_TYPE_SET.has(normalizedTypeRaw as CritterMissionType)
     ? (normalizedTypeRaw as CritterMissionType)
     : 'opposing_knockouts';
@@ -589,6 +635,99 @@ function sanitizeLevelMission(raw: unknown, index: number, level: number): Critt
   const allowKnockoutElements = knockoutCritterIds.length === 0;
   const normalizedTargetValue = type === 'story_flag' ? 1 : targetValue;
 
+  const useSkillModeRaw =
+    type === 'use_skill' && typeof record.useSkillMode === 'string'
+      ? record.useSkillMode.trim().toLowerCase()
+      : 'any';
+  const useSkillMode = USE_SKILL_MODE_SET.has(useSkillModeRaw) ? (useSkillModeRaw as UseSkillMode) : 'any';
+  const useSkillElements =
+    type === 'use_skill' && useSkillMode === 'element'
+      ? sanitizeStringArray(record.useSkillElements, CRITTER_ELEMENTS.length)
+          .map((entry) => entry.toLowerCase())
+          .filter((entry): entry is CritterElement => ELEMENT_SET.has(entry as CritterElement))
+      : [];
+  const useSkillIds =
+    type === 'use_skill' && useSkillMode === 'specific'
+      ? sanitizeStringArray(record.useSkillIds, 60)
+      : [];
+
+  const dealDamageModeRaw =
+    type === 'deal_damage' && typeof record.dealDamageMode === 'string'
+      ? record.dealDamageMode.trim().toLowerCase()
+      : 'any';
+  const dealDamageMode = DEAL_DAMAGE_MODE_SET.has(dealDamageModeRaw)
+    ? (dealDamageModeRaw as DealDamageMode)
+    : 'any';
+  const dealDamageElements =
+    type === 'deal_damage' && dealDamageMode === 'element'
+      ? sanitizeStringArray(record.dealDamageElements, CRITTER_ELEMENTS.length)
+          .map((entry) => entry.toLowerCase())
+          .filter((entry): entry is CritterElement => ELEMENT_SET.has(entry as CritterElement))
+      : [];
+
+  const isAnyBuffedActionsType =
+    type === 'effect_buffed_actions' ||
+    type === 'skill_effect_buffed_actions' ||
+    type === 'equip_effect_buffed_actions';
+
+  const effectBuffModeRaw =
+    isAnyBuffedActionsType && typeof record.effectBuffMode === 'string'
+      ? record.effectBuffMode.trim().toLowerCase()
+      : 'deal_damage';
+  const effectBuffMode = EFFECT_BUFF_MODE_SET.has(effectBuffModeRaw)
+    ? (effectBuffModeRaw as EffectBuffMode)
+    : 'deal_damage';
+
+  const effectBuffDescription =
+    isAnyBuffedActionsType && typeof record.effectBuffDescription === 'string'
+      ? record.effectBuffDescription.trim().slice(0, 200)
+      : '';
+
+  // Legacy single-id field support for existing content.
+  const legacyEffectTemplateId =
+    isAnyBuffedActionsType && typeof record.effectTemplateId === 'string'
+      ? record.effectTemplateId.trim()
+      : '';
+
+  const rawSkillIdsCandidate = (record as Record<string, unknown>).skillEffectTemplateIds;
+  const rawSkillIds =
+    (type === 'skill_effect_buffed_actions' || type === 'effect_buffed_actions') && Array.isArray(rawSkillIdsCandidate)
+      ? rawSkillIdsCandidate
+      : [];
+  const rawEquipIdsCandidate = (record as Record<string, unknown>).equipEffectTemplateIds;
+  const rawEquipIds =
+    type === 'equip_effect_buffed_actions' && Array.isArray(rawEquipIdsCandidate)
+      ? rawEquipIdsCandidate
+      : [];
+
+  const skillEffectTemplateIds =
+    type === 'skill_effect_buffed_actions' || type === 'effect_buffed_actions'
+      ? sanitizeStringArray(
+          [...rawSkillIds, ...(legacyEffectTemplateId ? [legacyEffectTemplateId] : [])],
+          30,
+        )
+      : [];
+
+  const equipEffectTemplateIds =
+    type === 'equip_effect_buffed_actions'
+      ? sanitizeStringArray(
+          [...rawEquipIds, ...(legacyEffectTemplateId ? [legacyEffectTemplateId] : [])],
+          30,
+        )
+      : [];
+
+  const absorbModeRaw =
+    type === 'absorb_damage' && typeof record.absorbMode === 'string'
+      ? record.absorbMode.trim().toLowerCase()
+      : 'damage';
+  const absorbMode = ABSORB_MODE_SET.has(absorbModeRaw) ? (absorbModeRaw as AbsorbDamageMode) : 'damage';
+  const absorbDamageElements =
+    type === 'absorb_damage' && absorbMode === 'element'
+      ? sanitizeStringArray(record.absorbDamageElements, CRITTER_ELEMENTS.length)
+          .map((entry) => entry.toLowerCase())
+          .filter((entry): entry is CritterElement => ELEMENT_SET.has(entry as CritterElement))
+      : [];
+
   return {
     id,
     type,
@@ -600,6 +739,23 @@ function sanitizeLevelMission(raw: unknown, index: number, level: number): Critt
     requiredEquippedItemIds,
     requiredPaymentItemId,
     requiredHealingItemIds,
+    ...(type === 'use_skill' && { useSkillMode, useSkillElements, useSkillIds }),
+    ...(type === 'deal_damage' && {
+      dealDamageMode,
+      ...(dealDamageMode === 'element' && dealDamageElements.length > 0 ? { dealDamageElements } : {}),
+    }),
+    ...(isAnyBuffedActionsType && {
+      effectBuffMode,
+      effectBuffDescription,
+      // Preserve legacy single-id field for older tooling/tests.
+      ...(legacyEffectTemplateId ? { effectTemplateId: legacyEffectTemplateId } : {}),
+      ...(skillEffectTemplateIds.length > 0 ? { skillEffectTemplateIds } : {}),
+      ...(equipEffectTemplateIds.length > 0 ? { equipEffectTemplateIds } : {}),
+    }),
+    ...(type === 'absorb_damage' && {
+      absorbMode,
+      ...(absorbMode === 'element' && absorbDamageElements.length > 0 ? { absorbDamageElements } : {}),
+    }),
     storyFlagId,
     label,
   };

@@ -188,6 +188,7 @@ describe('GameRuntime knockout mission targeting', () => {
         createCollectionEntry(lockedB, { unlocked: false, level: 0 }),
       ],
       lockedKnockoutTargetCritterId: null,
+    lockedDamageTargetCritterId: null,
     };
     const runtime = createRuntimeHarness({
       critters: [attacker, lockedA, lockedB, opponent],
@@ -258,6 +259,7 @@ describe('GameRuntime knockout mission targeting', () => {
         createCollectionEntry(otherLocked, { unlocked: false, level: 0 }),
       ],
       lockedKnockoutTargetCritterId: 2,
+      lockedDamageTargetCritterId: null,
     };
     const runtime = createRuntimeHarness({
       critters: [attacker, lockedTarget, otherLocked, opponent],
@@ -312,6 +314,7 @@ describe('GameRuntime knockout mission targeting', () => {
         createCollectionEntry(lockedTarget, { unlocked: false, level: 0 }),
       ],
       lockedKnockoutTargetCritterId: null,
+    lockedDamageTargetCritterId: null,
     };
     const runtime = createRuntimeHarness({
       critters: [attacker, lockedTarget, opponent],
@@ -364,6 +367,7 @@ describe('GameRuntime knockout mission targeting', () => {
         createCollectionEntry(unlockedTarget, { unlocked: true, level: 1 }),
       ],
       lockedKnockoutTargetCritterId: 2,
+      lockedDamageTargetCritterId: null,
     };
     const runtime = createRuntimeHarness({
       critters: [attacker, unlockedTarget, opponent],
@@ -424,6 +428,7 @@ describe('GameRuntime knockout mission targeting', () => {
         }),
       ],
       lockedKnockoutTargetCritterId: null,
+    lockedDamageTargetCritterId: null,
     };
     const runtime = createRuntimeHarness({
       critters: [attacker, opponent],
@@ -485,6 +490,7 @@ describe('GameRuntime knockout mission targeting', () => {
         }),
       ],
       lockedKnockoutTargetCritterId: null,
+    lockedDamageTargetCritterId: null,
     };
     const runtime = createRuntimeHarness({
       critters: [attacker, opponent],

@@ -1,5 +1,10 @@
 import { computeCritterDerivedProgress } from '@/game/critters/schema';
-import type { EquipmentEffectDefinition, EquipmentEffectModifier } from '@/game/equipmentEffects/types';
+import type { EquipmentEffectDefinition } from '@/game/equipmentEffects/types';
+import {
+  resolveEquipmentEffectIdsForItem,
+  resolveEquipmentEffectInstancesForItem,
+  type EquipmentEffectInstance,
+} from '@/game/equipmentEffects/resolver';
 import type { GameItemDefinition } from '@/game/items/types';
 import type { SkillDefinition, SkillEffectAttachment, SkillEffectType, SkillTargetKindDamage, SkillTargetKindSupport } from '@/game/skills/types';
 import {
@@ -10,6 +15,12 @@ import {
   resolveRequestedSkillRecoilAmount,
   resolveSkillEffectAttachmentsForRuntime,
 } from '@/game/battle/damageAndEffects';
+import {
+  clampUnitInterval,
+  resolveStunSpeedMultiplier,
+  resolveToxicTickDamage,
+  sanitizeStatusSource,
+} from '@/game/battle/statusConditions';
 import { rollGuard } from '@/game/battle/guard';
 import { resolveEffectiveSpeed as resolveEffectiveSpeedShared, resolveSkillPriority as resolveSkillPriorityShared } from '@/game/battle/ordering';
 import { buildDuelCatalogIndexes } from '@/duel/squadSchema';
@@ -164,7 +175,7 @@ function buildBattleCritterState(
   }
   const derived = computeCritterDerivedProgress(critter, member.level);
   const baseStats = derived.effectiveStats;
-  const equipmentEffects = collectEquipmentEffects(member.equippedItems, indexes.itemById, indexes.equipmentEffectById);
+  const equipmentEffects = collectEquipmentEffectInstances(member.equippedItems, indexes.itemById, indexes.equipmentEffectById);
   const adjustedStats = applyEquipmentEffectsToStats(baseStats, equipmentEffects);
   const equipmentDefensePositiveBonus = Math.max(
     0,
@@ -204,11 +215,18 @@ function buildBattleCritterState(
     activeEffectSourceById: {},
     activeEffectValueById: {},
     equipmentEffectIds,
+    equipmentEffectInstances: equipmentEffects.map((effect) => ({ ...effect })),
     equippedItemIds,
     equipmentEffectSourceById,
     equipmentDefensePositiveBonus,
     pendingCritChanceBonus: 0,
+    persistentStatus: null,
+    flinch: null,
     persistentHeal: null,
+    actedThisTurn: false,
+    firstActionableTurnNumber: 1,
+    damageSkillUseCountSinceSwitchIn: 0,
+    skillUseCountBySkillId: {},
     consecutiveSuccessfulGuardCount: 0,
   };
 }
@@ -225,8 +243,7 @@ function collectEquipmentEffectIdsAndSources(
     if (!item || item.category !== 'equipment') {
       continue;
     }
-    const config = item.effectConfig as { equipmentEffectIds?: string[] };
-    const ids = Array.isArray(config.equipmentEffectIds) ? config.equipmentEffectIds : [];
+    const ids = resolveEquipmentEffectIdsForItem(item, equipmentEffectById);
     const itemName = item.name?.trim() || item.id;
     for (const effectId of ids) {
       const normalized = effectId?.trim?.();
@@ -244,39 +261,47 @@ function collectEquipmentEffectIdsAndSources(
   return { effectIds, sourceById };
 }
 
-function collectEquipmentEffects(
+function collectEquipmentEffectInstances(
   equippedItems: DuelSquadMember['equippedItems'],
   itemById: Map<string, GameItemDefinition>,
   equipmentEffectById: Map<string, EquipmentEffectDefinition>,
-): EquipmentEffectDefinition[] {
-  const effects: EquipmentEffectDefinition[] = [];
+): EquipmentEffectInstance[] {
+  const effects: EquipmentEffectInstance[] = [];
   for (const equipped of equippedItems) {
     const item = itemById.get(equipped.itemId);
     if (!item || item.category !== 'equipment') {
       continue;
     }
-    const config = item.effectConfig as { equipmentEffectIds?: string[] };
-    const effectIds = Array.isArray(config.equipmentEffectIds) ? config.equipmentEffectIds : [];
-    for (const effectId of effectIds) {
-      const effect = equipmentEffectById.get(effectId);
-      if (!effect) {
-        continue;
-      }
-      effects.push(effect);
-    }
+    effects.push(...resolveEquipmentEffectInstancesForItem(item, equipmentEffectById));
   }
   return effects;
 }
 
 function applyEquipmentEffectsToStats(
   base: { hp: number; attack: number; defense: number; speed: number },
-  effects: EquipmentEffectDefinition[],
+  effects: EquipmentEffectInstance[],
 ): { hp: number; attack: number; defense: number; speed: number } {
   const flat = { hp: 0, attack: 0, defense: 0, speed: 0 };
   const percent = { hp: 0, attack: 0, defense: 0, speed: 0 };
   for (const effect of effects) {
-    for (const modifier of effect.modifiers ?? []) {
-      applyEquipmentModifier(modifier, flat, percent);
+    const stat =
+      effect.effectType === 'atk_buff'
+        ? 'attack'
+        : effect.effectType === 'def_buff'
+          ? 'defense'
+          : effect.effectType === 'speed_buff'
+            ? 'speed'
+            : effect.effectType === 'hp_buff'
+              ? 'hp'
+              : null;
+    if (!stat) {
+      continue;
+    }
+    const value = typeof effect.value === 'number' && Number.isFinite(effect.value) ? effect.value : 0;
+    if (effect.mode === 'flat') {
+      flat[stat] += value;
+    } else {
+      percent[stat] += value;
     }
   }
   return {
@@ -285,18 +310,6 @@ function applyEquipmentEffectsToStats(
     defense: applyStatModifier(base.defense, flat.defense, percent.defense),
     speed: applyStatModifier(base.speed, flat.speed, percent.speed),
   };
-}
-
-function applyEquipmentModifier(
-  modifier: EquipmentEffectModifier,
-  flat: { hp: number; attack: number; defense: number; speed: number },
-  percent: { hp: number; attack: number; defense: number; speed: number },
-): void {
-  if (modifier.mode === 'flat') {
-    flat[modifier.stat] += modifier.value;
-    return;
-  }
-  percent[modifier.stat] += modifier.value;
 }
 
 function applyStatModifier(base: number, flat: number, percent: number): number {
@@ -324,6 +337,18 @@ function submitLeadSelection(state: DuelBattleState, side: DuelSideId, memberInd
   if (state.player.pendingLeadSelection && state.opponent.pendingLeadSelection) {
     state.player.activeMemberIndices = [...state.player.pendingLeadSelection];
     state.opponent.activeMemberIndices = [...state.opponent.pendingLeadSelection];
+    for (const memberIndex of state.player.activeMemberIndices) {
+      const critter = state.player.team[memberIndex];
+      if (critter) {
+        prepareSwitchInTracking(critter, 1);
+      }
+    }
+    for (const memberIndex of state.opponent.activeMemberIndices) {
+      const critter = state.opponent.team[memberIndex];
+      if (critter) {
+        prepareSwitchInTracking(critter, 1);
+      }
+    }
     state.player.pendingLeadSelection = null;
     state.opponent.pendingLeadSelection = null;
     state.phase = 'choose-actions';
@@ -465,6 +490,8 @@ function beginTurnResolution(state: DuelBattleState, context: ResolveContext): v
   const ordered = collectOrderedActions(state, context);
   clearGuardFlags(state.player);
   clearGuardFlags(state.opponent);
+  resetActionAttemptFlags(state.player);
+  resetActionAttemptFlags(state.opponent);
   state.phase = 'resolving-turn';
   state.turnResolution = {
     queue: ordered.map((entry) => ({
@@ -550,6 +577,7 @@ function executeOrderedAction(
   }
 
   if (action.kind === 'forfeit') {
+    actor.actedThisTurn = true;
     const winner: DuelSideId = side === 'player' ? 'opponent' : 'player';
     state.winner = winner;
     state.phase = 'finished';
@@ -561,7 +589,39 @@ function executeOrderedAction(
     return;
   }
 
+  if (actor.flinch && actor.flinch.turnNumber === state.turnNumber) {
+    const source = sanitizeStatusSource(actor.flinch.source, 'an effect');
+    actor.flinch = null;
+    actor.actedThisTurn = true;
+    pushLog(state, {
+      turn: state.turnNumber,
+      kind: 'status',
+      text: `${actor.name} flinched and couldn't act due to ${source}.`,
+    });
+    return;
+  }
+
+  if (actor.persistentStatus?.kind === 'stun') {
+    const failChance = clampUnitInterval(actor.persistentStatus.stunFailChance, 0.25);
+    if (failChance > 0 && context.rng() < failChance) {
+      actor.actedThisTurn = true;
+      const verb =
+        action.kind === 'guard'
+          ? 'guard'
+          : action.kind === 'swap'
+            ? 'swap'
+            : 'use a skill';
+      pushLog(state, {
+        turn: state.turnNumber,
+        kind: 'status',
+        text: `${actor.name} is stunned and cannot ${verb}.`,
+      });
+      return;
+    }
+  }
+
   if (action.kind === 'swap') {
+    actor.actedThisTurn = true;
     performSwap(state, sideState, action.actorMemberIndex, action.benchMemberIndex);
     return;
   }
@@ -571,6 +631,7 @@ function executeOrderedAction(
     actor.consecutiveSuccessfulGuardCount = guard.nextConsecutiveSuccessfulCount;
     actor.guardActive = true;
     actor.guardSucceeded = guard.succeeded;
+    actor.actedThisTurn = true;
     pushLog(state, {
       turn: state.turnNumber,
       kind: 'action',
@@ -582,6 +643,7 @@ function executeOrderedAction(
     return;
   }
 
+  actor.actedThisTurn = true;
   resolveSkillAction(state, sideState, opponentState, action, context);
 }
 
@@ -592,6 +654,7 @@ function finishTurnResolution(state: DuelBattleState, context: ResolveContext): 
   clearGuardFlags(state.player);
   clearGuardFlags(state.opponent);
   if (state.phase !== 'finished') {
+    applyEndTurnStatusConditions(state);
     applyEndTurnPersistentHealing(state, context);
   }
   cleanupFaintedActiveSlots(state.player);
@@ -667,7 +730,11 @@ function resolveActionPriority(
 }
 
 function resolveEffectiveSpeed(critter: DuelBattleCritterState): number {
-  return resolveEffectiveSpeedShared(critter.speed, critter.speedModifier);
+  const base = resolveEffectiveSpeedShared(critter.speed, critter.speedModifier);
+  if (critter.persistentStatus?.kind !== 'stun') {
+    return base;
+  }
+  return Math.max(1, base * resolveStunSpeedMultiplier(critter.persistentStatus));
 }
 
 function performSwap(state: DuelBattleState, side: DuelBattleSideState, actorIndex: number, benchIndex: number): void {
@@ -682,6 +749,7 @@ function performSwap(state: DuelBattleState, side: DuelBattleSideState, actorInd
   }
   side.activeMemberIndices[activeSlot] = benchIndex;
   resetVolatileBattleState(leaving);
+  prepareSwitchInTracking(entering, state.turnNumber + 1);
   pushLog(state, {
     turn: state.turnNumber,
     kind: 'swap',
@@ -703,6 +771,9 @@ function resolveSkillAction(
   const skillId = actor.equippedSkillIds[action.skillSlotIndex];
   const skill = skillId ? context.indexes.skillById.get(skillId) : null;
   const resolvedSkill = skill ?? createFallbackSkill();
+  const resolvedSkillId = typeof resolvedSkill.skill_id === 'string' && resolvedSkill.skill_id.trim().length > 0
+    ? resolvedSkill.skill_id.trim()
+    : (skillId ?? createFallbackSkill().skill_id);
   const targetIndices = resolveExecutionTargetMemberIndices(
     state,
     side.id,
@@ -732,6 +803,7 @@ function resolveSkillAction(
       kind: 'action',
       text: `${side.label}'s ${actor.name} used ${resolvedSkill.skill_name}, but no target was available.`,
     });
+    recordSkillUsage(actor, resolvedSkillId, true);
     return;
   }
 
@@ -753,13 +825,11 @@ function resolveSkillAction(
   );
   const attachmentResolution = resolveAppliedSkillAttachments(appliedAttachments, skillEffectLookup);
 
-  let totalDealtDamage = 0;
   for (const target of targets) {
     let dealtDamage = 0;
     if (resolvedSkill.type === 'damage') {
       dealtDamage = applySkillDamage(state, actor, target, resolvedSkill, context);
     }
-    totalDealtDamage += dealtDamage;
     applySkillHealing(state, actor, target, resolvedSkill, dealtDamage);
     applySkillEffectsFromResolution(
       state,
@@ -770,7 +840,17 @@ function resolveSkillAction(
       attachmentResolution,
       dealtDamage,
     );
+    applyOnHitStatusEffects(
+      state,
+      actor,
+      target,
+      resolvedSkill,
+      context,
+      appliedAttachments,
+      dealtDamage,
+    );
   }
+  recordSkillUsage(actor, resolvedSkillId, resolvedSkill.type === 'damage');
 }
 
 function resolveExecutionTargetMemberIndices(
@@ -840,8 +920,11 @@ function applySkillDamage(
   skill: SkillDefinition,
   context: ResolveContext,
 ): number {
-  const consumedCritBonus = Math.max(0, Math.min(1, attacker.pendingCritChanceBonus ?? 0));
-  if (consumedCritBonus > 0) {
+  const consumedCritBonus = Math.max(
+    0,
+    Math.min(1, (attacker.pendingCritChanceBonus ?? 0) + getEquipmentCritChanceBonus(attacker)),
+  );
+  if ((attacker.pendingCritChanceBonus ?? 0) > 0) {
     attacker.pendingCritChanceBonus = 0;
   }
   const result = computeBattleDamage({
@@ -884,6 +967,8 @@ function applySkillDamage(
   });
   if (defender.currentHp <= 0 && !defender.fainted) {
     defender.fainted = true;
+    defender.flinch = null;
+    defender.persistentStatus = null;
     clearPersistentHealState(defender);
     pushLog(state, {
       turn: state.turnNumber,
@@ -1062,12 +1147,142 @@ function applySkillEffectsFromResolution(
     });
     if (actor.currentHp <= 0 && !actor.fainted) {
       actor.fainted = true;
+      actor.flinch = null;
+      actor.persistentStatus = null;
       clearPersistentHealState(actor);
       pushLog(state, {
         turn: state.turnNumber,
         kind: 'knockout',
         text: `${actor.name} was knocked out.`,
       });
+    }
+  }
+}
+
+function applyOnHitStatusEffects(
+  state: DuelBattleState,
+  actor: DuelBattleCritterState,
+  target: DuelBattleCritterState,
+  skill: SkillDefinition,
+  context: ResolveContext,
+  appliedSkillAttachments: SkillEffectAttachment[],
+  dealtDamage: number,
+): void {
+  if (skill.type !== 'damage' || dealtDamage <= 0 || target.fainted || target.currentHp <= 0) {
+    return;
+  }
+  const skillEffectLookup = Object.fromEntries(context.indexes.skillEffectById.entries());
+
+  const applyToxic = (sourceName: string, potencyBase: number, potencyPerTurn: number): void => {
+    if (target.persistentStatus) {
+      return;
+    }
+    target.persistentStatus = {
+      kind: 'toxic',
+      potencyBase: clampUnitInterval(potencyBase, 0.05),
+      potencyPerTurn: clampUnitInterval(potencyPerTurn, 0.05),
+      turnCount: 0,
+      source: sanitizeStatusSource(sourceName, skill.skill_name),
+    };
+    pushLog(state, {
+      turn: state.turnNumber,
+      kind: 'status',
+      text: `${target.name} was afflicted with Toxic!`,
+    });
+  };
+
+  const applyStun = (sourceName: string, stunFailChance: number, stunSlowdown: number): void => {
+    if (target.persistentStatus) {
+      return;
+    }
+    target.persistentStatus = {
+      kind: 'stun',
+      stunFailChance: clampUnitInterval(stunFailChance, 0.25),
+      stunSlowdown: clampUnitInterval(stunSlowdown, 0.5),
+      source: sanitizeStatusSource(sourceName, skill.skill_name),
+    };
+    pushLog(state, {
+      turn: state.turnNumber,
+      kind: 'status',
+      text: `${target.name} was stunned!`,
+    });
+  };
+
+  const applyFlinch = (sourceName: string): void => {
+    if (target.actedThisTurn) {
+      return;
+    }
+    target.flinch = {
+      turnNumber: state.turnNumber,
+      source: sanitizeStatusSource(sourceName, skill.skill_name),
+    };
+  };
+
+  const canApplyFirstUseFlinch = (firstUseOnlyRaw: unknown, firstOverallOnlyRaw: unknown, priorUseCountRaw: unknown): boolean => {
+    const firstUseOnly = firstUseOnlyRaw === true;
+    if (!firstUseOnly) {
+      return true;
+    }
+    const priorUseCount = typeof priorUseCountRaw === 'number' && Number.isFinite(priorUseCountRaw)
+      ? Math.max(0, Math.floor(priorUseCountRaw))
+      : 0;
+    if (priorUseCount > 0) {
+      return false;
+    }
+    const firstOverallOnly = firstOverallOnlyRaw === true;
+    if (firstOverallOnly && state.turnNumber !== Math.max(1, Math.floor(actor.firstActionableTurnNumber))) {
+      return false;
+    }
+    return true;
+  };
+
+  for (const attachment of appliedSkillAttachments) {
+    const effect = skillEffectLookup[attachment.effectId];
+    if (!effect) {
+      continue;
+    }
+    if (effect.effect_type === 'inflict_toxic') {
+      applyToxic(skill.skill_name, attachment.toxicPotencyBase ?? 0.05, attachment.toxicPotencyPerTurn ?? 0.05);
+    } else if (effect.effect_type === 'inflict_stun') {
+      applyStun(skill.skill_name, attachment.stunFailChance ?? 0.25, attachment.stunSlowdown ?? 0.5);
+    } else if (effect.effect_type === 'flinch_chance') {
+      const skillUseCount = actor.skillUseCountBySkillId[skill.skill_id] ?? 0;
+      if (!canApplyFirstUseFlinch(attachment.flinchFirstUseOnly, attachment.flinchFirstOverallOnly, skillUseCount)) {
+        continue;
+      }
+      applyFlinch(skill.skill_name);
+    }
+  }
+
+  for (const effect of actor.equipmentEffectInstances ?? []) {
+    if (
+      effect.effectType !== 'apply_toxic' &&
+      effect.effectType !== 'apply_stun' &&
+      effect.effectType !== 'flinch_chance'
+    ) {
+      continue;
+    }
+    if (
+      effect.effectType === 'flinch_chance' &&
+      !canApplyFirstUseFlinch(
+        effect.flinchFirstUseOnly,
+        effect.flinchFirstOverallOnly,
+        actor.damageSkillUseCountSinceSwitchIn,
+      )
+    ) {
+      continue;
+    }
+    const procChance = clampUnitInterval(effect.procChance ?? 0.2, 0.2);
+    if (procChance <= 0 || context.rng() >= procChance) {
+      continue;
+    }
+    const sourceName = sanitizeStatusSource(actor.equipmentEffectSourceById[effect.effectId], effect.effectId);
+    if (effect.effectType === 'apply_toxic') {
+      applyToxic(sourceName, effect.toxicPotencyBase ?? 0.05, effect.toxicPotencyPerTurn ?? 0.05);
+    } else if (effect.effectType === 'apply_stun') {
+      applyStun(sourceName, effect.stunFailChance ?? 0.25, effect.stunSlowdown ?? 0.5);
+    } else {
+      applyFlinch(sourceName);
     }
   }
 }
@@ -1121,24 +1336,33 @@ function clearPersistentHealState(critter: DuelBattleCritterState): void {
 
 function getEquipmentPersistentHealConfigs(
   critter: DuelBattleCritterState,
-  equipmentEffectById: Map<string, EquipmentEffectDefinition>,
 ): Array<{ mode: 'flat' | 'percent_max_hp'; value: number }> {
   const configs: Array<{ mode: 'flat' | 'percent_max_hp'; value: number }> = [];
-  for (const effectId of critter.equipmentEffectIds ?? []) {
-    const effect = equipmentEffectById.get(effectId);
-    if (!effect?.persistentHeal) {
+  for (const effect of critter.equipmentEffectInstances ?? []) {
+    if (effect.effectType !== 'persistent_heal') {
       continue;
     }
-    const mode = effect.persistentHeal.mode === 'flat' ? 'flat' : 'percent_max_hp';
+    const mode = effect.persistentHealMode === 'flat' ? 'flat' : 'percent_max_hp';
     const value = mode === 'flat'
-      ? Math.max(1, Math.floor(effect.persistentHeal.value))
-      : Math.max(0, Math.min(1, effect.persistentHeal.value));
+      ? Math.max(1, Math.floor(effect.persistentHealValue ?? 1))
+      : Math.max(0, Math.min(1, effect.persistentHealValue ?? 0));
     if (value <= 0) {
       continue;
     }
     configs.push({ mode, value });
   }
   return configs;
+}
+
+function getEquipmentCritChanceBonus(critter: DuelBattleCritterState): number {
+  let total = 0;
+  for (const effect of critter.equipmentEffectInstances ?? []) {
+    if (effect.effectType !== 'crit_buff') {
+      continue;
+    }
+    total += Math.max(0, Math.min(1, effect.critChanceBonus ?? 0));
+  }
+  return Math.max(0, Math.min(1, total));
 }
 
 function resolvePersistentHealAmount(
@@ -1149,6 +1373,56 @@ function resolvePersistentHealAmount(
     return Math.max(1, Math.floor(heal.value));
   }
   return Math.max(0, Math.floor(Math.max(1, maxHp) * Math.max(0, Math.min(1, heal.value))));
+}
+
+function applyEndTurnStatusConditions(state: DuelBattleState): void {
+  const sides: DuelBattleSideState[] = [state.player, state.opponent];
+  for (const side of sides) {
+    for (const entry of side.team) {
+      entry.flinch = null;
+    }
+  }
+  for (const side of sides) {
+    for (const memberIndex of getAliveActiveIndices(side)) {
+      const critter = side.team[memberIndex];
+      if (!critter || critter.fainted || critter.currentHp <= 0) {
+        continue;
+      }
+      if (critter.persistentStatus?.kind !== 'toxic') {
+        continue;
+      }
+      const toxicDamage = resolveToxicTickDamage(critter.maxHp, critter.persistentStatus).damage;
+      if (toxicDamage <= 0) {
+        critter.persistentStatus.turnCount = Math.max(0, Math.floor(critter.persistentStatus.turnCount) + 1);
+        continue;
+      }
+      const beforeHp = critter.currentHp;
+      critter.currentHp = Math.max(0, critter.currentHp - toxicDamage);
+      const dealtDamage = Math.max(0, beforeHp - critter.currentHp);
+      if (dealtDamage > 0) {
+        pushLog(state, {
+          turn: state.turnNumber,
+          kind: 'damage',
+          text: `${critter.name} took ${dealtDamage} damage from Toxic.`,
+        });
+      }
+      if (critter.currentHp <= 0) {
+        critter.fainted = true;
+        critter.flinch = null;
+        critter.persistentStatus = null;
+        clearPersistentHealState(critter);
+        pushLog(state, {
+          turn: state.turnNumber,
+          kind: 'knockout',
+          text: `${critter.name} was knocked out.`,
+        });
+        continue;
+      }
+      if (critter.persistentStatus?.kind === 'toxic') {
+        critter.persistentStatus.turnCount = Math.max(0, Math.floor(critter.persistentStatus.turnCount) + 1);
+      }
+    }
+  }
 }
 
 function applyEndTurnPersistentHealing(state: DuelBattleState, context: ResolveContext): void {
@@ -1167,7 +1441,7 @@ function applyEndTurnPersistentHealing(state: DuelBattleState, context: ResolveC
           clearPersistentHealState(critter);
         }
       }
-      const equipmentPersistentHeals = getEquipmentPersistentHealConfigs(critter, context.indexes.equipmentEffectById);
+      const equipmentPersistentHeals = getEquipmentPersistentHealConfigs(critter);
       for (const healConfig of equipmentPersistentHeals) {
         requestedHeal += resolvePersistentHealAmount(critter.maxHp, healConfig);
       }
@@ -1327,8 +1601,9 @@ function submitReplacementSelection(
   }
 
   const requiredActiveCount = getRequiredLeadCount(state.format);
-  applyReplacementSelection(state.player, requiredActiveCount);
-  applyReplacementSelection(state.opponent, requiredActiveCount);
+  const nextTurnNumber = state.turnNumber + 1;
+  applyReplacementSelection(state.player, requiredActiveCount, nextTurnNumber);
+  applyReplacementSelection(state.opponent, requiredActiveCount, nextTurnNumber);
   state.player.pendingReplacements = null;
   state.opponent.pendingReplacements = null;
 
@@ -1380,7 +1655,11 @@ function validateReplacementSelection(
   return { ok: true };
 }
 
-function applyReplacementSelection(side: DuelBattleSideState, requiredActiveCount: number): void {
+function applyReplacementSelection(
+  side: DuelBattleSideState,
+  requiredActiveCount: number,
+  firstActionableTurnNumber: number,
+): void {
   if (!side.pendingReplacements || side.pendingReplacements.length === 0) {
     return;
   }
@@ -1401,6 +1680,7 @@ function applyReplacementSelection(side: DuelBattleSideState, requiredActiveCoun
     if (!critter || critter.fainted || critter.currentHp <= 0) {
       continue;
     }
+    prepareSwitchInTracking(critter, firstActionableTurnNumber);
     side.activeMemberIndices.push(memberIndex);
     activeSet.add(memberIndex);
   }
@@ -1656,6 +1936,12 @@ function clearGuardFlags(side: DuelBattleSideState): void {
   });
 }
 
+function resetActionAttemptFlags(side: DuelBattleSideState): void {
+  side.team.forEach((entry) => {
+    entry.actedThisTurn = false;
+  });
+}
+
 function resetVolatileBattleState(critter: DuelBattleCritterState): void {
   clearPersistentHealState(critter);
   critter.attackModifier = 1;
@@ -1663,11 +1949,47 @@ function resetVolatileBattleState(critter: DuelBattleCritterState): void {
   critter.speedModifier = 1;
   critter.guardActive = false;
   critter.guardSucceeded = false;
+  critter.flinch = null;
   critter.activeEffectIds = [];
   critter.activeEffectSourceById = {};
   critter.activeEffectValueById = {};
   critter.pendingCritChanceBonus = 0;
+  critter.actedThisTurn = false;
   critter.consecutiveSuccessfulGuardCount = 0;
+  critter.damageSkillUseCountSinceSwitchIn = 0;
+  critter.skillUseCountBySkillId = {};
+  critter.firstActionableTurnNumber = 1;
+}
+
+function prepareSwitchInTracking(critter: DuelBattleCritterState, firstActionableTurnNumber: number): void {
+  critter.flinch = null;
+  critter.actedThisTurn = false;
+  critter.damageSkillUseCountSinceSwitchIn = 0;
+  critter.skillUseCountBySkillId = {};
+  critter.firstActionableTurnNumber = Math.max(1, Math.floor(firstActionableTurnNumber));
+}
+
+function recordSkillUsage(
+  critter: DuelBattleCritterState,
+  skillId: string,
+  isDamageSkill: boolean,
+): void {
+  const key = typeof skillId === 'string' ? skillId.trim() : '';
+  if (!key) {
+    return;
+  }
+  const priorRaw = critter.skillUseCountBySkillId[key];
+  const prior = typeof priorRaw === 'number' && Number.isFinite(priorRaw)
+    ? Math.max(0, Math.floor(priorRaw))
+    : 0;
+  critter.skillUseCountBySkillId[key] = prior + 1;
+  if (!isDamageSkill) {
+    return;
+  }
+  const priorDamage = Number.isFinite(critter.damageSkillUseCountSinceSwitchIn)
+    ? Math.max(0, Math.floor(critter.damageSkillUseCountSinceSwitchIn))
+    : 0;
+  critter.damageSkillUseCountSinceSwitchIn = priorDamage + 1;
 }
 
 function getRequiredLeadCount(format: DuelBattleFormat): number {

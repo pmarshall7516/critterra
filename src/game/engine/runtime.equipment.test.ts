@@ -4,7 +4,7 @@ import type { CritterDefinition, PlayerCritterCollectionEntry, PlayerCritterProg
 import { PLAYER_CRITTER_PROGRESS_VERSION } from '@/game/critters/types';
 import type { GameItemDefinition, PlayerItemInventory } from '@/game/items/types';
 import { PLAYER_ITEM_INVENTORY_VERSION } from '@/game/items/types';
-import type { EquipmentEffectDefinition } from '@/game/equipmentEffects/types';
+import type { EquipmentEffectAttachment, EquipmentEffectDefinition } from '@/game/equipmentEffects/types';
 
 const EMPTY_STATS = { hp: 0, attack: 0, defense: 0, speed: 0 } as const;
 
@@ -72,7 +72,12 @@ function createEquipmentItem(input: {
   name: string;
   equipSize: number;
   effectIds?: string[];
+  effectAttachments?: EquipmentEffectAttachment[];
 }): GameItemDefinition {
+  const attachmentIds = (input.effectAttachments ?? []).map((entry) => entry.effectId);
+  const effectIds = [...(input.effectIds ?? []), ...attachmentIds].filter(
+    (entry, index, values) => typeof entry === 'string' && entry.trim().length > 0 && values.indexOf(entry) === index,
+  );
   return {
     id: input.id,
     name: input.name,
@@ -84,12 +89,24 @@ function createEquipmentItem(input: {
     effectType: 'equip_effect',
     effectConfig: {
       equipSize: input.equipSize,
-      equipmentEffectIds: input.effectIds ?? [],
+      ...(input.effectAttachments && input.effectAttachments.length > 0
+        ? { equipmentEffectAttachments: input.effectAttachments }
+        : {}),
+      equipmentEffectIds: effectIds,
     },
     consumable: false,
     maxStack: 99,
     isActive: true,
     starterGrantAmount: 0,
+  };
+}
+
+function sequenceRng(values: number[], fallback = 0.5): () => number {
+  let index = 0;
+  return () => {
+    const value = values[index];
+    index += 1;
+    return typeof value === 'number' ? value : fallback;
   };
 }
 
@@ -120,6 +137,7 @@ function createRuntimeHarness(input: {
     squad: [...input.squad],
     collection: input.collection,
     lockedKnockoutTargetCritterId: null,
+    lockedDamageTargetCritterId: null,
   } as PlayerCritterProgress;
   runtime.itemDatabase = input.items;
   runtime.itemById = input.items.reduce<Record<string, GameItemDefinition>>((registry, item) => {
@@ -137,6 +155,7 @@ function createRuntimeHarness(input: {
   );
   runtime.skillLookupById = {};
   runtime.skillEffectLookupById = {};
+  runtime.elementChart = [];
   runtime.markProgressDirty = vi.fn();
   runtime.showMessage = vi.fn();
   runtime.sideStoryMissions = {};
@@ -438,6 +457,7 @@ describe('GameRuntime equipment integration', () => {
       {
         effect_id: 'def-flat-3',
         effect_name: 'Defense +3',
+        effect_type: 'def_buff',
         description: 'Raises defense by 3.',
         iconUrl: 'https://example.com/def-icon.png',
         modifiers: [{ stat: 'defense', mode: 'flat', value: 3 }],
@@ -445,6 +465,7 @@ describe('GameRuntime equipment integration', () => {
       {
         effect_id: 'hp-percent-20',
         effect_name: 'HP +20%',
+        effect_type: 'hp_buff',
         description: 'Raises HP by 20%.',
         modifiers: [{ stat: 'hp', mode: 'percent', value: 0.2 }],
       },
@@ -490,6 +511,149 @@ describe('GameRuntime equipment integration', () => {
     expect((firstSlot.equipmentSlots[0] as any)?.effectIconUrls ?? []).toContain('https://example.com/def-icon.png');
   });
 
+  it('applies attachment-defined stat buffs and stacks matching template IDs across equipped items', () => {
+    const critter = createCritter({ id: 1, name: 'Buddo', level: 2, extraEquipSlots: 1 });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [
+        createProgressEntry(critter, {
+          level: 2,
+          equippedEquipmentAnchors: [
+            { itemId: 'def-band-1', slotIndex: 0 },
+            { itemId: 'def-band-2', slotIndex: 1 },
+          ],
+        }),
+      ],
+      squad: [1, null, null, null, null, null, null, null],
+      items: [
+        createEquipmentItem({
+          id: 'def-band-1',
+          name: 'Defense Band I',
+          equipSize: 1,
+          effectAttachments: [{ effectId: 'equip-def-buff', mode: 'flat', value: 2 }],
+        }),
+        createEquipmentItem({
+          id: 'def-band-2',
+          name: 'Defense Band II',
+          equipSize: 1,
+          effectAttachments: [{ effectId: 'equip-def-buff', mode: 'percent', value: 0.25 }],
+        }),
+      ],
+      itemInventory: inventory([
+        { itemId: 'def-band-1', quantity: 1 },
+        { itemId: 'def-band-2', quantity: 1 },
+      ]),
+      equipmentEffects: [
+        {
+          effect_id: 'equip-def-buff',
+          effect_name: 'Equip Def Buff',
+          effect_type: 'def_buff',
+          description: '',
+          modifiers: [{ stat: 'defense', mode: 'flat', value: 1 }],
+        },
+      ],
+    });
+
+    const team = (runtime as any).buildPlayerBattleTeam() as Array<{
+      defense: number;
+      equipmentEffectIds: string[];
+      equipmentEffectInstances: Array<{ effectId: string; mode?: string; value?: number }>;
+    }>;
+    expect(team[0]?.defense).toBe(13);
+    expect(team[0]?.equipmentEffectIds).toEqual(['equip-def-buff']);
+    expect(team[0]?.equipmentEffectInstances).toHaveLength(2);
+    expect(team[0]?.equipmentEffectInstances.map((entry) => entry.mode).sort()).toEqual(['flat', 'percent']);
+  });
+
+  it('applies equipment crit bonus on every attack without consuming the equipment bonus', () => {
+    const attacker = createCritter({ id: 1, name: 'Buddo', level: 1 });
+    const defender = createCritter({ id: 2, name: 'Target', level: 1 });
+
+    const buildRuntime = (withCritAttachment: boolean): GameRuntime & { [key: string]: any } => {
+      const runtime = createRuntimeHarness({
+        critters: [attacker, defender],
+        collection: [
+          createProgressEntry(attacker, {
+            level: 1,
+            equippedEquipmentAnchors: withCritAttachment ? [{ itemId: 'crit-charm', slotIndex: 0 }] : [],
+          }),
+          createProgressEntry(defender, { level: 1 }),
+        ],
+        squad: [1, null, null, null, null, null, null, null],
+        items: withCritAttachment
+          ? [
+              createEquipmentItem({
+                id: 'crit-charm',
+                name: 'Crit Charm',
+                equipSize: 1,
+                effectAttachments: [{ effectId: 'equip-crit-buff', critChanceBonus: 1 }],
+              }),
+            ]
+          : [],
+        itemInventory: withCritAttachment ? inventory([{ itemId: 'crit-charm', quantity: 1 }]) : inventory([]),
+        equipmentEffects: [
+          {
+            effect_id: 'equip-crit-buff',
+            effect_name: 'Equip Crit Buff',
+            effect_type: 'crit_buff',
+            description: '',
+            modifiers: [],
+          },
+        ],
+      });
+      (runtime as any).rng = sequenceRng([0.9, 0.5, 0.9, 0.5], 0.5);
+      return runtime;
+    };
+
+    const runTwoAttacks = (runtime: GameRuntime & { [key: string]: any }): [number, number] => {
+      const playerTeam = (runtime as any).buildPlayerBattleTeam();
+      const opponentEntry = {
+        ...playerTeam[0],
+        slotIndex: 0,
+        critterId: defender.id,
+        name: 'Target',
+        currentHp: 999,
+        maxHp: 999,
+        attack: 10,
+        defense: 8,
+        speed: 1,
+        activeEffectIds: [],
+        activeEffectSourceById: {},
+        activeEffectValueById: {},
+        equipmentEffectIds: [],
+        equipmentEffectInstances: [],
+        equipmentEffectSourceById: {},
+        persistentHeal: null,
+        equippedSkillIds: [null, null, null, null],
+      };
+      const battle = {
+        source: { type: 'wild', label: 'Wild Target' },
+        turnNumber: 1,
+        playerTeam,
+        opponentTeam: [opponentEntry],
+        playerActiveIndex: 0,
+        opponentActiveIndex: 0,
+      } as any;
+      const skill = {
+        skill_id: 'jab',
+        skill_name: 'Jab',
+        element: 'normal',
+        type: 'damage',
+        priority: 1,
+        damage: 18,
+      } as const;
+      const first = (runtime as any).executeBattleSkillWithSkill(battle, 'player', skill, 0, false, false).damageToDefender ?? 0;
+      const second = (runtime as any).executeBattleSkillWithSkill(battle, 'player', skill, 0, false, false).damageToDefender ?? 0;
+      return [first, second];
+    };
+
+    const boosted = runTwoAttacks(buildRuntime(true));
+    const baseline = runTwoAttacks(buildRuntime(false));
+    expect(boosted[0]).toBeGreaterThan(baseline[0]);
+    expect(boosted[1]).toBeGreaterThan(baseline[1]);
+    expect(boosted[1]).toBe(boosted[0]);
+  });
+
   it('applies equipment persistent-heal at end of turn for active battlers only while equipped', () => {
     const activeCritter = createCritter({ id: 1, name: 'Buddo', level: 1 });
     const benchCritter = createCritter({ id: 2, name: 'Sprout', level: 1 });
@@ -514,6 +678,13 @@ describe('GameRuntime equipment integration', () => {
           name: 'Regen Charm',
           equipSize: 1,
           effectIds: ['equip-persistent-heal'],
+          effectAttachments: [
+            {
+              effectId: 'equip-persistent-heal',
+              persistentHealMode: 'flat',
+              persistentHealValue: 3,
+            },
+          ],
         }),
       ],
       itemInventory: inventory([{ itemId: 'regen-charm', quantity: 2 }]),
@@ -521,6 +692,7 @@ describe('GameRuntime equipment integration', () => {
         {
           effect_id: 'equip-persistent-heal',
           effect_name: 'Equip Persistent Heal',
+          effect_type: 'persistent_heal',
           description: 'End-turn recovery while equipped.',
           modifiers: [],
           persistentHeal: {
@@ -593,6 +765,7 @@ describe('GameRuntime equipment integration', () => {
         {
           effect_id: 'def-flat-2',
           effect_name: 'Defense +2',
+          effect_type: 'def_buff',
           description: '+2 Defense',
           iconUrl: 'https://example.com/def-flat-2.png',
           modifiers: [{ stat: 'defense', mode: 'flat', value: 2 }],
@@ -602,7 +775,11 @@ describe('GameRuntime equipment integration', () => {
 
     const team = (runtime as any).buildPlayerBattleTeam();
     const snapshotEntry = (runtime as any).mapBattleTeamEntryToSnapshot(team[0]);
-    expect(snapshotEntry.activeEffectDescriptions).toContain('+2 Defense (Basic Helmet)');
+    expect(
+      snapshotEntry.activeEffectDescriptions.some(
+        (entry: string) => entry.includes('+2 Defense') && entry.includes('Basic Helmet'),
+      ),
+    ).toBe(true);
   });
 
   it('appends skill source name to battle effect icon tooltips', () => {

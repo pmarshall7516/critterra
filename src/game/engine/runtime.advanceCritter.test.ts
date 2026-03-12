@@ -74,6 +74,7 @@ function createRuntime(progressEntry: PlayerCritterCollectionEntry): any {
     squad: [critter.id, null, null, null, null, null, null, null],
     collection: [progressEntry],
     lockedKnockoutTargetCritterId: null,
+    lockedDamageTargetCritterId: null,
   } as PlayerCritterProgress;
   runtime.resolveEquipmentStateForCritter = vi.fn(() => ({ anchors: [], slots: [] }));
   runtime.getEquipmentEffectsFromAnchors = vi.fn(() => []);

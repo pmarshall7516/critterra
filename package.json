@@ -13,7 +13,9 @@
     "db:migrate-skill-effect-attachments": "node scripts/migrate-skill-effect-attachments.mjs",
     "db:migrate-skill-effects-v2": "node scripts/migrate-skill-effects-v2.mjs",
     "db:migrate-persistent-heal-effects": "node scripts/migrate-persistent-heal-effects.mjs",
-    "db:migrate-game-elements": "node scripts/migrate-game-elements.mjs"
+    "db:migrate-equipment-effect-templates": "node tools/migrate-equipment-effect-templates.mjs",
+    "db:migrate-game-elements": "node scripts/migrate-game-elements.mjs",
+    "db:migrate-starter-evolution-balance": "node scripts/migrate-starter-evolution-balance-001-009.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

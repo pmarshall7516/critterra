@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { sanitizeCritterDatabase, sanitizeCritterDefinition } from '@/game/critters/schema';
 import { sanitizeItemCatalog } from '@/game/items/schema';
 import { sanitizeSkillEffectLibrary, sanitizeSkillLibrary } from '@/game/skills/schema';
+import { sanitizeEquipmentEffectLibrary } from '@/game/equipmentEffects/schema';
 import {
   CRITTER_ABILITY_KINDS,
   CRITTER_ELEMENTS,
@@ -56,6 +57,12 @@ interface SkillsListResponse {
   error?: string;
 }
 
+interface EquipmentEffectsListResponse {
+  ok: boolean;
+  equipmentEffects?: unknown;
+  error?: string;
+}
+
 interface SkillOption {
   id: string;
   name: string;
@@ -64,6 +71,12 @@ interface SkillOption {
   healMode?: SkillHealMode;
   healValue?: number;
   effectDescriptions?: string[];
+}
+
+interface EffectTemplateOption {
+  id: string;
+  name: string;
+  source: 'skill' | 'equipment';
 }
 
 function formatImmediateSkillHealTooltip(opt: SkillOption): string | null {
@@ -157,6 +170,19 @@ interface MissionDraft {
   requiredEquippedItemIds: string[];
   requiredPaymentItemId: string;
   requiredHealingItemIds: string[];
+  useSkillMode: 'any' | 'element' | 'specific';
+  useSkillElements: string[];
+  useSkillIds: string[];
+  dealDamageMode: 'any' | 'element';
+  dealDamageElements: string[];
+  // Effect-buffed actions missions
+  skillEffectTemplateIds: string[];
+  equipEffectTemplateIds: string[];
+  effectBuffMode: 'knockouts' | 'deal_damage' | 'damage_absorbed';
+  effectBuffDescription: string;
+  // Absorb damage mission
+  absorbMode: 'knockout' | 'damage' | 'element';
+  absorbDamageElements: string[];
 }
 
 interface LevelDraft {
@@ -221,6 +247,8 @@ export function CritterTool() {
   const [skillSearchInputs, setSkillSearchInputs] = useState<Record<string, string>>({});
   const [skillDropdownOpen, setSkillDropdownOpen] = useState<Record<string, boolean>>({});
   const skillSearchInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const [effectTemplates, setEffectTemplates] = useState<EffectTemplateOption[]>([]);
+  const [missionEffectTemplateSearchInput, setMissionEffectTemplateSearchInput] = useState('');
 
   const sortedCritters = useMemo(() => [...critters].sort((left, right) => left.id - right.id), [critters]);
   const filteredCritters = useMemo(() => {
@@ -431,11 +459,41 @@ export function CritterTool() {
         })
         .filter((x) => x.id.length > 0);
       setSkillList(list);
+      const skillEffectOptions: EffectTemplateOption[] = skillEffects.map((effect) => ({
+        id: effect.effect_id,
+        name: effect.effect_name ?? effect.effect_id,
+        source: 'skill',
+      }));
+      setEffectTemplates((prev) => {
+        const withoutSkill = prev.filter((entry) => entry.source !== 'skill');
+        return [...withoutSkill, ...skillEffectOptions];
+      });
     } catch (err) {
       setSkillList([]);
       setStatus(
         err instanceof Error ? err.message : 'Skills could not be loaded. Check database connection and try Reload.',
       );
+    }
+  };
+
+  const loadEquipmentEffects = async () => {
+    try {
+      const result = await apiFetchJson<EquipmentEffectsListResponse>('/api/admin/equipment-effects/list');
+      if (!result.ok) {
+        throw new Error(result.error ?? result.data?.error ?? 'Unable to load equipment effects.');
+      }
+      const loaded = sanitizeEquipmentEffectLibrary(result.data?.equipmentEffects);
+      const equipmentEffectOptions: EffectTemplateOption[] = loaded.map((effect) => ({
+        id: effect.effect_id,
+        name: effect.effect_name ?? effect.effect_id,
+        source: 'equipment',
+      }));
+      setEffectTemplates((prev) => {
+        const withoutEquipment = prev.filter((entry) => entry.source !== 'equipment');
+        return [...withoutEquipment, ...equipmentEffectOptions];
+      });
+    } catch {
+      setEffectTemplates((prev) => prev.filter((entry) => entry.source !== 'equipment'));
     }
   };
 
@@ -445,6 +503,7 @@ export function CritterTool() {
     void loadFlags();
     void loadItems();
     void loadSkills();
+    void loadEquipmentEffects();
     void (async () => {
       const loaded = await loadAdminGameElements();
       if (loaded.length > 0) {
@@ -1233,6 +1292,17 @@ export function CritterTool() {
                             requiredEquippedItemIds: [],
                             requiredPaymentItemId: '',
                             requiredHealingItemIds: [],
+                            useSkillMode: 'any',
+                            useSkillElements: [],
+                            useSkillIds: [],
+                            dealDamageMode: 'any',
+                            dealDamageElements: [],
+                            skillEffectTemplateIds: [],
+                            equipEffectTemplateIds: [],
+                            effectBuffMode: 'deal_damage',
+                            effectBuffDescription: '',
+                            absorbMode: 'damage',
+                            absorbDamageElements: [],
                           },
                         ],
                       }))
@@ -1296,10 +1366,21 @@ export function CritterTool() {
                                 nextType === 'pay_item' ? entry.requiredPaymentItemId : '',
                               requiredHealingItemIds:
                                 nextType === 'heal_critter' ? entry.requiredHealingItemIds : [],
+                              useSkillMode: nextType === 'use_skill' ? (entry.useSkillMode ?? 'any') : 'any',
+                              useSkillElements: nextType === 'use_skill' ? (entry.useSkillElements ?? []) : [],
+                              useSkillIds: nextType === 'use_skill' ? (entry.useSkillIds ?? []) : [],
+                              dealDamageMode: nextType === 'deal_damage' ? (entry.dealDamageMode ?? 'any') : 'any',
+                              dealDamageElements:
+                                nextType === 'deal_damage' ? (entry.dealDamageElements ?? []) : [],
+                              absorbMode: nextType === 'absorb_damage' ? (entry.absorbMode ?? 'damage') : 'damage',
+                              absorbDamageElements:
+                                nextType === 'absorb_damage' ? (entry.absorbDamageElements ?? []) : [],
                             }));
                           }}
                         >
-                          {CRITTER_MISSION_TYPES.map((missionType) => (
+                          {CRITTER_MISSION_TYPES.filter(
+                            (t) => t !== 'effect_buffed_actions',
+                          ).map((missionType) => (
                             <option key={missionType} value={missionType}>
                               {getMissionTypeLabel(missionType)}
                             </option>
@@ -1320,6 +1401,336 @@ export function CritterTool() {
                           }
                         />
                       </label>
+
+                      {mission.type === 'use_skill' && (
+                        <>
+                          <label>
+                            Mode
+                            <select
+                              value={mission.useSkillMode ?? 'any'}
+                              onChange={(event) => {
+                                const next =
+                                  event.target.value === 'element' || event.target.value === 'specific'
+                                    ? event.target.value
+                                    : 'any';
+                                updateMissionRow(levelIndex, missionIndex, (entry) => ({
+                                  ...entry,
+                                  useSkillMode: next,
+                                  useSkillElements: next === 'element' ? entry.useSkillElements : [],
+                                  useSkillIds: next === 'specific' ? entry.useSkillIds : [],
+                                }));
+                              }}
+                            >
+                              <option value="any">Any Skill</option>
+                              <option value="element">Element(s)</option>
+                              <option value="specific">Specific Skill(s)</option>
+                            </select>
+                          </label>
+                          {(mission.useSkillMode ?? 'any') === 'element' && (
+                            <div className="critter-mission-row__wide critter-mission-filter-panel">
+                              <p>Element(s)</p>
+                              <div className="critter-mission-filter-chip-list">
+                                {gameElements.map((element) => {
+                                  const isSelected = (mission.useSkillElements ?? []).includes(element);
+                                  return (
+                                    <button
+                                      key={`use-skill-element-${element}`}
+                                      type="button"
+                                      className={`critter-mission-filter-chip ${isSelected ? 'is-selected' : ''}`}
+                                      onClick={() =>
+                                        updateMissionRow(levelIndex, missionIndex, (entry) => ({
+                                          ...entry,
+                                          useSkillElements: (entry.useSkillElements ?? []).includes(element)
+                                            ? (entry.useSkillElements ?? []).filter((e) => e !== element)
+                                            : [...(entry.useSkillElements ?? []), element],
+                                        }))
+                                      }
+                                    >
+                                      {capitalizeToken(element)}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                          {(mission.useSkillMode ?? 'any') === 'specific' && (() => {
+                            const pool = getUseSkillPoolForLevel(draft.levels, levelIndex);
+                            const poolSet = new Set(pool);
+                            const skillOptions = skillList.filter((s) => poolSet.has(s.id));
+                            return (
+                              <div className="critter-mission-row__wide critter-mission-filter-panel">
+                                <p>Skill(s) (unlocked below this level)</p>
+                                {pool.length === 0 ? (
+                                  <p className="admin-note">Unlock skills in levels below this one to select them.</p>
+                                ) : (
+                                  <div className="critter-mission-item-list">
+                                    {skillOptions.map((skill) => {
+                                      const isSelected = (mission.useSkillIds ?? []).includes(skill.id);
+                                      return (
+                                        <label
+                                          key={`use-skill-${skill.id}`}
+                                          className="critter-mission-item-option"
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            checked={isSelected}
+                                            onChange={() =>
+                                              updateMissionRow(levelIndex, missionIndex, (entry) => ({
+                                                ...entry,
+                                                useSkillIds: toggleTokenInList(entry.useSkillIds ?? [], skill.id),
+                                              }))
+                                            }
+                                          />
+                                          <span>{skill.name}</span>
+                                          <span className="critter-mission-item-meta">({skill.id})</span>
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
+                        </>
+                      )}
+
+                      {mission.type === 'deal_damage' && (
+                        <>
+                          <label>
+                            Mode
+                            <select
+                              value={mission.dealDamageMode ?? 'any'}
+                              onChange={(event) => {
+                                const next = event.target.value === 'element' ? 'element' : 'any';
+                                updateMissionRow(levelIndex, missionIndex, (entry) => ({
+                                  ...entry,
+                                  dealDamageMode: next,
+                                  dealDamageElements: next === 'element' ? entry.dealDamageElements : [],
+                                }));
+                              }}
+                            >
+                              <option value="any">Any Damage</option>
+                              <option value="element">Element(s)</option>
+                            </select>
+                          </label>
+                          {mission.dealDamageMode === 'element' && (
+                            <div className="critter-mission-row__wide critter-mission-filter-panel">
+                              <p>Element(s) (Optional)</p>
+                              <div className="critter-mission-filter-chip-list">
+                                {gameElements.map((element) => {
+                                  const isSelected = mission.dealDamageElements.includes(element);
+                                  return (
+                                    <button
+                                      key={`mission-deal-damage-element-${element}`}
+                                      type="button"
+                                      className={`critter-mission-filter-chip ${isSelected ? 'is-selected' : ''}`}
+                                      onClick={() =>
+                                        updateMissionRow(levelIndex, missionIndex, (entry) => ({
+                                          ...entry,
+                                          dealDamageElements: toggleTokenInList(entry.dealDamageElements, element),
+                                        }))
+                                      }
+                                    >
+                                      {capitalizeToken(element)}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      {(mission.type === 'effect_buffed_actions' ||
+                        mission.type === 'skill_effect_buffed_actions' ||
+                        mission.type === 'equip_effect_buffed_actions') && (
+                        <>
+                          <label>
+                            Mode
+                            <select
+                              value={mission.effectBuffMode ?? 'deal_damage'}
+                              onChange={(event) => {
+                                const next =
+                                  event.target.value === 'knockouts' ||
+                                  event.target.value === 'damage_absorbed' ||
+                                  event.target.value === 'deal_damage'
+                                    ? (event.target.value as MissionDraft['effectBuffMode'])
+                                    : 'deal_damage';
+                                updateMissionRow(levelIndex, missionIndex, (entry) => ({
+                                  ...entry,
+                                  effectBuffMode: next,
+                                }));
+                              }}
+                            >
+                              <option value="deal_damage">Damage Dealt</option>
+                              <option value="damage_absorbed">Damage Taken</option>
+                              <option value="knockouts">Knockouts</option>
+                            </select>
+                          </label>
+                          <div className="critter-mission-row__wide critter-mission-filter-panel">
+                            <p>
+                              {mission.type === 'equip_effect_buffed_actions'
+                                ? 'Equipment Effect Templates'
+                                : 'Skill Effect Templates'}
+                            </p>
+                            <input
+                              value={missionEffectTemplateSearchInput}
+                              onChange={(event) => setMissionEffectTemplateSearchInput(event.target.value)}
+                              placeholder="Search effect by name or ID"
+                            />
+                            <div className="critter-mission-item-list">
+                              {effectTemplates
+                                .filter((opt) =>
+                                  mission.type === 'equip_effect_buffed_actions'
+                                    ? opt.source === 'equipment'
+                                    : opt.source === 'skill',
+                                )
+                                .filter((opt) => {
+                                  const query = missionEffectTemplateSearchInput.trim().toLowerCase();
+                                  if (!query) {
+                                    return true;
+                                  }
+                                  return (
+                                    opt.id.toLowerCase().includes(query) ||
+                                    opt.name.toLowerCase().includes(query)
+                                  );
+                                })
+                                .map((opt) => {
+                                  const selectedIds =
+                                    mission.type === 'equip_effect_buffed_actions'
+                                      ? mission.equipEffectTemplateIds
+                                      : mission.skillEffectTemplateIds;
+                                  const isSelected = selectedIds.includes(opt.id);
+                                  const prefix = opt.source === 'equipment' ? '[Equip]' : '[Skill]';
+                                  return (
+                                    <button
+                                      key={`mission-effect-template-${opt.source}-${opt.id}`}
+                                      type="button"
+                                      className={`secondary critter-mission-critter-pill ${
+                                        isSelected ? 'is-selected' : ''
+                                      }`}
+                                      onClick={() =>
+                                        updateMissionRow(levelIndex, missionIndex, (entry) => {
+                                          if (mission.type === 'equip_effect_buffed_actions') {
+                                            return {
+                                              ...entry,
+                                              equipEffectTemplateIds: toggleTokenInList(
+                                                entry.equipEffectTemplateIds,
+                                                opt.id,
+                                              ),
+                                            };
+                                          }
+                                          return {
+                                            ...entry,
+                                            skillEffectTemplateIds: toggleTokenInList(
+                                              entry.skillEffectTemplateIds,
+                                              opt.id,
+                                            ),
+                                          };
+                                        })
+                                      }
+                                    >
+                                      {prefix} {opt.name} ({opt.id})
+                                    </button>
+                                  );
+                                })}
+                              {effectTemplates.length === 0 && (
+                                <p className="admin-note">
+                                  No effect templates loaded. Configure Skill and Equipment effects in the
+                                  Admin tools first.
+                                </p>
+                              )}
+                            </div>
+                            {(mission.skillEffectTemplateIds.length > 0 ||
+                              mission.equipEffectTemplateIds.length > 0) && (
+                              <p className="admin-note">
+                                Selected templates:{' '}
+                                {(
+                                  mission.type === 'equip_effect_buffed_actions'
+                                    ? mission.equipEffectTemplateIds
+                                    : mission.skillEffectTemplateIds
+                                ).join(', ')}
+                              </p>
+                            )}
+                          </div>
+                          <label className="critter-mission-row__wide">
+                            Description
+                            <input
+                              type="text"
+                              value={mission.effectBuffDescription ?? ''}
+                              onChange={(event) =>
+                                updateMissionRow(levelIndex, missionIndex, (entry) => ({
+                                  ...entry,
+                                  effectBuffDescription: event.target.value.slice(0, 200),
+                                }))
+                              }
+                              placeholder="e.g. Deal 200 damage while Defense Buff is active"
+                              maxLength={200}
+                            />
+                            <span className="admin-note">
+                              Shown in the missions box when set. Leave empty to use the default label.
+                            </span>
+                          </label>
+                        </>
+                      )}
+
+                      {mission.type === 'absorb_damage' && (
+                        <>
+                          <label>
+                            Mode
+                            <select
+                              value={mission.absorbMode ?? 'damage'}
+                              onChange={(event) => {
+                                const next =
+                                  event.target.value === 'knockout'
+                                    ? 'knockout'
+                                    : event.target.value === 'element'
+                                      ? 'element'
+                                      : 'damage';
+                                updateMissionRow(levelIndex, missionIndex, (entry) => ({
+                                  ...entry,
+                                  absorbMode: next,
+                                  absorbDamageElements: next === 'element' ? entry.absorbDamageElements : [],
+                                }));
+                              }}
+                            >
+                              <option value="damage">Damage (total damage taken)</option>
+                              <option value="element">Element Damage Taken</option>
+                              <option value="knockout">Knockout (times fainted)</option>
+                            </select>
+                          </label>
+                          {mission.absorbMode === 'element' && (
+                            <div className="critter-mission-row__wide critter-mission-filter-panel">
+                              <p>Element(s)</p>
+                              <div className="critter-mission-filter-chip-list">
+                                {gameElements.map((element) => {
+                                  const isSelected = mission.absorbDamageElements.includes(element);
+                                  return (
+                                    <button
+                                      key={`mission-absorb-damage-element-${element}`}
+                                      type="button"
+                                      className={`critter-mission-filter-chip ${isSelected ? 'is-selected' : ''}`}
+                                      onClick={() =>
+                                        updateMissionRow(levelIndex, missionIndex, (entry) => ({
+                                          ...entry,
+                                          absorbDamageElements: toggleTokenInList(entry.absorbDamageElements, element),
+                                        }))
+                                      }
+                                    >
+                                      {capitalizeToken(element)}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                          <p className="admin-note">
+                            In Damage mode, Amount is total damage this critter must take. In Knockout
+                            mode, Amount is the number of times this critter must be knocked out.
+                            Element mode tracks only skill damage taken from the selected element(s).
+                          </p>
+                        </>
+                      )}
 
                       {isKnockoutMissionType(mission.type) && (
                         <label>
@@ -1713,6 +2124,56 @@ function critterToDraft(critter: CritterDefinition): CritterDraft {
           mission.type === 'heal_critter' && Array.isArray(mission.requiredHealingItemIds)
             ? mission.requiredHealingItemIds
             : [],
+        useSkillMode:
+          mission.type === 'use_skill' ? (mission.useSkillMode ?? 'any') : 'any',
+        useSkillElements:
+          mission.type === 'use_skill' && Array.isArray(mission.useSkillElements)
+            ? mission.useSkillElements
+            : [],
+        useSkillIds:
+          mission.type === 'use_skill' && Array.isArray(mission.useSkillIds)
+            ? mission.useSkillIds
+            : [],
+        dealDamageMode:
+          mission.type === 'deal_damage' && typeof mission.dealDamageMode === 'string'
+            ? (mission.dealDamageMode === 'element' ? 'element' : 'any')
+            : 'any',
+        dealDamageElements:
+          mission.type === 'deal_damage' && Array.isArray(mission.dealDamageElements)
+            ? mission.dealDamageElements
+            : [],
+        skillEffectTemplateIds:
+          (mission.type === 'skill_effect_buffed_actions' || mission.type === 'effect_buffed_actions') &&
+          Array.isArray((mission as any).skillEffectTemplateIds)
+            ? ((mission as any).skillEffectTemplateIds as string[])
+            : [],
+        equipEffectTemplateIds:
+          mission.type === 'equip_effect_buffed_actions' &&
+          Array.isArray((mission as any).equipEffectTemplateIds)
+            ? ((mission as any).equipEffectTemplateIds as string[])
+            : [],
+        effectBuffMode:
+          (mission.type === 'skill_effect_buffed_actions' ||
+            mission.type === 'equip_effect_buffed_actions' ||
+            mission.type === 'effect_buffed_actions') &&
+          typeof mission.effectBuffMode === 'string'
+            ? (mission.effectBuffMode as MissionDraft['effectBuffMode'])
+            : 'deal_damage',
+        effectBuffDescription:
+          (mission.type === 'skill_effect_buffed_actions' ||
+            mission.type === 'equip_effect_buffed_actions' ||
+            mission.type === 'effect_buffed_actions') &&
+          typeof mission.effectBuffDescription === 'string'
+            ? mission.effectBuffDescription
+            : '',
+        absorbMode:
+          mission.type === 'absorb_damage' && typeof mission.absorbMode === 'string'
+            ? (mission.absorbMode as MissionDraft['absorbMode'])
+            : 'damage',
+        absorbDamageElements:
+          mission.type === 'absorb_damage' && Array.isArray(mission.absorbDamageElements)
+            ? mission.absorbDamageElements
+            : [],
       })),
     })),
   };
@@ -1806,6 +2267,68 @@ function draftToRaw(draft: CritterDraft, gameElements: string[]): unknown {
           ...(mission.type === 'heal_critter' && requiredHealingItemIds.length > 0
             ? { requiredHealingItemIds }
             : {}),
+          ...(mission.type === 'use_skill'
+            ? {
+                useSkillMode: mission.useSkillMode ?? 'any',
+                ...(mission.useSkillMode === 'element' &&
+                Array.isArray(mission.useSkillElements) &&
+                mission.useSkillElements.length > 0
+                  ? { useSkillElements: mission.useSkillElements.filter((e) => e.trim().length > 0) }
+                  : {}),
+                ...(mission.useSkillMode === 'specific' &&
+                Array.isArray(mission.useSkillIds) &&
+                mission.useSkillIds.length > 0
+                  ? { useSkillIds: mission.useSkillIds.filter((id) => id.trim().length > 0) }
+                  : {}),
+              }
+            : {}),
+          ...(mission.type === 'deal_damage'
+            ? {
+                dealDamageMode: mission.dealDamageMode ?? 'any',
+                ...(mission.dealDamageMode === 'element' &&
+                Array.isArray(mission.dealDamageElements) &&
+                mission.dealDamageElements.length > 0
+                  ? {
+                      dealDamageElements: mission.dealDamageElements.filter((e) => e.trim().length > 0),
+                    }
+                  : {}),
+              }
+            : {}),
+          ...(mission.type === 'skill_effect_buffed_actions' || mission.type === 'effect_buffed_actions'
+            ? {
+                effectBuffMode: mission.effectBuffMode ?? 'deal_damage',
+                effectBuffDescription: (mission.effectBuffDescription ?? '').trim().slice(0, 200),
+                ...(mission.skillEffectTemplateIds.length > 0 && {
+                  skillEffectTemplateIds: mission.skillEffectTemplateIds.filter((id) => id.trim().length > 0),
+                }),
+              }
+            : {}),
+          ...(mission.type === 'equip_effect_buffed_actions'
+            ? {
+                effectBuffMode: mission.effectBuffMode ?? 'deal_damage',
+                effectBuffDescription: (mission.effectBuffDescription ?? '').trim().slice(0, 200),
+                ...(mission.equipEffectTemplateIds.length > 0 && {
+                  equipEffectTemplateIds: mission.equipEffectTemplateIds.filter((id) => id.trim().length > 0),
+                }),
+              }
+            : {}),
+          ...(mission.type === 'absorb_damage'
+            ? {
+                absorbMode: mission.absorbMode ?? 'damage',
+                ...(mission.absorbMode === 'element' &&
+                Array.isArray(mission.absorbDamageElements) &&
+                mission.absorbDamageElements.length > 0
+                  ? {
+                      absorbDamageElements: mission.absorbDamageElements
+                        .map((entry) => entry.trim().toLowerCase())
+                        .filter(
+                          (entry, index, values) =>
+                            allowedElements.has(entry) && values.indexOf(entry) === index,
+                        ),
+                    }
+                  : {}),
+              }
+            : {}),
         };
       }),
     })),
@@ -1827,6 +2350,15 @@ function createDefaultLevelDraft(levelIndex = 0): LevelDraft {
 }
 
 function getMissionTypeLabel(missionType: CritterMissionType): string {
+  if (missionType === 'effect_buffed_actions' || missionType === 'skill_effect_buffed_actions') {
+    return 'Skill Buffed Actions';
+  }
+  if (missionType === 'equip_effect_buffed_actions') {
+    return 'Equip Buffed Actions';
+  }
+  if (missionType === 'absorb_damage') {
+    return 'Absorb Damage';
+  }
   if (missionType === 'opposing_knockouts') {
     return 'Knock-out Critters';
   }
@@ -1848,8 +2380,20 @@ function getMissionTypeLabel(missionType: CritterMissionType): string {
   if (missionType === 'heal_critter') {
     return 'Heal Critter';
   }
+  if (missionType === 'heal_with_skills') {
+    return 'Heal with Skills';
+  }
+  if (missionType === 'land_critical_hits') {
+    return 'Land Critical Hits';
+  }
   if (missionType === 'ascension') {
     return 'Ascension';
+  }
+  if (missionType === 'use_skill') {
+    return 'Use Skill';
+  }
+  if (missionType === 'deal_damage') {
+    return 'Deal Damage';
   }
   if (missionType === 'story_flag') {
     return 'Story Flag';
@@ -1858,6 +2402,15 @@ function getMissionTypeLabel(missionType: CritterMissionType): string {
 }
 
 function toMissionTypeValue(value: string): CritterMissionType {
+  if (value === 'effect_buffed_actions' || value === 'skill_effect_buffed_actions') {
+    return 'skill_effect_buffed_actions';
+  }
+  if (value === 'equip_effect_buffed_actions') {
+    return 'equip_effect_buffed_actions';
+  }
+  if (value === 'absorb_damage') {
+    return 'absorb_damage';
+  }
   if (value === 'opposing_knockouts_with_item') {
     return 'opposing_knockouts_with_item';
   }
@@ -1876,8 +2429,20 @@ function toMissionTypeValue(value: string): CritterMissionType {
   if (value === 'heal_critter') {
     return 'heal_critter';
   }
+  if (value === 'heal_with_skills') {
+    return 'heal_with_skills';
+  }
+  if (value === 'land_critical_hits') {
+    return 'land_critical_hits';
+  }
   if (value === 'ascension') {
     return 'ascension';
+  }
+  if (value === 'use_skill') {
+    return 'use_skill';
+  }
+  if (value === 'deal_damage') {
+    return 'deal_damage';
   }
   if (value === 'story_flag') {
     return 'story_flag';
@@ -1890,6 +2455,19 @@ function toKnockoutFilterValue(value: string): MissionDraft['knockoutFilter'] {
     return value;
   }
   return 'any';
+}
+
+function getUseSkillPoolForLevel(levels: LevelDraft[], missionLevelIndex: number): string[] {
+  const pool = new Set<string>();
+  for (let i = 0; i < missionLevelIndex && i < levels.length; i += 1) {
+    const level = levels[i];
+    const ids = (level.skillUnlockIdsInput ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    ids.forEach((id) => pool.add(id));
+  }
+  return [...pool];
 }
 
 function toggleTokenInList(values: string[], token: string): string[] {
@@ -2001,6 +2579,62 @@ function validateDraftBeforeApply(
         }
         if (!knownPayItemIds.has(mission.requiredPaymentItemId)) {
           return `Level ${levelIndex + 1} mission ${missionIndex + 1} includes unsupported pay item "${mission.requiredPaymentItemId}".`;
+        }
+      }
+
+      if (mission.type === 'use_skill' && (mission.useSkillMode ?? 'any') === 'specific') {
+        const pool = getUseSkillPoolForLevel(draft.levels, levelIndex);
+        const poolSet = new Set(pool);
+        for (const skillId of mission.useSkillIds ?? []) {
+          if (!skillId.trim()) {
+            continue;
+          }
+          if (!poolSet.has(skillId.trim())) {
+            return `Level ${levelIndex + 1} mission ${missionIndex + 1} "Specific" skill "${skillId}" is not in the pool (unlock it in a level below).`;
+          }
+        }
+      }
+
+      if (mission.type === 'deal_damage') {
+        const target = Number.parseInt(mission.targetValue, 10);
+        if (!Number.isFinite(target) || target < 1) {
+          return `Level ${levelIndex + 1} mission ${missionIndex + 1} Deal Damage needs an Amount of at least 1.`;
+        }
+      }
+
+      if (
+        mission.type === 'effect_buffed_actions' ||
+        mission.type === 'skill_effect_buffed_actions' ||
+        mission.type === 'equip_effect_buffed_actions'
+      ) {
+        const target = Number.parseInt(mission.targetValue, 10);
+        if (!Number.isFinite(target) || target < 1) {
+          return `Level ${levelIndex + 1} mission ${missionIndex + 1} Buffed Actions needs an Amount of at least 1.`;
+        }
+        const selectedIds =
+          mission.type === 'equip_effect_buffed_actions'
+            ? mission.equipEffectTemplateIds
+            : mission.skillEffectTemplateIds;
+        if (!Array.isArray(selectedIds) || selectedIds.length === 0) {
+          return `Level ${levelIndex + 1} mission ${missionIndex + 1} Buffed Actions needs an Effect Template selection.`;
+        }
+        const mode = mission.effectBuffMode ?? 'deal_damage';
+        if (mode !== 'deal_damage' && mode !== 'damage_absorbed' && mode !== 'knockouts') {
+          return `Level ${levelIndex + 1} mission ${missionIndex + 1} Buffed Actions has an invalid Mode.`;
+        }
+      }
+
+      if (mission.type === 'absorb_damage') {
+        const target = Number.parseInt(mission.targetValue, 10);
+        if (!Number.isFinite(target) || target < 1) {
+          return `Level ${levelIndex + 1} mission ${missionIndex + 1} Absorb Damage needs an Amount of at least 1.`;
+        }
+        const mode = mission.absorbMode ?? 'damage';
+        if (mode !== 'damage' && mode !== 'knockout' && mode !== 'element') {
+          return `Level ${levelIndex + 1} mission ${missionIndex + 1} Absorb Damage has an invalid Mode.`;
+        }
+        if (mode === 'element' && (!Array.isArray(mission.absorbDamageElements) || mission.absorbDamageElements.length === 0)) {
+          return `Level ${levelIndex + 1} mission ${missionIndex + 1} Absorb Damage in Element mode needs at least one element.`;
         }
       }
 

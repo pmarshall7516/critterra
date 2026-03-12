@@ -1,3 +1,5 @@
+import type { EquipmentEffectAttachment } from '@/game/equipmentEffects/types';
+
 export const ITEM_CORE_CATEGORIES = ['tool', 'equipment', 'healing', 'material', 'other'] as const;
 export type CoreItemCategory = (typeof ITEM_CORE_CATEGORIES)[number];
 export type ItemCategory = CoreItemCategory | (string & {});
@@ -14,6 +16,7 @@ export interface ToolItemEffectConfig {
 
 export interface EquipmentItemEffectConfig {
   equipSize?: number;
+  equipmentEffectAttachments?: EquipmentEffectAttachment[];
   equipmentEffectIds?: string[];
   slot?: string;
 }

@@ -1887,6 +1887,14 @@ button.secondary:hover:not(:disabled) {
   image-rendering: pixelated;
 }
 
+.collection-card__sprite--clickable {
+  cursor: pointer;
+}
+
+.collection-card__sprite--clickable:hover {
+  filter: drop-shadow(0 0 8px rgba(94, 231, 255, 0.45));
+}
+
 .collection-card__sprite--missing {
   width: min(72%, 112px);
   height: auto;
@@ -2218,11 +2226,29 @@ button.secondary:hover:not(:disabled) {
   color: #b8d4ee;
 }
 
+.collection-card__skill-popup-search {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid rgba(121, 198, 255, 0.38);
+  background: rgba(5, 14, 26, 0.88);
+  color: #e6f3ff;
+  padding: 0.35rem 0.45rem;
+  font-size: 0.72rem;
+}
+
+.collection-card__skill-popup-search::placeholder {
+  color: rgba(184, 212, 238, 0.75);
+}
+
 .collection-card__skill-popup-list {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
   overflow-y: auto;
+}
+
+.collection-card__skill-popup-skill-option {
+  width: 100%;
 }
 
 .collection-card__skill-popup-option {
@@ -2406,6 +2432,16 @@ button.secondary:hover:not(:disabled) {
 .collection-card__abilities li span:last-child,
 .collection-card__missions li span:last-child {
   flex-shrink: 0;
+}
+
+.collection-card__missions li {
+  align-items: flex-start;
+}
+
+.collection-card__missions li span:first-child {
+  overflow: visible;
+  text-overflow: unset;
+  white-space: normal;
 }
 
 .collection-card__advance {
@@ -2819,6 +2855,10 @@ button.secondary:hover:not(:disabled) {
 
 .collection-card--selectable {
   cursor: pointer;
+}
+
+.collection-card--sprite-select-only {
+  cursor: default;
 }
 
 .collection-card--disabled {

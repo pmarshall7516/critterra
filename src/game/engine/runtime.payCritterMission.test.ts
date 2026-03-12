@@ -114,6 +114,7 @@ function createRuntimeHarness(quantityOwned: number) {
     squad: [critter.id, null, null, null, null, null, null, null],
     collection: [progress],
     lockedKnockoutTargetCritterId: null,
+    lockedDamageTargetCritterId: null,
   } as PlayerCritterProgress;
   runtime.itemDatabase = items;
   runtime.itemById = { lume: items[0] };

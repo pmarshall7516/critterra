@@ -367,3 +367,40 @@ describe('GameRuntime fishing cast animation', () => {
     expect(runtime.getActiveFishingCastAnimationFrameIndex('right')).toBe(-1);
   });
 });
+
+describe('GameRuntime fishing power', () => {
+  it('guarantees a bite when power is 1', () => {
+    const runtime = createRuntimeHarness();
+    runtime.getRng = vi.fn(() => () => 0.9999);
+    runtime.resolveFishingBiteWindowMs = vi.fn(() => 1200);
+    runtime.fishingSession = makeFishingSession({
+      power: 1,
+      fishFrequency: 0.01,
+      waitRemainingMs: 0,
+      waitDurationMs: 1000,
+      hasPendingBite: false,
+    });
+
+    runtime.tickFishing(16);
+
+    expect(runtime.fishingSession?.hasPendingBite).toBe(true);
+    expect(runtime.startDialogue).not.toHaveBeenCalled();
+  });
+
+  it('still allows no-bite outcomes at lower power', () => {
+    const runtime = createRuntimeHarness();
+    runtime.getRng = vi.fn(() => () => 0.9999);
+    runtime.fishingSession = makeFishingSession({
+      power: 0,
+      fishFrequency: 0.5,
+      waitRemainingMs: 0,
+      waitDurationMs: 1000,
+      hasPendingBite: false,
+    });
+
+    runtime.tickFishing(16);
+
+    expect(runtime.fishingSession).toBeNull();
+    expect(runtime.startDialogue).toHaveBeenCalledWith('Fishing', ['No bites right now.']);
+  });
+});

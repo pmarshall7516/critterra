@@ -1,4 +1,3 @@
-import type { CritterElement } from '@/game/critters/types';
 import type { ElementChart } from '@/game/skills/types';
 import { getElementChartMultiplier } from '@/game/skills/schema';
 import type {
@@ -89,17 +88,15 @@ export function computeBattleDamage(params: ComputeBattleDamageParams): ComputeB
   const levelTerm = (2 * attacker.level) / 5 + 2;
   const base = ((levelTerm * power * A) / D) / 50 + 2;
 
-  const typeMult = getElementChartMultiplier(
-    elementChart,
-    skill.element as CritterElement,
-    defender.element as CritterElement,
-  );
+  const typeMult = getElementChartMultiplier(elementChart, skill.element, defender.element);
   const stab = skill.element === attacker.element ? 1.2 : 1;
 
+  /** Crit chance: base + additive bonus. Skill/equipment crit_buff use 0..1 (e.g. 0.5 = +50% chance). */
   const critChance = clamp(BASE_CRIT_CHANCE + consumedCritBonus, 0, 1);
   const isCrit = rng() < critChance;
   const critMult = isCrit ? 2 : 1;
 
+  /** On crit, ignore defense buffs (> 1) but still apply defense debuffs (< 1). */
   const equipmentBonus = Math.max(0, defender.equipmentDefensePositiveBonus ?? 0);
   const defenseWithoutPositiveEquipment = Math.max(1, defender.defense - equipmentBonus);
   const defenseModifierForCrit = Math.max(
@@ -209,6 +206,12 @@ export function resolveSkillEffectAttachmentsForRuntime(
     persistentHealModeRaw: unknown,
     persistentHealValueRaw: unknown,
     persistentHealDurationTurnsRaw: unknown,
+    toxicPotencyBaseRaw: unknown,
+    toxicPotencyPerTurnRaw: unknown,
+    stunFailChanceRaw: unknown,
+    stunSlowdownRaw: unknown,
+    flinchFirstUseOnlyRaw: unknown,
+    flinchFirstOverallOnlyRaw: unknown,
   ): void => {
     if (typeof effectIdRaw !== 'string') {
       return;
@@ -250,6 +253,31 @@ export function resolveSkillEffectAttachmentsForRuntime(
         ? clampInt(persistentHealValueRaw, 1, 9999, 1)
         : clamp(Number.isFinite(persistentHealPercent) ? persistentHealPercent : 0.05, 0, 1);
       next.persistentHealDurationTurns = clampInt(persistentHealDurationTurnsRaw, 1, 999, 1);
+    } else if (effectFallback.effect_type === 'inflict_toxic') {
+      next.toxicPotencyBase = clamp(
+        typeof toxicPotencyBaseRaw === 'number' && Number.isFinite(toxicPotencyBaseRaw) ? toxicPotencyBaseRaw : 0.05,
+        0,
+        1,
+      );
+      next.toxicPotencyPerTurn = clamp(
+        typeof toxicPotencyPerTurnRaw === 'number' && Number.isFinite(toxicPotencyPerTurnRaw) ? toxicPotencyPerTurnRaw : 0.05,
+        0,
+        1,
+      );
+    } else if (effectFallback.effect_type === 'inflict_stun') {
+      next.stunFailChance = clamp(
+        typeof stunFailChanceRaw === 'number' && Number.isFinite(stunFailChanceRaw) ? stunFailChanceRaw : 0.25,
+        0,
+        1,
+      );
+      next.stunSlowdown = clamp(
+        typeof stunSlowdownRaw === 'number' && Number.isFinite(stunSlowdownRaw) ? stunSlowdownRaw : 0.5,
+        0,
+        1,
+      );
+    } else if (effectFallback.effect_type === 'flinch_chance') {
+      next.flinchFirstUseOnly = toBooleanFlag(flinchFirstUseOnlyRaw);
+      next.flinchFirstOverallOnly = next.flinchFirstUseOnly && toBooleanFlag(flinchFirstOverallOnlyRaw);
     } else {
       const buffFallback = typeof effectFallback?.buffPercent === 'number' ? effectFallback.buffPercent : 0.1;
       next.buffPercent = clamp(
@@ -276,13 +304,19 @@ export function resolveSkillEffectAttachmentsForRuntime(
         attachment.persistentHealMode,
         attachment.persistentHealValue,
         attachment.persistentHealDurationTurns,
+        attachment.toxicPotencyBase,
+        attachment.toxicPotencyPerTurn,
+        attachment.stunFailChance,
+        attachment.stunSlowdown,
+        attachment.flinchFirstUseOnly,
+        attachment.flinchFirstOverallOnly,
       );
     }
     return normalized;
   }
 
   for (const effectId of skill.effectIds ?? []) {
-    pushAttachment(effectId, undefined, 1, undefined, undefined, undefined, undefined, undefined);
+    pushAttachment(effectId, undefined, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined);
   }
   return normalized;
 }
@@ -297,6 +331,20 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
     return fallback;
   }
   return Math.max(min, Math.min(max, parsed));
+}
+
+function toBooleanFlag(value: unknown): boolean {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value !== 0;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+  }
+  return false;
 }
 
 export function buildSkillEffectBuffPercentById(
