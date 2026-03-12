@@ -133,6 +133,7 @@ export interface ResolveAppliedSkillAttachmentsResult {
   attackerEffectAttachments: SkillEffectAttachment[];
   defenderEffectAttachments: SkillEffectAttachment[];
   recoilAttachments: SkillEffectAttachment[];
+  persistentHealAttachments: SkillEffectAttachment[];
   attackerCritChanceBuffPercent: number;
 }
 
@@ -143,6 +144,7 @@ export function resolveAppliedSkillAttachments(
   const attackerEffectAttachments: SkillEffectAttachment[] = [];
   const defenderEffectAttachments: SkillEffectAttachment[] = [];
   const recoilAttachments: SkillEffectAttachment[] = [];
+  const persistentHealAttachments: SkillEffectAttachment[] = [];
   let attackerCritChanceBuffPercent = 0;
 
   for (const attachment of attachments) {
@@ -176,6 +178,10 @@ export function resolveAppliedSkillAttachments(
     }
     if (effect.effect_type === 'recoil') {
       recoilAttachments.push(attachment);
+      continue;
+    }
+    if (effect.effect_type === 'persistent_heal') {
+      persistentHealAttachments.push(attachment);
     }
   }
 
@@ -183,6 +189,7 @@ export function resolveAppliedSkillAttachments(
     attackerEffectAttachments,
     defenderEffectAttachments,
     recoilAttachments,
+    persistentHealAttachments,
     attackerCritChanceBuffPercent,
   };
 }
@@ -199,6 +206,9 @@ export function resolveSkillEffectAttachmentsForRuntime(
     procChanceRaw: unknown,
     recoilModeRaw: unknown,
     recoilPercentRaw: unknown,
+    persistentHealModeRaw: unknown,
+    persistentHealValueRaw: unknown,
+    persistentHealDurationTurnsRaw: unknown,
   ): void => {
     if (typeof effectIdRaw !== 'string') {
       return;
@@ -227,6 +237,19 @@ export function resolveSkillEffectAttachmentsForRuntime(
         0,
         1,
       );
+    } else if (effectFallback.effect_type === 'persistent_heal') {
+      const persistentHealMode = persistentHealModeRaw === 'flat' ? 'flat' : 'percent_max_hp';
+      next.persistentHealMode = persistentHealMode;
+      const persistentHealPercent =
+        typeof persistentHealValueRaw === 'number' && Number.isFinite(persistentHealValueRaw)
+          ? persistentHealValueRaw
+          : typeof persistentHealValueRaw === 'string' && persistentHealValueRaw.trim().length > 0
+            ? Number.parseFloat(persistentHealValueRaw)
+            : Number.NaN;
+      next.persistentHealValue = persistentHealMode === 'flat'
+        ? clampInt(persistentHealValueRaw, 1, 9999, 1)
+        : clamp(Number.isFinite(persistentHealPercent) ? persistentHealPercent : 0.05, 0, 1);
+      next.persistentHealDurationTurns = clampInt(persistentHealDurationTurnsRaw, 1, 999, 1);
     } else {
       const buffFallback = typeof effectFallback?.buffPercent === 'number' ? effectFallback.buffPercent : 0.1;
       next.buffPercent = clamp(
@@ -250,15 +273,30 @@ export function resolveSkillEffectAttachmentsForRuntime(
         attachment.procChance,
         attachment.recoilMode,
         attachment.recoilPercent,
+        attachment.persistentHealMode,
+        attachment.persistentHealValue,
+        attachment.persistentHealDurationTurns,
       );
     }
     return normalized;
   }
 
   for (const effectId of skill.effectIds ?? []) {
-    pushAttachment(effectId, undefined, 1, undefined, undefined);
+    pushAttachment(effectId, undefined, 1, undefined, undefined, undefined, undefined, undefined);
   }
   return normalized;
+}
+
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+  const parsed = typeof value === 'number' && Number.isFinite(value)
+    ? Math.floor(value)
+    : typeof value === 'string'
+      ? Number.parseInt(value, 10)
+      : Number.NaN;
+  if (Number.isNaN(parsed)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, parsed));
 }
 
 export function buildSkillEffectBuffPercentById(

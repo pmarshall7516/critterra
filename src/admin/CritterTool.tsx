@@ -12,7 +12,7 @@ import {
   type CritterMissionType,
 } from '@/game/critters/types';
 import type { GameItemDefinition } from '@/game/items/types';
-import { getSkillValueDisplayNumber, type SkillHealMode, type SkillPersistentHealMode } from '@/game/skills/types';
+import { getSkillValueDisplayNumber, type SkillHealMode } from '@/game/skills/types';
 import { apiFetchJson } from '@/shared/apiClient';
 import { loadAdminFlags, type AdminFlagEntry } from '@/admin/flagsApi';
 import { loadAdminGameElements } from '@/admin/elementsApi';
@@ -63,9 +63,7 @@ interface SkillOption {
   damage?: number;
   healMode?: SkillHealMode;
   healValue?: number;
-  persistentHealMode?: SkillPersistentHealMode;
-  persistentHealValue?: number;
-  persistentHealDurationTurns?: number;
+  effectDescriptions?: string[];
 }
 
 function formatImmediateSkillHealTooltip(opt: SkillOption): string | null {
@@ -79,20 +77,6 @@ function formatImmediateSkillHealTooltip(opt: SkillOption): string | null {
     return `Heals: ${Math.round(opt.healValue * 100)}% of damage dealt`;
   }
   return `Heals: ${Math.round(opt.healValue * 100)}% HP after use`;
-}
-
-function formatPersistentSkillHealTooltip(opt: SkillOption): string | null {
-  if (
-    !opt.persistentHealMode ||
-    opt.persistentHealValue == null ||
-    opt.persistentHealDurationTurns == null
-  ) {
-    return null;
-  }
-  if (opt.persistentHealMode === 'flat') {
-    return `End of turn: ${Math.max(1, Math.floor(opt.persistentHealValue))} HP for ${Math.max(1, Math.floor(opt.persistentHealDurationTurns))} turns`;
-  }
-  return `End of turn: ${Math.round(opt.persistentHealValue * 100)}% HP for ${Math.max(1, Math.floor(opt.persistentHealDurationTurns))} turns`;
 }
 
 function formatSkillOptionLabel(opt: SkillOption): string {
@@ -110,11 +94,53 @@ function buildSkillOptionTooltip(opt: SkillOption): string {
   if (immediateHealLine) {
     lines.push(immediateHealLine);
   }
-  const persistentHealLine = formatPersistentSkillHealTooltip(opt);
-  if (persistentHealLine) {
-    lines.push(persistentHealLine);
+  for (const description of opt.effectDescriptions ?? []) {
+    const trimmed = description.trim();
+    if (!trimmed) {
+      continue;
+    }
+    lines.push(`Effect: ${trimmed}`);
   }
   return lines.join('\n');
+}
+
+function formatSkillAttachmentDescription(
+  effect: {
+    effect_type: string;
+    description?: string;
+    effect_name: string;
+    buffPercent?: number;
+  },
+  attachment: {
+    buffPercent?: number;
+    recoilPercent?: number;
+    recoilMode?: string;
+    persistentHealMode?: 'flat' | 'percent_max_hp';
+    persistentHealValue?: number;
+    persistentHealDurationTurns?: number;
+  },
+): string {
+  const description = typeof effect.description === 'string' ? effect.description.trim() : '';
+  if (!description) {
+    return effect.effect_name;
+  }
+  const buffValue = Math.round(((attachment.buffPercent ?? effect.buffPercent ?? 0.1) ?? 0) * 100);
+  const recoilValue = Math.round(((attachment.recoilPercent ?? 0.1) ?? 0) * 100);
+  const recoilMode = attachment.recoilMode === 'percent_damage_dealt' ? 'damage dealt' : 'max HP';
+  const persistentMode = attachment.persistentHealMode === 'flat' ? 'HP' : 'max HP';
+  const persistentValue = attachment.persistentHealMode === 'flat'
+    ? Math.max(1, Math.floor(attachment.persistentHealValue ?? 1))
+    : Math.round((attachment.persistentHealValue ?? 0.05) * 100);
+  const turns = Math.max(1, Math.floor(attachment.persistentHealDurationTurns ?? 1));
+  return description
+    .replace(/<buff>/g, String(buffValue))
+    .replace(/<recoil>/g, String(recoilValue))
+    .replace(/<mode>/g, recoilMode)
+    .replace(/<heal>/g, String(persistentValue))
+    .replace(/<heal_value>/g, String(persistentValue))
+    .replace(/<heal_mode>/g, persistentMode)
+    .replace(/<turns>/g, String(turns))
+    .replace(/<duration>/g, String(turns));
 }
 
 interface MissionDraft {
@@ -383,17 +409,26 @@ export function CritterTool() {
         legacyEffectBuffPercentById,
         effectTypeById,
       )
-        .map((skill) => ({
-          id: skill.skill_id,
-          name: skill.skill_name,
-          type: skill.type,
-          damage: skill.damage,
-          healMode: skill.healMode,
-          healValue: skill.healValue,
-          persistentHealMode: skill.persistentHealMode,
-          persistentHealValue: skill.persistentHealValue,
-          persistentHealDurationTurns: skill.persistentHealDurationTurns,
-        }))
+        .map((skill) => {
+          const effectDescriptions = (skill.effectAttachments ?? [])
+            .map((attachment) => {
+              const effect = skillEffects.find((entry) => entry.effect_id === attachment.effectId);
+              if (!effect) {
+                return attachment.effectId;
+              }
+              return formatSkillAttachmentDescription(effect, attachment);
+            })
+            .filter((entry) => entry.trim().length > 0);
+          return {
+            id: skill.skill_id,
+            name: skill.skill_name,
+            type: skill.type,
+            damage: skill.damage,
+            healMode: skill.healMode,
+            healValue: skill.healValue,
+            effectDescriptions,
+          };
+        })
         .filter((x) => x.id.length > 0);
       setSkillList(list);
     } catch (err) {

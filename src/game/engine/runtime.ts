@@ -289,8 +289,10 @@ interface BattleCritterState {
   equipmentEffectIds: string[];
   /** Source equipment item names keyed by effect id (for tooltip context). */
   equipmentEffectSourceById: Record<string, string[]>;
-  /** Active Aqua Ring-style end-of-turn healing. Cleared on switch, KO, or battle end. */
+  /** Active skill-applied end-of-turn healing. Cleared on switch, KO, or battle end. */
   persistentHeal: {
+    effectId: string;
+    sourceName: string;
     mode: 'flat' | 'percent_max_hp';
     value: number;
     remainingTurns: number;
@@ -392,11 +394,14 @@ interface BattlePostDamageResolution {
   attackerCritChanceBuffPercent: number;
   attackerEffectSourceName?: string;
   healMessageAttackerName?: string;
-  persistentHeal?: {
+  persistentHeals?: Array<{
+    targetTeam: 'player' | 'opponent';
+    effectId: string;
+    sourceName: string;
     mode: 'flat' | 'percent_max_hp';
     value: number;
     remainingTurns: number;
-  };
+  }>;
 }
 
 interface BattleNarrationKnockoutResolution {
@@ -488,9 +493,6 @@ export interface RuntimeBattleSnapshot {
     damage?: number;
     healMode?: SkillHealMode;
     healValue?: number;
-    persistentHealMode?: string;
-    persistentHealValue?: number;
-    persistentHealDurationTurns?: number;
     effectDescriptions?: string;
     effectIconUrls?: string[];
   } | null>;
@@ -708,9 +710,6 @@ export interface RuntimeSnapshot {
         damage?: number;
         healMode?: SkillHealMode;
         healValue?: number;
-        persistentHealMode?: string;
-        persistentHealValue?: number;
-        persistentHealDurationTurns?: number;
         effectDescriptions?: string;
         effectIconUrls?: string[];
       } | null>;
@@ -2529,7 +2528,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       prev.activeEffectIds = [];
       prev.activeEffectValueById = {};
       prev.activeEffectSourceById = {};
-      prev.persistentHeal = null;
+      this.clearPersistentHealStateForCritter(prev);
     }
     battle.playerActiveIndex = teamIndex;
 
@@ -5868,6 +5867,11 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       attachment.procChance >= 1 || this.getRng()() < attachment.procChance,
     );
     const attachmentResolution = resolveAppliedSkillAttachments(appliedAttachments, this.skillEffectLookupById);
+    const persistentHealResolutions = this.buildPersistentHealResolutions(
+      attachmentResolution.persistentHealAttachments,
+      skill.skill_name,
+      skill.type === 'support' ? attackingTeam : defenderTeam,
+    );
 
     if (skill.type === 'support') {
       const requestedHeal = resolveRequestedSkillHealAmount(skill, attacker.maxHp, 0);
@@ -5889,7 +5893,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         buildSkillEffectBuffPercentById(attachmentResolution.defenderEffectAttachments),
         attachmentResolution.attackerCritChanceBuffPercent,
         skill.skill_name,
-        this.buildPersistentHealResolution(skill),
+        persistentHealResolutions,
       );
       const message = this.formatBattleSupportSkillMessage(battle, attackingTeam, attacker.name, skill.skill_name);
       return {
@@ -5947,7 +5951,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       buildSkillEffectBuffPercentById(attachmentResolution.defenderEffectAttachments),
       attachmentResolution.attackerCritChanceBuffPercent,
       skill.skill_name,
-      this.buildPersistentHealResolution(skill),
+      persistentHealResolutions,
     );
 
     const guardSuffix =
@@ -6018,30 +6022,34 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     return actualHeal;
   }
 
-  private buildPersistentHealResolution(
-    skill: Pick<SkillDefinition, 'persistentHealMode' | 'persistentHealValue' | 'persistentHealDurationTurns'>,
-  ): BattlePostDamageResolution['persistentHeal'] {
-    if (
-      !skill.persistentHealMode ||
-      typeof skill.persistentHealValue !== 'number' ||
-      !Number.isFinite(skill.persistentHealValue) ||
-      typeof skill.persistentHealDurationTurns !== 'number' ||
-      !Number.isFinite(skill.persistentHealDurationTurns)
-    ) {
-      return undefined;
+  private buildPersistentHealResolutions(
+    attachments: SkillEffectAttachment[],
+    sourceName: string,
+    targetTeam: 'player' | 'opponent',
+  ): NonNullable<BattlePostDamageResolution['persistentHeals']> {
+    const resolved: NonNullable<BattlePostDamageResolution['persistentHeals']> = [];
+    for (const attachment of attachments) {
+      const effectId = typeof attachment.effectId === 'string' ? attachment.effectId.trim() : '';
+      if (!effectId) {
+        continue;
+      }
+      const mode = attachment.persistentHealMode === 'flat' ? 'flat' : 'percent_max_hp';
+      const value = mode === 'flat'
+        ? Math.max(1, Math.floor(attachment.persistentHealValue ?? 1))
+        : clamp(attachment.persistentHealValue ?? 0.05, 0, 1);
+      if (value <= 0) {
+        continue;
+      }
+      resolved.push({
+        targetTeam,
+        effectId,
+        sourceName,
+        mode,
+        value,
+        remainingTurns: Math.max(1, Math.floor(attachment.persistentHealDurationTurns ?? 1)),
+      });
     }
-    const normalizedValue =
-      skill.persistentHealMode === 'flat'
-        ? Math.max(0, Math.floor(skill.persistentHealValue))
-        : clamp(skill.persistentHealValue, 0, 1);
-    if (normalizedValue <= 0) {
-      return undefined;
-    }
-    return {
-      mode: skill.persistentHealMode,
-      value: normalizedValue,
-      remainingTurns: Math.max(1, Math.floor(skill.persistentHealDurationTurns)),
-    };
+    return resolved;
   }
 
   private applySkillEffectsToCritter(
@@ -6093,6 +6101,42 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     }
   }
 
+  private applyPersistentHealStateToCritter(
+    target: BattleCritterState,
+    persistentHeal: NonNullable<BattlePostDamageResolution['persistentHeals']>[number],
+  ): void {
+    this.clearPersistentHealStateForCritter(target);
+    target.persistentHeal = {
+      effectId: persistentHeal.effectId,
+      sourceName: persistentHeal.sourceName,
+      mode: persistentHeal.mode,
+      value: persistentHeal.value,
+      remainingTurns: persistentHeal.remainingTurns,
+    };
+    if (!target.activeEffectIds.includes(persistentHeal.effectId)) {
+      target.activeEffectIds.push(persistentHeal.effectId);
+    }
+    target.activeEffectSourceById[persistentHeal.effectId] = persistentHeal.sourceName;
+    target.activeEffectValueById = target.activeEffectValueById ?? {};
+    target.activeEffectValueById[persistentHeal.effectId] = persistentHeal.value;
+  }
+
+  private clearPersistentHealStateForCritter(target: BattleCritterState): void {
+    if (!target.persistentHeal) {
+      return;
+    }
+    const effectId = target.persistentHeal.effectId;
+    target.persistentHeal = null;
+    if (!effectId) {
+      return;
+    }
+    target.activeEffectIds = target.activeEffectIds.filter((entry) => entry !== effectId);
+    delete target.activeEffectSourceById[effectId];
+    if (target.activeEffectValueById) {
+      delete target.activeEffectValueById[effectId];
+    }
+  }
+
   private applyBattlePostDamageResolution(
     battle: BattleRuntimeState,
     resolution: BattlePostDamageResolution,
@@ -6104,8 +6148,14 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     }
 
     const actualHeal = this.applyBattleHeal(attacker, resolution.healToAttacker);
-    if (resolution.persistentHeal) {
-      attacker.persistentHeal = { ...resolution.persistentHeal };
+    if (resolution.persistentHeals && resolution.persistentHeals.length > 0) {
+      for (const persistentHeal of resolution.persistentHeals) {
+        const target = this.getActiveBattleCritter(battle, persistentHeal.targetTeam);
+        if (!target || target.fainted || target.currentHp <= 0) {
+          continue;
+        }
+        this.applyPersistentHealStateToCritter(target, persistentHeal);
+      }
     }
     if (resolution.attackerEffectIds.length > 0) {
       this.applySkillEffectsToCritter(
@@ -6141,7 +6191,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       attacker.currentHp = Math.max(0, attacker.currentHp - recoilDamage);
       if (attacker.currentHp <= 0) {
         attacker.fainted = true;
-        attacker.persistentHeal = null;
+        this.clearPersistentHealStateForCritter(attacker);
       }
     }
     return {
@@ -6164,7 +6214,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     defenderEffectBuffPercentById: Record<string, number> | undefined,
     attackerCritChanceBuffPercent: number,
     attackerEffectSourceName?: string,
-    persistentHeal?: BattlePostDamageResolution['persistentHeal'],
+    persistentHeals?: BattlePostDamageResolution['persistentHeals'],
   ): BattleNarrationEvent[] {
     const events: BattleNarrationEvent[] = [];
 
@@ -6185,24 +6235,28 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       });
     }
 
-    if (persistentHeal) {
-      events.push({
-        message:
-          attackingTeam === 'player'
-            ? `Your ${attackerName} gained end-of-turn healing for ${persistentHeal.remainingTurns} turns.`
-            : `${attackerName} gained end-of-turn healing for ${persistentHeal.remainingTurns} turns.`,
-        attacker: null,
-        postDamageResolution: {
-          attackingTeam,
-          defendingTeam,
-          healToAttacker: 0,
-          recoilToAttacker: 0,
-          attackerEffectIds: [],
-          defenderEffectIds: [],
-          attackerCritChanceBuffPercent: 0,
-          persistentHeal,
-        },
-      });
+    if (persistentHeals && persistentHeals.length > 0) {
+      for (const persistentHeal of persistentHeals) {
+        const targetName =
+          persistentHeal.targetTeam === attackingTeam ? attackerName : defenderName;
+        events.push({
+          message:
+            persistentHeal.targetTeam === 'player'
+              ? `Your ${targetName} gained end-of-turn healing for ${persistentHeal.remainingTurns} turns.`
+              : `${targetName} gained end-of-turn healing for ${persistentHeal.remainingTurns} turns.`,
+          attacker: null,
+          postDamageResolution: {
+            attackingTeam,
+            defendingTeam,
+            healToAttacker: 0,
+            recoilToAttacker: 0,
+            attackerEffectIds: [],
+            defenderEffectIds: [],
+            attackerCritChanceBuffPercent: 0,
+            persistentHeals: [persistentHeal],
+          },
+        });
+      }
     }
 
     if (attackerEffectIds.length > 0) {
@@ -6282,18 +6336,21 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     const events: BattleNarrationEvent[] = [];
     for (const team of ['player', 'opponent'] as const) {
       const critter = this.getActiveBattleCritter(battle, team);
-      if (!critter || critter.fainted || critter.currentHp <= 0 || !critter.persistentHeal) {
+      if (!critter || critter.fainted || critter.currentHp <= 0) {
         continue;
       }
-      const requestedHeal =
-        critter.persistentHeal.mode === 'flat'
-          ? Math.max(1, Math.floor(critter.persistentHeal.value))
-          : Math.max(0, Math.floor(critter.maxHp * clamp(critter.persistentHeal.value, 0, 1)));
-      const actualHeal = Math.min(requestedHeal, Math.max(0, critter.maxHp - critter.currentHp));
-      critter.persistentHeal.remainingTurns = Math.max(0, critter.persistentHeal.remainingTurns - 1);
-      if (critter.persistentHeal.remainingTurns <= 0) {
-        critter.persistentHeal = null;
+      let requestedHeal = 0;
+      if (critter.persistentHeal) {
+        requestedHeal += this.resolvePersistentHealAmount(critter, critter.persistentHeal);
+        critter.persistentHeal.remainingTurns = Math.max(0, critter.persistentHeal.remainingTurns - 1);
+        if (critter.persistentHeal.remainingTurns <= 0) {
+          this.clearPersistentHealStateForCritter(critter);
+        }
       }
+      for (const equipmentHeal of this.getEquipmentPersistentHealConfigs(critter)) {
+        requestedHeal += this.resolvePersistentHealAmount(critter, equipmentHeal);
+      }
+      const actualHeal = Math.min(requestedHeal, Math.max(0, critter.maxHp - critter.currentHp));
       if (actualHeal <= 0) {
         continue;
       }
@@ -6315,6 +6372,37 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       });
     }
     return events;
+  }
+
+  private getEquipmentPersistentHealConfigs(
+    critter: BattleCritterState,
+  ): Array<{ mode: 'flat' | 'percent_max_hp'; value: number }> {
+    const configs: Array<{ mode: 'flat' | 'percent_max_hp'; value: number }> = [];
+    for (const effectId of critter.equipmentEffectIds ?? []) {
+      const effect = this.equipmentEffectLookupById[effectId];
+      if (!effect?.persistentHeal) {
+        continue;
+      }
+      const mode = effect.persistentHeal.mode === 'flat' ? 'flat' : 'percent_max_hp';
+      const value = mode === 'flat'
+        ? Math.max(1, Math.floor(effect.persistentHeal.value))
+        : clamp(effect.persistentHeal.value, 0, 1);
+      if (value <= 0) {
+        continue;
+      }
+      configs.push({ mode, value });
+    }
+    return configs;
+  }
+
+  private resolvePersistentHealAmount(
+    critter: Pick<BattleCritterState, 'maxHp'>,
+    persistentHeal: Pick<NonNullable<BattleCritterState['persistentHeal']>, 'mode' | 'value'>,
+  ): number {
+    if (persistentHeal.mode === 'flat') {
+      return Math.max(1, Math.floor(persistentHeal.value));
+    }
+    return Math.max(0, Math.floor(critter.maxHp * clamp(persistentHeal.value, 0, 1)));
   }
 
   private formatBattleEffectActivationMessage(attackerName: string, attackerEffectIds: string[]): string {
@@ -6442,7 +6530,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         defender.currentHp = Math.max(0, defender.currentHp - next.applyDamageAmount);
         defender.fainted = defender.currentHp <= 0;
         if (defender.fainted) {
-          defender.persistentHeal = null;
+          this.clearPersistentHealStateForCritter(defender);
         }
       }
     }
@@ -6681,7 +6769,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     battle.pendingKnockoutResolution = null;
     battle.pendingEndTurnResolution = false;
     for (const entry of [...battle.playerTeam, ...battle.opponentTeam]) {
-      entry.persistentHeal = null;
+      this.clearPersistentHealStateForCritter(entry);
     }
     if (!options?.preserveLogLine) {
       battle.logLine = message;
@@ -6826,9 +6914,6 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         ...(skill.type === 'damage' && skill.damage != null && { damage: skill.damage }),
         ...(skill.healMode && { healMode: skill.healMode }),
         ...(typeof skill.healValue === 'number' && { healValue: skill.healValue }),
-        ...(skill.persistentHealMode && { persistentHealMode: skill.persistentHealMode }),
-        ...(typeof skill.persistentHealValue === 'number' && { persistentHealValue: skill.persistentHealValue }),
-        ...(typeof skill.persistentHealDurationTurns === 'number' && { persistentHealDurationTurns: skill.persistentHealDurationTurns }),
         ...(effectDescriptions && { effectDescriptions }),
         ...(effectIconUrls.length > 0 && { effectIconUrls }),
       };
@@ -6839,6 +6924,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
   private mapBattleTeamEntryToSnapshot(entry: BattleCritterState): RuntimeBattleSnapshot['playerTeam'][number] {
     const skillEffectSourcesById: Record<string, string[]> = {};
     const skillEffectBuffPercentById: Record<string, number> = {};
+    const skillEffectAttachmentById: Record<string, SkillEffectAttachment> = {};
     if (Array.isArray(entry.equippedSkillIds)) {
       for (const skillId of entry.equippedSkillIds) {
         if (!skillId) {
@@ -6851,6 +6937,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         const effectAttachments = resolveSkillEffectAttachmentsForRuntime(skill, this.skillEffectLookupById);
         for (const attachment of effectAttachments) {
           const effectId = attachment.effectId;
+          skillEffectAttachmentById[effectId] = { ...attachment };
           const sourceNames = skillEffectSourcesById[effectId] ?? [];
           if (!sourceNames.includes(skill.skill_name)) {
             sourceNames.push(skill.skill_name);
@@ -6884,18 +6971,37 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
             : typeof skillEffect.buffPercent === 'number'
               ? skillEffect.buffPercent
               : 0.1;
-          const effectDescription = formatSkillEffectDescription(skillEffect, {
+          const baseAttachment = skillEffectAttachmentById[id] ?? {
             effectId: id,
             procChance: 1,
             buffPercent,
+          };
+          const attachmentForTooltip =
+            entry.persistentHeal?.effectId === id
+              ? {
+                ...baseAttachment,
+                persistentHealMode: entry.persistentHeal.mode,
+                persistentHealValue: entry.persistentHeal.value,
+                persistentHealDurationTurns: entry.persistentHeal.remainingTurns,
+              }
+              : {
+                ...baseAttachment,
+                buffPercent,
+              };
+          const effectDescription = formatSkillEffectDescription(skillEffect, {
+            ...attachmentForTooltip,
+            effectId: id,
+            procChance: 1,
           });
           const stackSummary = this.summarizeSkillEffectStackTotal(skillEffect, buffPercent);
           const tooltipBody = [effectDescription.trim(), stackSummary]
             .filter((text): text is string => typeof text === 'string' && text.length > 0)
             .join('\n');
-          const sourceNames = entry.activeEffectSourceById[id]
-            ? [entry.activeEffectSourceById[id]]
-            : (skillEffectSourcesById[id] ?? []);
+          const sourceNames = [
+            entry.persistentHeal?.effectId === id ? entry.persistentHeal.sourceName : '',
+            entry.activeEffectSourceById[id] ?? '',
+            ...(skillEffectSourcesById[id] ?? []),
+          ].filter((source): source is string => typeof source === 'string' && source.trim().length > 0);
           activeEffectDescriptions.push(
             this.formatBattleEffectTooltip(tooltipBody, sourceNames),
           );
@@ -6962,6 +7068,13 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     effect: Pick<SkillEffectDefinition, 'effect_type'>,
     stackedBuffPercent: number,
   ): string | null {
+    if (
+      effect.effect_type === 'persistent_heal' ||
+      effect.effect_type === 'recoil' ||
+      effect.effect_type === 'crit_buff'
+    ) {
+      return null;
+    }
     if (!Number.isFinite(stackedBuffPercent) || Math.abs(stackedBuffPercent) <= 0) {
       return null;
     }
@@ -8410,9 +8523,6 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         ...(skill.type === 'damage' && skill.damage != null && { damage: skill.damage }),
         ...(skill.healMode && { healMode: skill.healMode }),
         ...(typeof skill.healValue === 'number' && { healValue: skill.healValue }),
-        ...(skill.persistentHealMode && { persistentHealMode: skill.persistentHealMode }),
-        ...(typeof skill.persistentHealValue === 'number' && { persistentHealValue: skill.persistentHealValue }),
-        ...(typeof skill.persistentHealDurationTurns === 'number' && { persistentHealDurationTurns: skill.persistentHealDurationTurns }),
         ...(effectDescriptions && { effectDescriptions }),
         ...(effectIconUrls.length > 0 && { effectIconUrls }),
       };
@@ -8562,6 +8672,15 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       const flat = Math.round(modifier.value);
       return `${flat >= 0 ? '+' : ''}${flat} ${stat}`;
     });
+    if (effect.persistentHeal) {
+      const persistentLine = effect.persistentHeal.mode === 'flat'
+        ? `End turn heal +${Math.max(1, Math.floor(effect.persistentHeal.value))} HP while equipped`
+        : `End turn heal +${Math.round(clamp(effect.persistentHeal.value, 0, 1) * 100)}% max HP while equipped`;
+      parts.push(persistentLine);
+    }
+    if (parts.length <= 0) {
+      return effect.effect_name;
+    }
     return parts.join(', ');
   }
 
@@ -10499,13 +10618,15 @@ function cloneBattleNarrationEvent(event: BattleNarrationEvent): BattleNarration
       ? {
           ...event.postDamageResolution,
           attackerEffectIds: [...event.postDamageResolution.attackerEffectIds],
+          defenderEffectIds: [...event.postDamageResolution.defenderEffectIds],
           attackerEffectBuffPercentById: event.postDamageResolution.attackerEffectBuffPercentById
             ? { ...event.postDamageResolution.attackerEffectBuffPercentById }
             : undefined,
-          persistentHeal: event.postDamageResolution.persistentHeal
-            ? {
-                ...event.postDamageResolution.persistentHeal,
-              }
+          defenderEffectBuffPercentById: event.postDamageResolution.defenderEffectBuffPercentById
+            ? { ...event.postDamageResolution.defenderEffectBuffPercentById }
+            : undefined,
+          persistentHeals: event.postDamageResolution.persistentHeals
+            ? event.postDamageResolution.persistentHeals.map((entry) => ({ ...entry }))
             : undefined,
         }
       : undefined,
@@ -10544,10 +10665,20 @@ function formatSkillEffectDescription(
       1,
     );
     const recoilModeLabel = attachment.recoilMode === 'percent_damage_dealt' ? 'damage dealt' : 'max HP';
+    const persistentModeLabel = attachment.persistentHealMode === 'flat' ? 'HP' : 'max HP';
+    const persistentValue = attachment.persistentHealMode === 'flat'
+      ? Math.max(1, Math.floor(attachment.persistentHealValue ?? 1))
+      : Math.round(clamp(attachment.persistentHealValue ?? 0.05, 0, 1) * 100);
+    const persistentTurns = Math.max(1, Math.floor(attachment.persistentHealDurationTurns ?? 1));
     return effectDescription
       .replace(/<buff>/g, String(Math.round(buffPercent * 100)))
       .replace(/<recoil>/g, String(Math.round(recoilPercent * 100)))
-      .replace(/<mode>/g, recoilModeLabel);
+      .replace(/<mode>/g, recoilModeLabel)
+      .replace(/<heal>/g, String(persistentValue))
+      .replace(/<heal_value>/g, String(persistentValue))
+      .replace(/<heal_mode>/g, persistentModeLabel)
+      .replace(/<turns>/g, String(persistentTurns))
+      .replace(/<duration>/g, String(persistentTurns));
   }
   return effect.effect_name;
 }

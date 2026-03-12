@@ -178,14 +178,56 @@ function formatDuelSkillHealImmediate(skill: Pick<SkillDefinition, 'healMode' | 
   return `Heals: ${Math.round(skill.healValue * 100)}% HP after use`;
 }
 
-function formatDuelSkillHealPersistent(
-  skill: Pick<SkillDefinition, 'persistentHealMode' | 'persistentHealValue' | 'persistentHealDurationTurns'>,
-): string | null {
-  if (!skill.persistentHealMode || skill.persistentHealValue == null || skill.persistentHealDurationTurns == null) return null;
-  if (skill.persistentHealMode === 'flat') {
-    return `End of turn: ${Math.max(1, Math.floor(skill.persistentHealValue))} HP for ${Math.max(1, Math.floor(skill.persistentHealDurationTurns))} turns`;
+function formatDuelPersistentHealAttachment(
+  attachment: Pick<SkillEffectDefinition, 'effect_type'> & {
+    persistentHealMode?: 'flat' | 'percent_max_hp';
+    persistentHealValue?: number;
+    persistentHealDurationTurns?: number;
+  },
+): string {
+  const mode = attachment.persistentHealMode === 'flat' ? 'flat' : 'percent_max_hp';
+  const value = mode === 'flat'
+    ? Math.max(1, Math.floor(attachment.persistentHealValue ?? 1))
+    : Math.max(0, Math.round((attachment.persistentHealValue ?? 0.05) * 100));
+  const turns = Math.max(1, Math.floor(attachment.persistentHealDurationTurns ?? 1));
+  if (mode === 'flat') {
+    return `End of turn: ${value} HP for ${turns} turns`;
   }
-  return `End of turn: ${Math.round(skill.persistentHealValue * 100)}% HP for ${Math.max(1, Math.floor(skill.persistentHealDurationTurns))} turns`;
+  return `End of turn: ${value}% max HP for ${turns} turns`;
+}
+
+function formatDuelEffectDescription(
+  effect: SkillEffectDefinition,
+  attachment: {
+    buffPercent?: number;
+    recoilPercent?: number;
+    recoilMode?: string;
+    persistentHealMode?: 'flat' | 'percent_max_hp';
+    persistentHealValue?: number;
+    persistentHealDurationTurns?: number;
+  },
+): string {
+  const desc = typeof effect.description === 'string' ? effect.description.trim() : '';
+  if (!desc) {
+    return effect.effect_name;
+  }
+  const buffLabel = Math.round(((attachment.buffPercent ?? effect.buffPercent ?? 0.1) ?? 0) * 100);
+  const recoilLabel = Math.round(((attachment.recoilPercent ?? 0.1) ?? 0) * 100);
+  const recoilModeLabel = attachment.recoilMode === 'percent_damage_dealt' ? 'damage dealt' : 'max HP';
+  const healModeLabel = attachment.persistentHealMode === 'flat' ? 'HP' : 'max HP';
+  const healValue = attachment.persistentHealMode === 'flat'
+    ? Math.max(1, Math.floor(attachment.persistentHealValue ?? 1))
+    : Math.round((attachment.persistentHealValue ?? 0.05) * 100);
+  const turns = Math.max(1, Math.floor(attachment.persistentHealDurationTurns ?? 1));
+  return desc
+    .replace(/<buff>/g, String(buffLabel))
+    .replace(/<recoil>/g, String(recoilLabel))
+    .replace(/<mode>/g, recoilModeLabel)
+    .replace(/<heal>/g, String(healValue))
+    .replace(/<heal_value>/g, String(healValue))
+    .replace(/<heal_mode>/g, healModeLabel)
+    .replace(/<turns>/g, String(turns))
+    .replace(/<duration>/g, String(turns));
 }
 
 function buildDuelSkillTooltip(skill: SkillDefinition, catalogs: DuelCatalogContent): string {
@@ -198,8 +240,6 @@ function buildDuelSkillTooltip(skill: SkillDefinition, catalogs: DuelCatalogCont
   }
   const immediate = formatDuelSkillHealImmediate(skill);
   if (immediate) lines.push(immediate);
-  const persistent = formatDuelSkillHealPersistent(skill);
-  if (persistent) lines.push(persistent);
   const effectById = new Map(catalogs.skillEffects.map((e) => [e.effect_id, e] as const));
   const attachments =
     Array.isArray(skill.effectAttachments) && skill.effectAttachments.length > 0
@@ -210,6 +250,9 @@ function buildDuelSkillTooltip(skill: SkillDefinition, catalogs: DuelCatalogCont
           buffPercent: 0.1,
           recoilPercent: 0.1,
           recoilMode: 'percent_max_hp' as const,
+          persistentHealMode: 'percent_max_hp' as const,
+          persistentHealValue: 0.05,
+          persistentHealDurationTurns: 1,
         }));
   for (const attachment of attachments) {
     const effect = effectById.get(attachment.effectId);
@@ -218,18 +261,10 @@ function buildDuelSkillTooltip(skill: SkillDefinition, catalogs: DuelCatalogCont
       lines.push(`Effect: ${attachment.effectId} (${procLabel}% chance)`);
       continue;
     }
-    const desc = typeof effect.description === 'string' ? effect.description.trim() : '';
-    if (desc) {
-      const buffLabel = Math.round(((attachment.buffPercent ?? effect.buffPercent ?? 0.1) ?? 0) * 100);
-      const recoilLabel = Math.round(((attachment as { recoilPercent?: number }).recoilPercent ?? 0.1) * 100);
-      const recoilModeLabel = (attachment as { recoilMode?: string }).recoilMode === 'percent_damage_dealt' ? 'damage dealt' : 'max HP';
-      const text = desc
-        .replace(/<buff>/g, String(buffLabel))
-        .replace(/<recoil>/g, String(recoilLabel))
-        .replace(/<mode>/g, recoilModeLabel);
-      lines.push(`Effect: ${text} (${procLabel}% chance)`);
+    if (effect.effect_type === 'persistent_heal') {
+      lines.push(`Effect: ${formatDuelPersistentHealAttachment({ ...effect, ...attachment })} (${procLabel}% chance)`);
     } else {
-      lines.push(`Effect: ${effect.effect_name} (${procLabel}% chance)`);
+      lines.push(`Effect: ${formatDuelEffectDescription(effect, attachment)} (${procLabel}% chance)`);
     }
   }
   return lines.join('\n');
@@ -240,11 +275,17 @@ function summarizeDuelEquipmentEffect(effect: EquipmentEffectDefinition): string
   if (description) {
     return description;
   }
+  const persistentHeal = effect.persistentHeal;
+  const persistentHealLine = persistentHeal
+    ? persistentHeal.mode === 'flat'
+      ? `End turn heal +${Math.max(1, Math.floor(persistentHeal.value))} HP while equipped`
+      : `End turn heal +${Math.round(Math.max(0, persistentHeal.value) * 100)}% max HP while equipped`
+    : null;
   const modifiers = Array.isArray(effect.modifiers) ? effect.modifiers : [];
-  if (modifiers.length <= 0) {
+  if (modifiers.length <= 0 && !persistentHealLine) {
     return effect.effect_name || effect.effect_id;
   }
-  return modifiers
+  const modifierSummary = modifiers
     .map((modifier) => {
       const statLabel = modifier.stat === 'attack'
         ? 'ATK'
@@ -261,6 +302,10 @@ function summarizeDuelEquipmentEffect(effect: EquipmentEffectDefinition): string
       return `${value >= 0 ? '+' : ''}${value} ${statLabel}`;
     })
     .join(', ');
+  if (modifierSummary && persistentHealLine) {
+    return `${modifierSummary}; ${persistentHealLine}`;
+  }
+  return modifierSummary || persistentHealLine || effect.effect_name || effect.effect_id;
 }
 
 function getItemEquipmentTooltip(
@@ -356,6 +401,13 @@ function summarizeStackedSkillEffectTotal(
   effect: Pick<SkillEffectDefinition, 'effect_type'>,
   stackedValue: number,
 ): string | null {
+  if (
+    effect.effect_type === 'persistent_heal' ||
+    effect.effect_type === 'recoil' ||
+    effect.effect_type === 'crit_buff'
+  ) {
+    return null;
+  }
   if (!Number.isFinite(stackedValue) || Math.abs(stackedValue) <= 0) {
     return null;
   }
@@ -403,14 +455,21 @@ function getDuelCritterEffectIconsAndTooltips(
       if (url) {
         iconUrls.push(url);
         const buffPercent = typeof valueById[normalized] === 'number' ? valueById[normalized] : (skillEffect.buffPercent ?? 0.1);
-        const desc = typeof skillEffect.description === 'string' ? skillEffect.description.trim() : '';
-        const label = desc
-          ? desc.replace(/<buff>/g, String(Math.round(buffPercent * 100)))
-            .replace(/<recoil>/g, String(Math.round((buffPercent) * 100)))
-            .replace(/<mode>/g, 'max HP')
-          : skillEffect.effect_name;
+        const persistentState = critter.persistentHeal?.effectId === normalized ? critter.persistentHeal : null;
+        const label = skillEffect.effect_type === 'persistent_heal'
+          ? formatDuelEffectDescription(skillEffect, {
+            persistentHealMode: persistentState?.mode ?? 'percent_max_hp',
+            persistentHealValue: persistentState?.value ?? 0.05,
+            persistentHealDurationTurns: persistentState?.remainingTurns ?? 1,
+          })
+          : formatDuelEffectDescription(skillEffect, {
+            buffPercent,
+            recoilPercent: buffPercent,
+            recoilMode: 'percent_max_hp',
+          });
         const stackSummary = summarizeStackedSkillEffectTotal(skillEffect, buffPercent);
-        tooltips.push(stackSummary ? `${label} (${sourceName})\n${stackSummary}` : `${label} (${sourceName})`);
+        const resolvedSourceName = persistentState?.sourceName?.trim() || sourceName;
+        tooltips.push(stackSummary ? `${label} (${resolvedSourceName})\n${stackSummary}` : `${label} (${resolvedSourceName})`);
       }
       continue;
     }

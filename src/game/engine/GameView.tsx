@@ -1704,9 +1704,6 @@ function buildSkillSlotTooltip(slot: {
   damage?: number;
   healMode?: SkillHealMode;
   healValue?: number;
-  persistentHealMode?: string;
-  persistentHealValue?: number;
-  persistentHealDurationTurns?: number;
   effectDescriptions?: string | null;
 }): string {
   const lines: string[] = [slot.name];
@@ -1719,21 +1716,6 @@ function buildSkillSlotTooltip(slot: {
   const healDescription = describeSkillHealForTooltip(slot.healMode, slot.healValue);
   if (healDescription) {
     lines.push(`Heals: ${healDescription}`);
-  }
-  if (
-    slot.persistentHealMode &&
-    slot.persistentHealValue != null &&
-    slot.persistentHealDurationTurns != null
-  ) {
-    if (slot.persistentHealMode === 'flat') {
-      lines.push(
-        `End of turn: ${Math.max(1, Math.floor(slot.persistentHealValue))} HP for ${Math.max(1, Math.floor(slot.persistentHealDurationTurns))} turns`,
-      );
-    } else {
-      lines.push(
-        `End of turn: ${Math.round(slot.persistentHealValue * 100)}% HP for ${Math.max(1, Math.floor(slot.persistentHealDurationTurns))} turns`,
-      );
-    }
   }
   if (slot.effectDescriptions && slot.effectDescriptions.trim()) {
     lines.push(`Effect: ${slot.effectDescriptions.trim()}`);
@@ -1763,9 +1745,6 @@ interface SkillCellContentProps {
     damage?: number;
     healMode?: SkillHealMode;
     healValue?: number;
-    persistentHealMode?: string;
-    persistentHealValue?: number;
-    persistentHealDurationTurns?: number;
     effectIconUrls?: string[];
   } | null;
   iconsBucketRoot: string | null;

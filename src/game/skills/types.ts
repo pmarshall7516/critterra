@@ -12,6 +12,7 @@ export const SKILL_EFFECT_TYPES = [
   'target_speed_debuff',
   'crit_buff',
   'recoil',
+  'persistent_heal',
 ] as const;
 export type SkillEffectType = (typeof SKILL_EFFECT_TYPES)[number];
 
@@ -55,6 +56,12 @@ export interface SkillEffectAttachment {
   recoilMode?: SkillRecoilMode;
   /** Recoil value in 0..1 (recoil effects only). */
   recoilPercent?: number;
+  /** End-of-turn heal mode (persistent_heal effects only). */
+  persistentHealMode?: SkillPersistentHealMode;
+  /** Flat HP value or percent value in 0..1 (persistent_heal effects only). */
+  persistentHealValue?: number;
+  /** Duration in turns (persistent_heal effects only). */
+  persistentHealDurationTurns?: number;
 }
 
 export interface SkillEffectDefinition {

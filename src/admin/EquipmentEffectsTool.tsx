@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { apiFetchJson } from '@/shared/apiClient';
 import {
   EQUIPMENT_EFFECT_MODES,
+  EQUIPMENT_PERSISTENT_HEAL_MODES,
   EQUIPMENT_EFFECT_STATS,
   type EquipmentEffectDefinition,
   type EquipmentEffectMode,
   type EquipmentEffectModifier,
+  type EquipmentPersistentHealMode,
   type EquipmentEffectStat,
 } from '@/game/equipmentEffects/types';
 import { sanitizeEquipmentEffectLibrary } from '@/game/equipmentEffects/schema';
@@ -47,6 +49,8 @@ interface EffectDraft {
     mode: EquipmentEffectMode;
     value: string;
   }>;
+  persistentHealMode: EquipmentPersistentHealMode | 'none';
+  persistentHealValue: string;
 }
 
 const emptyDraft: EffectDraft = {
@@ -61,9 +65,12 @@ const emptyDraft: EffectDraft = {
       value: '1',
     },
   ],
+  persistentHealMode: 'none',
+  persistentHealValue: '0.05',
 };
 
 function effectToDraft(effect: EquipmentEffectDefinition): EffectDraft {
+  const persistentHealMode = effect.persistentHeal?.mode ?? 'none';
   return {
     effect_id: effect.effect_id,
     effect_name: effect.effect_name,
@@ -74,6 +81,8 @@ function effectToDraft(effect: EquipmentEffectDefinition): EffectDraft {
       mode: modifier.mode,
       value: String(modifier.value),
     })),
+    persistentHealMode,
+    persistentHealValue: String(effect.persistentHeal?.value ?? 0.05),
   };
 }
 
@@ -91,6 +100,26 @@ function parseDraftModifiers(raw: EffectDraft['modifiers']): EquipmentEffectModi
     });
   }
   return parsed;
+}
+
+function parseDraftPersistentHeal(
+  draft: Pick<EffectDraft, 'persistentHealMode' | 'persistentHealValue'>,
+): EquipmentEffectDefinition['persistentHeal'] {
+  if (draft.persistentHealMode === 'none') {
+    return undefined;
+  }
+  const parsed = Number.parseFloat(draft.persistentHealValue);
+  const value = Number.isFinite(parsed) ? parsed : draft.persistentHealMode === 'flat' ? 1 : 0.05;
+  if (draft.persistentHealMode === 'flat') {
+    return {
+      mode: 'flat',
+      value: Math.max(1, Math.floor(value)),
+    };
+  }
+  return {
+    mode: 'percent_max_hp',
+    value: Math.max(0, Math.min(1, value)),
+  };
 }
 
 export function EquipmentEffectsTool() {
@@ -182,6 +211,7 @@ export function EquipmentEffectsTool() {
         description: effect.description,
         iconUrl: effect.iconUrl,
         modifiers: effect.modifiers,
+        persistentHeal: effect.persistentHeal,
       }));
       const result = await apiFetchJson<EquipmentEffectsSaveResponse>('/api/admin/equipment-effects/save', {
         method: 'POST',
@@ -217,8 +247,9 @@ export function EquipmentEffectsTool() {
       return;
     }
     const modifiers = parseDraftModifiers(draft.modifiers);
-    if (modifiers.length === 0) {
-      setError('Add at least one valid modifier.');
+    const persistentHeal = parseDraftPersistentHeal(draft);
+    if (modifiers.length === 0 && !persistentHeal) {
+      setError('Add at least one modifier or configure persistent heal.');
       return;
     }
     const parsed = sanitizeEquipmentEffectLibrary([
@@ -228,6 +259,7 @@ export function EquipmentEffectsTool() {
         description: draft.description,
         iconUrl: draft.iconUrl,
         modifiers,
+        ...(persistentHeal && { persistentHeal }),
       },
     ])[0];
     if (!parsed) {
@@ -431,6 +463,47 @@ export function EquipmentEffectsTool() {
             >
               Add modifier
             </button>
+          </section>
+
+          <section className="admin-panel" style={{ marginTop: '0.5rem' }}>
+            <h4>Persistent Heal</h4>
+            <p className="admin-note" style={{ marginBottom: '0.4rem' }}>
+              Optional passive heal that applies at end of turn while this equipment is equipped and active in battle.
+            </p>
+            <div className="admin-grid-2">
+              <label>
+                Mode
+                <select
+                  value={draft.persistentHealMode}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      persistentHealMode: event.target.value as EquipmentPersistentHealMode | 'none',
+                    }))
+                  }
+                >
+                  <option value="none">None</option>
+                  {EQUIPMENT_PERSISTENT_HEAL_MODES.map((mode) => (
+                    <option key={mode} value={mode}>
+                      {mode}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {draft.persistentHealMode !== 'none' && (
+                <label>
+                  {draft.persistentHealMode === 'flat' ? 'Heal HP each turn' : 'Heal % max HP each turn (0–1)'}
+                  <input
+                    type="number"
+                    min={draft.persistentHealMode === 'flat' ? 1 : 0}
+                    max={draft.persistentHealMode === 'flat' ? undefined : 1}
+                    step={draft.persistentHealMode === 'flat' ? '1' : '0.01'}
+                    value={draft.persistentHealValue}
+                    onChange={(event) => setDraft((current) => ({ ...current, persistentHealValue: event.target.value }))}
+                  />
+                </label>
+              )}
+            </div>
           </section>
 
           <section className="admin-panel" style={{ marginTop: '0.5rem' }}>

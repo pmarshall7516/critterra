@@ -477,8 +477,16 @@ describe('GameRuntime skill healing', () => {
       currentHp: 20,
       maxHp: 40,
       fainted: false,
-      persistentHeal: null as { mode: 'flat' | 'percent_max_hp'; value: number; remainingTurns: number } | null,
+      persistentHeal: null as {
+        effectId: string;
+        sourceName: string;
+        mode: 'flat' | 'percent_max_hp';
+        value: number;
+        remainingTurns: number;
+      } | null,
       activeEffectIds: [] as string[],
+      activeEffectSourceById: {} as Record<string, string>,
+      activeEffectValueById: {} as Record<string, number>,
     };
     const defender = {
       name: 'Target',
@@ -488,8 +496,18 @@ describe('GameRuntime skill healing', () => {
       fainted: false,
       persistentHeal: null,
       activeEffectIds: [] as string[],
+      activeEffectSourceById: {} as Record<string, string>,
+      activeEffectValueById: {} as Record<string, number>,
     };
     const runtime = createRuntimeHarness(attacker, defender);
+    (runtime as any).skillEffectLookupById = {
+      'persistent-heal': {
+        effect_id: 'persistent-heal',
+        effect_name: 'Persistent Heal',
+        effect_type: 'persistent_heal',
+        description: 'Restores HP each turn.',
+      },
+    };
     const battle = createBattleState(attacker, defender);
     const skill: SkillDefinition = {
       skill_id: 'aqua-ring',
@@ -497,11 +515,16 @@ describe('GameRuntime skill healing', () => {
       element: 'tide',
       type: 'support',
       priority: 1,
-      healMode: 'flat',
-      healValue: 0,
-      persistentHealMode: 'flat',
-      persistentHealValue: 3,
-      persistentHealDurationTurns: 2,
+      effectAttachments: [
+        {
+          effectId: 'persistent-heal',
+          procChance: 1,
+          persistentHealMode: 'flat',
+          persistentHealValue: 3,
+          persistentHealDurationTurns: 2,
+        },
+      ],
+      effectIds: ['persistent-heal'],
     };
 
     const result = (runtime as any).executeBattleSkillWithSkill(
@@ -520,6 +543,8 @@ describe('GameRuntime skill healing', () => {
 
     expect((runtime as any).battleAdvanceNarration()).toBe(true);
     expect(attacker.persistentHeal).toEqual({
+      effectId: 'persistent-heal',
+      sourceName: 'Aqua Ring',
       mode: 'flat',
       value: 3,
       remainingTurns: 2,
@@ -529,6 +554,8 @@ describe('GameRuntime skill healing', () => {
     expect((runtime as any).battleAdvanceNarration()).toBe(true);
     expect(attacker.currentHp).toBe(23);
     expect(attacker.persistentHeal).toEqual({
+      effectId: 'persistent-heal',
+      sourceName: 'Aqua Ring',
       mode: 'flat',
       value: 3,
       remainingTurns: 1,
@@ -548,5 +575,181 @@ describe('GameRuntime skill healing', () => {
     expect(attacker.currentHp).toBe(26);
     expect(attacker.persistentHeal).toBeNull();
     expect(battle.logLine).toContain('restored 3 HP at the end of the turn');
+  });
+
+  it('reapplies persistent-heal as refresh+replace', () => {
+    const attacker = {
+      name: 'Buddo',
+      element: 'tide',
+      currentHp: 20,
+      maxHp: 40,
+      fainted: false,
+      persistentHeal: null as {
+        effectId: string;
+        sourceName: string;
+        mode: 'flat' | 'percent_max_hp';
+        value: number;
+        remainingTurns: number;
+      } | null,
+      activeEffectIds: [] as string[],
+      activeEffectSourceById: {} as Record<string, string>,
+      activeEffectValueById: {} as Record<string, number>,
+    };
+    const defender = {
+      name: 'Target',
+      element: 'stone',
+      currentHp: 40,
+      maxHp: 40,
+      fainted: false,
+      persistentHeal: null,
+      activeEffectIds: [] as string[],
+      activeEffectSourceById: {} as Record<string, string>,
+      activeEffectValueById: {} as Record<string, number>,
+    };
+    const runtime = createRuntimeHarness(attacker, defender);
+    (runtime as any).skillEffectLookupById = {
+      'persistent-heal': {
+        effect_id: 'persistent-heal',
+        effect_name: 'Persistent Heal',
+        effect_type: 'persistent_heal',
+        description: 'Restores HP each turn.',
+      },
+    };
+    const battle = createBattleState(attacker, defender);
+    (runtime as any).activeBattle = battle;
+
+    const firstSkill: SkillDefinition = {
+      skill_id: 'aqua-ring',
+      skill_name: 'Aqua Ring',
+      element: 'tide',
+      type: 'support',
+      priority: 1,
+      effectAttachments: [
+        {
+          effectId: 'persistent-heal',
+          procChance: 1,
+          persistentHealMode: 'flat',
+          persistentHealValue: 2,
+          persistentHealDurationTurns: 3,
+        },
+      ],
+      effectIds: ['persistent-heal'],
+    };
+    const secondSkill: SkillDefinition = {
+      ...firstSkill,
+      skill_id: 'tidal-upgrade',
+      skill_name: 'Tidal Upgrade',
+      effectAttachments: [
+        {
+          effectId: 'persistent-heal',
+          procChance: 1,
+          persistentHealMode: 'flat',
+          persistentHealValue: 5,
+          persistentHealDurationTurns: 1,
+        },
+      ],
+    };
+
+    const first = (runtime as any).executeBattleSkillWithSkill(battle, 'player', firstSkill, 0, false, false);
+    (runtime as any).startBattleNarration(battle, first.narrationEvents);
+    expect((runtime as any).battleAdvanceNarration()).toBe(true);
+    expect(attacker.persistentHeal?.value).toBe(2);
+    expect(attacker.persistentHeal?.remainingTurns).toBe(3);
+
+    const second = (runtime as any).executeBattleSkillWithSkill(battle, 'player', secondSkill, 0, false, false);
+    (runtime as any).startBattleNarration(battle, second.narrationEvents);
+    expect((runtime as any).battleAdvanceNarration()).toBe(true);
+    expect(attacker.persistentHeal).toEqual({
+      effectId: 'persistent-heal',
+      sourceName: 'Tidal Upgrade',
+      mode: 'flat',
+      value: 5,
+      remainingTurns: 1,
+    });
+
+    battle.pendingEndTurnResolution = true;
+    battle.activeNarration = { message: 'Turn resolved.', attacker: null };
+    battle.narrationQueue = [];
+    expect((runtime as any).battleAdvanceNarration()).toBe(true);
+    expect(attacker.currentHp).toBe(25);
+    expect(attacker.persistentHeal).toBeNull();
+  });
+
+  it('applies persistent-heal attachments to the damage target (defender)', () => {
+    const attacker = {
+      name: 'Buddo',
+      element: 'tide',
+      currentHp: 30,
+      maxHp: 40,
+      attack: 20,
+      attackModifier: 1,
+      level: 10,
+      fainted: false,
+      persistentHeal: null,
+      activeEffectIds: [] as string[],
+      activeEffectSourceById: {} as Record<string, string>,
+      activeEffectValueById: {} as Record<string, number>,
+    };
+    const defender = {
+      name: 'Target',
+      element: 'stone',
+      currentHp: 32,
+      maxHp: 40,
+      defense: 18,
+      defenseModifier: 1,
+      fainted: false,
+      persistentHeal: null as {
+        effectId: string;
+        sourceName: string;
+        mode: 'flat' | 'percent_max_hp';
+        value: number;
+        remainingTurns: number;
+      } | null,
+      activeEffectIds: [] as string[],
+      activeEffectSourceById: {} as Record<string, string>,
+      activeEffectValueById: {} as Record<string, number>,
+    };
+    const runtime = createRuntimeHarness(attacker, defender);
+    (runtime as any).skillEffectLookupById = {
+      'persistent-heal': {
+        effect_id: 'persistent-heal',
+        effect_name: 'Persistent Heal',
+        effect_type: 'persistent_heal',
+        description: 'Restores HP each turn.',
+      },
+    };
+    const battle = createBattleState(attacker, defender);
+    const skill: SkillDefinition = {
+      skill_id: 'soak-mark',
+      skill_name: 'Soak Mark',
+      element: 'tide',
+      type: 'damage',
+      priority: 1,
+      damage: 8,
+      effectAttachments: [
+        {
+          effectId: 'persistent-heal',
+          procChance: 1,
+          persistentHealMode: 'flat',
+          persistentHealValue: 2,
+          persistentHealDurationTurns: 2,
+        },
+      ],
+      effectIds: ['persistent-heal'],
+    };
+
+    const result = (runtime as any).executeBattleSkillWithSkill(battle, 'player', skill, 0, false, false);
+    (runtime as any).activeBattle = battle;
+    (runtime as any).startBattleNarration(battle, result.narrationEvents);
+    expect((runtime as any).battleAdvanceNarration()).toBe(true);
+
+    expect(attacker.persistentHeal).toBeNull();
+    expect(defender.persistentHeal).toEqual({
+      effectId: 'persistent-heal',
+      sourceName: 'Soak Mark',
+      mode: 'flat',
+      value: 2,
+      remainingTurns: 2,
+    });
   });
 });

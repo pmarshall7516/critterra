@@ -208,4 +208,77 @@ describe('sanitizeSkillDefinition', () => {
       priority: 2,
     });
   });
+
+  it('parses and clamps persistent-heal attachment config', () => {
+    const skill = sanitizeSkillDefinition(
+      {
+        skill_id: 'aqua-ring',
+        skill_name: 'Aqua Ring',
+        element: 'tide',
+        type: 'support',
+        effectAttachments: [
+          {
+            effectId: 'persistent-heal',
+            procChance: 2,
+            persistentHealMode: 'flat',
+            persistentHealValue: 3.9,
+            persistentHealDurationTurns: 0,
+          },
+        ],
+      },
+      0,
+      new Set(['persistent-heal']),
+      undefined,
+      new Map([['persistent-heal', 'persistent_heal']]),
+    );
+
+    expect(skill).toMatchObject({
+      skill_id: 'aqua-ring',
+      effectAttachments: [
+        {
+          effectId: 'persistent-heal',
+          procChance: 1,
+          persistentHealMode: 'flat',
+          persistentHealValue: 3,
+          persistentHealDurationTurns: 1,
+        },
+      ],
+      effectIds: ['persistent-heal'],
+    });
+  });
+
+  it('converts legacy skill-level persistent heal fields into persistent-heal attachment', () => {
+    const skill = sanitizeSkillDefinition(
+      {
+        skill_id: 'legacy-ring',
+        skill_name: 'Legacy Ring',
+        element: 'tide',
+        type: 'support',
+        persistentHealMode: 'percent_max_hp',
+        persistentHealValue: 0.2,
+        persistentHealDurationTurns: 5,
+      },
+      0,
+      new Set(['persistent-heal']),
+      undefined,
+      new Map([['persistent-heal', 'persistent_heal']]),
+    );
+
+    expect(skill).toMatchObject({
+      skill_id: 'legacy-ring',
+      effectAttachments: [
+        {
+          effectId: 'persistent-heal',
+          procChance: 1,
+          persistentHealMode: 'percent_max_hp',
+          persistentHealValue: 0.2,
+          persistentHealDurationTurns: 5,
+        },
+      ],
+      effectIds: ['persistent-heal'],
+    });
+    expect(skill).not.toHaveProperty('persistentHealMode');
+    expect(skill).not.toHaveProperty('persistentHealValue');
+    expect(skill).not.toHaveProperty('persistentHealDurationTurns');
+  });
 });

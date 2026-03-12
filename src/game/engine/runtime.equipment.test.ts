@@ -490,6 +490,85 @@ describe('GameRuntime equipment integration', () => {
     expect((firstSlot.equipmentSlots[0] as any)?.effectIconUrls ?? []).toContain('https://example.com/def-icon.png');
   });
 
+  it('applies equipment persistent-heal at end of turn for active battlers only while equipped', () => {
+    const activeCritter = createCritter({ id: 1, name: 'Buddo', level: 1 });
+    const benchCritter = createCritter({ id: 2, name: 'Sprout', level: 1 });
+    const runtime = createRuntimeHarness({
+      critters: [activeCritter, benchCritter],
+      collection: [
+        createProgressEntry(activeCritter, {
+          level: 1,
+          currentHp: 10,
+          equippedEquipmentAnchors: [{ itemId: 'regen-charm', slotIndex: 0 }],
+        }),
+        createProgressEntry(benchCritter, {
+          level: 1,
+          currentHp: 11,
+          equippedEquipmentAnchors: [{ itemId: 'regen-charm', slotIndex: 0 }],
+        }),
+      ],
+      squad: [1, 2, null, null, null, null, null, null],
+      items: [
+        createEquipmentItem({
+          id: 'regen-charm',
+          name: 'Regen Charm',
+          equipSize: 1,
+          effectIds: ['equip-persistent-heal'],
+        }),
+      ],
+      itemInventory: inventory([{ itemId: 'regen-charm', quantity: 2 }]),
+      equipmentEffects: [
+        {
+          effect_id: 'equip-persistent-heal',
+          effect_name: 'Equip Persistent Heal',
+          description: 'End-turn recovery while equipped.',
+          modifiers: [],
+          persistentHeal: {
+            mode: 'flat',
+            value: 3,
+          },
+        },
+      ],
+    });
+
+    const playerTeam = (runtime as any).buildPlayerBattleTeam();
+    const opponentEntry = {
+      ...playerTeam[0],
+      slotIndex: 0,
+      name: 'Enemy',
+      currentHp: 20,
+      maxHp: 20,
+      activeEffectIds: [],
+      activeEffectSourceById: {},
+      activeEffectValueById: {},
+      equipmentEffectIds: [],
+      equipmentEffectSourceById: {},
+      persistentHeal: null,
+      equippedSkillIds: [null, null, null, null],
+    };
+    const battle = {
+      playerTeam,
+      opponentTeam: [opponentEntry],
+      playerActiveIndex: 0,
+      opponentActiveIndex: 0,
+    } as any;
+
+    const activeBefore = playerTeam[0].currentHp;
+    const benchBefore = playerTeam[1].currentHp;
+    const firstEvents = (runtime as any).buildEndTurnHealingNarrationEvents(battle);
+    expect(firstEvents).toHaveLength(1);
+    expect(firstEvents[0]?.message).toContain('restored 3 HP at the end of the turn');
+    (runtime as any).applyBattlePostDamageResolution(battle, firstEvents[0].postDamageResolution);
+    expect(playerTeam[0].currentHp).toBe(activeBefore + 3);
+    expect(playerTeam[1].currentHp).toBe(benchBefore);
+
+    const secondEvents = (runtime as any).buildEndTurnHealingNarrationEvents(battle);
+    expect(secondEvents).toHaveLength(1);
+    (runtime as any).applyBattlePostDamageResolution(battle, secondEvents[0].postDamageResolution);
+    expect(playerTeam[0].currentHp).toBe(activeBefore + 6);
+    expect(playerTeam[1].currentHp).toBe(benchBefore);
+  });
+
   it('appends equipment source name to battle effect icon tooltips', () => {
     const critter = createCritter({ id: 1, name: 'Buddo', level: 1 });
     const runtime = createRuntimeHarness({

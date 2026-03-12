@@ -1,8 +1,19 @@
-import type { EquipmentEffectDefinition, EquipmentEffectModifier, EquipmentEffectMode, EquipmentEffectStat } from '@/game/equipmentEffects/types';
-import { EQUIPMENT_EFFECT_MODES, EQUIPMENT_EFFECT_STATS } from '@/game/equipmentEffects/types';
+import type {
+  EquipmentEffectDefinition,
+  EquipmentEffectModifier,
+  EquipmentEffectMode,
+  EquipmentEffectStat,
+  EquipmentPersistentHealMode,
+} from '@/game/equipmentEffects/types';
+import {
+  EQUIPMENT_EFFECT_MODES,
+  EQUIPMENT_EFFECT_STATS,
+  EQUIPMENT_PERSISTENT_HEAL_MODES,
+} from '@/game/equipmentEffects/types';
 
 const EFFECT_MODE_SET = new Set<EquipmentEffectMode>(EQUIPMENT_EFFECT_MODES);
 const EFFECT_STAT_SET = new Set<EquipmentEffectStat>(EQUIPMENT_EFFECT_STATS);
+const PERSISTENT_HEAL_MODE_SET = new Set<EquipmentPersistentHealMode>(EQUIPMENT_PERSISTENT_HEAL_MODES);
 
 export function sanitizeEquipmentEffectDefinition(raw: unknown, fallbackIndex = 0): EquipmentEffectDefinition | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -24,6 +35,7 @@ export function sanitizeEquipmentEffectDefinition(raw: unknown, fallbackIndex = 
         ? record.icon_url.trim()
         : undefined;
   const modifiers = sanitizeEquipmentEffectModifiers(record.modifiers);
+  const persistentHeal = sanitizeEquipmentPersistentHealConfig(record);
 
   return {
     effect_id,
@@ -31,6 +43,7 @@ export function sanitizeEquipmentEffectDefinition(raw: unknown, fallbackIndex = 
     description,
     ...(iconUrl && { iconUrl }),
     modifiers,
+    ...(persistentHeal && { persistentHeal }),
   };
 }
 
@@ -79,12 +92,44 @@ function sanitizeEquipmentEffectModifiers(raw: unknown): EquipmentEffectModifier
   return parsed;
 }
 
+function sanitizeEquipmentPersistentHealConfig(
+  record: Record<string, unknown>,
+): EquipmentEffectDefinition['persistentHeal'] {
+  const rawConfig =
+    record.persistentHeal && typeof record.persistentHeal === 'object' && !Array.isArray(record.persistentHeal)
+      ? (record.persistentHeal as Record<string, unknown>)
+      : null;
+  const modeRaw = typeof (rawConfig?.mode ?? record.persistentHealMode ?? record.persistent_heal_mode) === 'string'
+    ? String(rawConfig?.mode ?? record.persistentHealMode ?? record.persistent_heal_mode).trim().toLowerCase()
+    : '';
+  if (!PERSISTENT_HEAL_MODE_SET.has(modeRaw as EquipmentPersistentHealMode)) {
+    return undefined;
+  }
+  const rawValue = rawConfig?.value ?? record.persistentHealValue ?? record.persistent_heal_value;
+  const value = modeRaw === 'flat'
+    ? Math.max(1, Math.floor(clamp(parseNumeric(rawValue, 1), 1, 9999)))
+    : clamp(parseNumeric(rawValue, 0.05), 0, 1);
+  return {
+    mode: modeRaw as EquipmentPersistentHealMode,
+    value,
+  };
+}
+
 function sanitizeModifierValue(mode: EquipmentEffectMode, raw: unknown): number {
   const parsed = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
   if (mode === 'percent') {
     return clamp(parsed, -5, 5);
   }
   return Math.floor(clamp(parsed, -999, 999));
+}
+
+function parseNumeric(raw: unknown, fallback: number): number {
+  const parsed = typeof raw === 'number' && Number.isFinite(raw)
+    ? raw
+    : typeof raw === 'string' && raw.trim().length > 0
+      ? Number.parseFloat(raw)
+      : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function sanitizeSlug(value: unknown, fallback: string): string {

@@ -208,6 +208,7 @@ function buildBattleCritterState(
     equipmentEffectSourceById,
     equipmentDefensePositiveBonus,
     pendingCritChanceBonus: 0,
+    persistentHeal: null,
     consecutiveSuccessfulGuardCount: 0,
   };
 }
@@ -481,7 +482,7 @@ function advanceTurnResolution(state: DuelBattleState, context: ResolveContext):
   }
   const resolution = state.turnResolution;
   if (resolution.nextActionIndex >= resolution.queue.length) {
-    finishTurnResolution(state);
+    finishTurnResolution(state, context);
     return { ok: true };
   }
 
@@ -505,7 +506,7 @@ function advanceTurnResolution(state: DuelBattleState, context: ResolveContext):
   }
 
   if (state.phase !== 'resolving-turn') {
-    finishTurnResolution(state);
+    finishTurnResolution(state, context);
     return { ok: true, executedEntry: entry, knockout, swapOccurred };
   }
   // Do not finish the turn here when this was the last action. Let the UI show this
@@ -584,12 +585,15 @@ function executeOrderedAction(
   resolveSkillAction(state, sideState, opponentState, action, context);
 }
 
-function finishTurnResolution(state: DuelBattleState): void {
+function finishTurnResolution(state: DuelBattleState, context: ResolveContext): void {
   state.player.pendingActions = null;
   state.opponent.pendingActions = null;
   state.turnResolution = null;
   clearGuardFlags(state.player);
   clearGuardFlags(state.opponent);
+  if (state.phase !== 'finished') {
+    applyEndTurnPersistentHealing(state, context);
+  }
   cleanupFaintedActiveSlots(state.player);
   cleanupFaintedActiveSlots(state.opponent);
   if (state.phase === 'finished') {
@@ -880,6 +884,7 @@ function applySkillDamage(
   });
   if (defender.currentHp <= 0 && !defender.fainted) {
     defender.fainted = true;
+    clearPersistentHealState(defender);
     pushLog(state, {
       turn: state.turnNumber,
       kind: 'knockout',
@@ -927,6 +932,7 @@ function applySkillEffectsFromResolution(
     attackerEffectAttachments: SkillEffectAttachment[];
     defenderEffectAttachments: SkillEffectAttachment[];
     recoilAttachments: SkillEffectAttachment[];
+    persistentHealAttachments: SkillEffectAttachment[];
     attackerCritChanceBuffPercent: number;
   },
   dealtDamage: number,
@@ -1023,6 +1029,25 @@ function applySkillEffectsFromResolution(
     }
   }
 
+  for (const attachment of resolution.persistentHealAttachments) {
+    const recipient =
+      skill.type === 'support' && target && target.side === actor.side && !target.fainted
+        ? target
+        : skill.type === 'damage' && target && target.side !== actor.side && !target.fainted
+          ? target
+          : actor;
+    const persistent = resolvePersistentHealStateFromAttachment(attachment, skill.skill_name);
+    if (!persistent) {
+      continue;
+    }
+    applyPersistentHealState(recipient, persistent);
+    pushLog(state, {
+      turn: state.turnNumber,
+      kind: 'status',
+      text: `${recipient.name} gained end-of-turn healing for ${persistent.remainingTurns} turns.`,
+    });
+  }
+
   const recoilAmount = resolveRequestedSkillRecoilAmount(
     resolution.recoilAttachments,
     actor.maxHp,
@@ -1037,10 +1062,128 @@ function applySkillEffectsFromResolution(
     });
     if (actor.currentHp <= 0 && !actor.fainted) {
       actor.fainted = true;
+      clearPersistentHealState(actor);
       pushLog(state, {
         turn: state.turnNumber,
         kind: 'knockout',
         text: `${actor.name} was knocked out.`,
+      });
+    }
+  }
+}
+
+function resolvePersistentHealStateFromAttachment(
+  attachment: SkillEffectAttachment,
+  sourceName: string,
+): DuelBattleCritterState['persistentHeal'] {
+  const mode = attachment.persistentHealMode === 'flat' ? 'flat' : 'percent_max_hp';
+  const value = mode === 'flat'
+    ? Math.max(1, Math.floor(attachment.persistentHealValue ?? 1))
+    : Math.max(0, Math.min(1, attachment.persistentHealValue ?? 0.05));
+  const remainingTurns = Math.max(1, Math.floor(attachment.persistentHealDurationTurns ?? 1));
+  if (value <= 0 || !attachment.effectId) {
+    return null;
+  }
+  return {
+    effectId: attachment.effectId,
+    sourceName,
+    mode,
+    value,
+    remainingTurns,
+  };
+}
+
+function applyPersistentHealState(
+  critter: DuelBattleCritterState,
+  next: NonNullable<DuelBattleCritterState['persistentHeal']>,
+): void {
+  clearPersistentHealState(critter);
+  critter.persistentHeal = { ...next };
+  if (!critter.activeEffectIds.includes(next.effectId)) {
+    critter.activeEffectIds.push(next.effectId);
+  }
+  critter.activeEffectSourceById[next.effectId] = next.sourceName;
+  critter.activeEffectValueById[next.effectId] = next.value;
+}
+
+function clearPersistentHealState(critter: DuelBattleCritterState): void {
+  if (!critter.persistentHeal) {
+    return;
+  }
+  const effectId = critter.persistentHeal.effectId;
+  critter.persistentHeal = null;
+  if (effectId) {
+    critter.activeEffectIds = critter.activeEffectIds.filter((entry) => entry !== effectId);
+    delete critter.activeEffectSourceById[effectId];
+    delete critter.activeEffectValueById[effectId];
+  }
+}
+
+function getEquipmentPersistentHealConfigs(
+  critter: DuelBattleCritterState,
+  equipmentEffectById: Map<string, EquipmentEffectDefinition>,
+): Array<{ mode: 'flat' | 'percent_max_hp'; value: number }> {
+  const configs: Array<{ mode: 'flat' | 'percent_max_hp'; value: number }> = [];
+  for (const effectId of critter.equipmentEffectIds ?? []) {
+    const effect = equipmentEffectById.get(effectId);
+    if (!effect?.persistentHeal) {
+      continue;
+    }
+    const mode = effect.persistentHeal.mode === 'flat' ? 'flat' : 'percent_max_hp';
+    const value = mode === 'flat'
+      ? Math.max(1, Math.floor(effect.persistentHeal.value))
+      : Math.max(0, Math.min(1, effect.persistentHeal.value));
+    if (value <= 0) {
+      continue;
+    }
+    configs.push({ mode, value });
+  }
+  return configs;
+}
+
+function resolvePersistentHealAmount(
+  maxHp: number,
+  heal: { mode: 'flat' | 'percent_max_hp'; value: number },
+): number {
+  if (heal.mode === 'flat') {
+    return Math.max(1, Math.floor(heal.value));
+  }
+  return Math.max(0, Math.floor(Math.max(1, maxHp) * Math.max(0, Math.min(1, heal.value))));
+}
+
+function applyEndTurnPersistentHealing(state: DuelBattleState, context: ResolveContext): void {
+  const sides: DuelBattleSideState[] = [state.player, state.opponent];
+  for (const side of sides) {
+    for (const memberIndex of getAliveActiveIndices(side)) {
+      const critter = side.team[memberIndex];
+      if (!critter || critter.fainted || critter.currentHp <= 0) {
+        continue;
+      }
+      let requestedHeal = 0;
+      if (critter.persistentHeal) {
+        requestedHeal += resolvePersistentHealAmount(critter.maxHp, critter.persistentHeal);
+        critter.persistentHeal.remainingTurns = Math.max(0, critter.persistentHeal.remainingTurns - 1);
+        if (critter.persistentHeal.remainingTurns <= 0) {
+          clearPersistentHealState(critter);
+        }
+      }
+      const equipmentPersistentHeals = getEquipmentPersistentHealConfigs(critter, context.indexes.equipmentEffectById);
+      for (const healConfig of equipmentPersistentHeals) {
+        requestedHeal += resolvePersistentHealAmount(critter.maxHp, healConfig);
+      }
+      if (requestedHeal <= 0) {
+        continue;
+      }
+      const beforeHp = critter.currentHp;
+      critter.currentHp = Math.min(critter.maxHp, critter.currentHp + requestedHeal);
+      const actualHeal = Math.max(0, critter.currentHp - beforeHp);
+      if (actualHeal <= 0) {
+        continue;
+      }
+      pushLog(state, {
+        turn: state.turnNumber,
+        kind: 'heal',
+        text: `${critter.name} restored ${actualHeal} HP at end of turn.`,
       });
     }
   }
@@ -1514,6 +1657,7 @@ function clearGuardFlags(side: DuelBattleSideState): void {
 }
 
 function resetVolatileBattleState(critter: DuelBattleCritterState): void {
+  clearPersistentHealState(critter);
   critter.attackModifier = 1;
   critter.defenseModifier = 1;
   critter.speedModifier = 1;

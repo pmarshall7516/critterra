@@ -86,12 +86,41 @@ function createSquad(id: string, name: string, members: DuelSquadMember[]): Duel
   };
 }
 
-function createMember(critterId: number, equippedSkillIds: [string | null, string | null, string | null, string | null]): DuelSquadMember {
+function createMember(
+  critterId: number,
+  equippedSkillIds: [string | null, string | null, string | null, string | null],
+  equippedItems: DuelSquadMember['equippedItems'] = [],
+): DuelSquadMember {
   return {
     critterId,
     level: 1,
     equippedSkillIds,
-    equippedItems: [],
+    equippedItems: [...equippedItems],
+  };
+}
+
+function createEquipmentItem(input: {
+  id: string;
+  name: string;
+  effectIds: string[];
+}): GameItemDefinition {
+  return {
+    id: input.id,
+    name: input.name,
+    category: 'equipment',
+    description: '',
+    imageUrl: '',
+    misuseText: '',
+    successText: '',
+    effectType: 'equip_effect',
+    effectConfig: {
+      equipSize: 1,
+      equipmentEffectIds: input.effectIds,
+    },
+    consumable: false,
+    maxStack: 99,
+    isActive: true,
+    starterGrantAmount: 0,
   };
 }
 
@@ -108,14 +137,16 @@ function createCatalogs(input: {
   critters: CritterDefinition[];
   skills: SkillDefinition[];
   skillEffects?: SkillEffectDefinition[];
+  items?: GameItemDefinition[];
+  equipmentEffects?: EquipmentEffectDefinition[];
 }): DuelCatalogContent {
   return {
     critters: input.critters,
     skills: input.skills,
     skillEffects: input.skillEffects ?? ([] as SkillEffectDefinition[]),
-    equipmentEffects: [] as EquipmentEffectDefinition[],
+    equipmentEffects: input.equipmentEffects ?? ([] as EquipmentEffectDefinition[]),
     elementChart: [] as ElementChart,
-    items: [] as GameItemDefinition[],
+    items: input.items ?? ([] as GameItemDefinition[]),
   };
 }
 
@@ -611,6 +642,144 @@ describe('duel battle core - doubles and replacements', () => {
 
     expect(controller.state.opponent.team[0].currentHp).toBeLessThan(controller.state.opponent.team[0].maxHp);
     expect(controller.state.opponent.team[1].currentHp).toBe(controller.state.opponent.team[1].maxHp);
+  });
+
+  it('applies persistent-heal attachments to damage targets and expires after duration', () => {
+    const mark = createSkill({
+      id: 'soak-mark',
+      name: 'Soak Mark',
+      damage: 30,
+      effectAttachments: [
+        {
+          effectId: 'persistent-heal',
+          procChance: 1,
+          persistentHealMode: 'flat',
+          persistentHealValue: 4,
+          persistentHealDurationTurns: 2,
+        },
+      ],
+    });
+    const jab = createSkill({ id: 'jab', name: 'Jab', damage: 5 });
+    const persistentHealEffect: SkillEffectDefinition = {
+      effect_id: 'persistent-heal',
+      effect_name: 'Persistent Heal',
+      effect_type: 'persistent_heal',
+      description: '',
+    };
+    const catalogs = createCatalogs({
+      critters: [
+        createCritter({ id: 31, name: 'Caster', speed: 50, unlockedSkillIds: ['soak-mark'] }),
+        createCritter({ id: 32, name: 'Target', speed: 20, unlockedSkillIds: ['jab'] }),
+      ],
+      skills: [mark, jab],
+      skillEffects: [persistentHealEffect],
+    });
+    const controller = startBattle({
+      format: 'singles',
+      playerSquad: createSquad('p', 'Player', [createMember(31, ['soak-mark', null, null, null])]),
+      opponentSquad: createSquad('o', 'Opponent', [createMember(32, ['jab', null, null, null])]),
+      catalogs,
+      rngValues: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+    });
+
+    submitTurn(
+      controller,
+      [{ kind: 'skill', actorMemberIndex: 0, skillSlotIndex: 0, targetMemberIndex: 0 }],
+      [{ kind: 'skill', actorMemberIndex: 0, skillSlotIndex: 0, targetMemberIndex: 0 }],
+    );
+
+    const target = controller.state.opponent.team[0];
+    expect(target.persistentHeal).toEqual({
+      effectId: 'persistent-heal',
+      sourceName: 'Soak Mark',
+      mode: 'flat',
+      value: 4,
+      remainingTurns: 1,
+    });
+    expect(target.activeEffectIds).toContain('persistent-heal');
+    expect(
+      controller.state.logs.some(
+        (entry) =>
+          entry.turn === 1 &&
+          entry.kind === 'heal' &&
+          entry.text.includes('Target restored') &&
+          entry.text.includes('end of turn.'),
+      ),
+    ).toBe(true);
+
+    submitTurn(
+      controller,
+      [{ kind: 'guard', actorMemberIndex: 0 }],
+      [{ kind: 'guard', actorMemberIndex: 0 }],
+    );
+
+    expect(target.persistentHeal).toBeNull();
+    expect(target.activeEffectIds.includes('persistent-heal')).toBe(false);
+  });
+
+  it('applies equipment persistent-heal every turn while the equipped critter is active', () => {
+    const peck = createSkill({ id: 'peck', name: 'Peck', damage: 1 });
+    const slam = createSkill({ id: 'slam', name: 'Slam', damage: 36 });
+    const regenItem = createEquipmentItem({
+      id: 'regen-charm',
+      name: 'Regen Charm',
+      effectIds: ['equip-persistent-heal'],
+    });
+    const catalogs = createCatalogs({
+      critters: [
+        createCritter({ id: 41, name: 'Hero', speed: 20, unlockedSkillIds: ['peck'] }),
+        createCritter({ id: 42, name: 'Enemy', speed: 60, unlockedSkillIds: ['slam'] }),
+      ],
+      skills: [peck, slam],
+      items: [regenItem],
+      equipmentEffects: [
+        {
+          effect_id: 'equip-persistent-heal',
+          effect_name: 'Equip Persistent Heal',
+          description: '',
+          modifiers: [],
+          persistentHeal: {
+            mode: 'flat',
+            value: 3,
+          },
+        },
+      ],
+    });
+    const controller = startBattle({
+      format: 'singles',
+      playerSquad: createSquad('p', 'Player', [
+        createMember(41, ['peck', null, null, null], [{ itemId: 'regen-charm', slotIndex: 0 }]),
+      ]),
+      opponentSquad: createSquad('o', 'Opponent', [createMember(42, ['slam', null, null, null])]),
+      catalogs,
+      rngValues: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+    });
+
+    submitTurn(
+      controller,
+      [{ kind: 'skill', actorMemberIndex: 0, skillSlotIndex: 0, targetMemberIndex: 0 }],
+      [{ kind: 'skill', actorMemberIndex: 0, skillSlotIndex: 0, targetMemberIndex: 0 }],
+    );
+    const hero = controller.state.player.team[0];
+    const hpAfterTurnOne = hero.currentHp;
+    expect(hero.persistentHeal).toBeNull();
+    expect(
+      controller.state.logs.some(
+        (entry) => entry.turn === 1 && entry.kind === 'heal' && entry.text.includes('Hero restored 3 HP at end of turn.'),
+      ),
+    ).toBe(true);
+
+    submitTurn(
+      controller,
+      [{ kind: 'guard', actorMemberIndex: 0 }],
+      [{ kind: 'guard', actorMemberIndex: 0 }],
+    );
+    expect(hero.currentHp).toBeGreaterThan(hpAfterTurnOne);
+    expect(
+      controller.state.logs.some(
+        (entry) => entry.turn === 2 && entry.kind === 'heal' && entry.text.includes('Hero restored'),
+      ),
+    ).toBe(true);
   });
 
   it('requires replacement selection before next turn and supports draw on simultaneous all-faint via recoil', () => {

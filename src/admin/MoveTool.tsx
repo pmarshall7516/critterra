@@ -5,7 +5,6 @@ import type {
   SkillEffectAttachment,
   SkillEffectType,
   SkillHealMode,
-  SkillPersistentHealMode,
   SkillRecoilMode,
   SkillTargetKindDamage,
   SkillTargetKindSupport,
@@ -15,6 +14,7 @@ import {
   DAMAGE_SKILL_HEAL_MODES,
   ELEMENT_SKILL_COLORS,
   SKILL_EFFECT_TYPES,
+  SKILL_PERSISTENT_HEAL_MODES,
   SKILL_RECOIL_MODES,
   SKILL_TARGET_KIND_DAMAGE,
   SKILL_TARGET_KIND_SUPPORT,
@@ -65,7 +65,6 @@ interface AdminSkillCellContentProps {
 }
 
 type SkillDraftHealMode = SkillHealMode | 'none';
-type SkillDraftPersistentHealMode = SkillPersistentHealMode | 'none';
 const STAT_OR_CRIT_EFFECT_TYPES = new Set<SkillEffectType>([
   'atk_buff',
   'def_buff',
@@ -92,11 +91,10 @@ const SUPPORT_HEAL_MODE_OPTIONS: Array<{ value: SkillDraftHealMode; label: strin
   { value: 'percent_max_hp', label: '% Max HP' },
 ];
 
-const PERSISTENT_HEAL_MODE_OPTIONS: Array<{ value: SkillDraftPersistentHealMode; label: string }> = [
-  { value: 'none', label: 'None' },
-  { value: 'flat', label: 'Flat HP' },
-  { value: 'percent_max_hp', label: '% Max HP' },
-];
+const PERSISTENT_HEAL_MODE_OPTIONS = SKILL_PERSISTENT_HEAL_MODES.map((mode) => ({
+  value: mode,
+  label: mode === 'flat' ? 'Flat HP' : '% Max HP',
+}));
 
 function effectUsesBuffPercent(effectType: SkillEffectType | undefined): boolean {
   return effectType == null || STAT_OR_CRIT_EFFECT_TYPES.has(effectType);
@@ -106,25 +104,15 @@ function effectUsesRecoilConfig(effectType: SkillEffectType | undefined): boolea
   return effectType === 'recoil';
 }
 
+function effectUsesPersistentHealConfig(effectType: SkillEffectType | undefined): boolean {
+  return effectType === 'persistent_heal';
+}
+
 function formatSkillValue(skill: Pick<SkillDefinition, 'type' | 'damage'>): string | null {
   if (skill.type === 'damage' && skill.damage != null) {
     return String(skill.damage);
   }
   return null;
-}
-
-function getDefaultPersistentHealValueForMode(mode: SkillDraftPersistentHealMode): string {
-  return mode === 'flat' ? '1' : '0';
-}
-
-function getPersistentHealValueLabel(mode: SkillDraftPersistentHealMode): string {
-  if (mode === 'flat') {
-    return 'Heal HP each turn';
-  }
-  if (mode === 'percent_max_hp') {
-    return 'Heal % of max HP each turn (0–1)';
-  }
-  return 'Persistent heal amount';
 }
 
 function formatImmediateHealTooltip(skill: Pick<SkillDefinition, 'healMode' | 'healValue'>): string | null {
@@ -140,20 +128,45 @@ function formatImmediateHealTooltip(skill: Pick<SkillDefinition, 'healMode' | 'h
   return `Heals: ${Math.round(skill.healValue * 100)}% HP after use`;
 }
 
-function formatPersistentHealTooltip(
-  skill: Pick<SkillDefinition, 'persistentHealMode' | 'persistentHealValue' | 'persistentHealDurationTurns'>,
-): string | null {
-  if (
-    !skill.persistentHealMode ||
-    skill.persistentHealValue == null ||
-    skill.persistentHealDurationTurns == null
-  ) {
-    return null;
+function formatPersistentHealAttachmentTooltip(
+  attachment: Pick<SkillEffectAttachment, 'persistentHealMode' | 'persistentHealValue' | 'persistentHealDurationTurns'>,
+): string {
+  const mode = attachment.persistentHealMode === 'flat' ? 'flat' : 'percent_max_hp';
+  const value = mode === 'flat'
+    ? Math.max(1, Math.floor(attachment.persistentHealValue ?? 1))
+    : Math.max(0, Math.round((attachment.persistentHealValue ?? 0.05) * 100));
+  const turns = Math.max(1, Math.floor(attachment.persistentHealDurationTurns ?? 1));
+  if (mode === 'flat') {
+    return `End of turn: ${value} HP for ${turns} turns`;
   }
-  if (skill.persistentHealMode === 'flat') {
-    return `End of turn: ${Math.max(1, Math.floor(skill.persistentHealValue))} HP for ${Math.max(1, Math.floor(skill.persistentHealDurationTurns))} turns`;
+  return `End of turn: ${value}% max HP for ${turns} turns`;
+}
+
+function formatAttachmentDescription(
+  effect: EffectOption,
+  attachment: SkillEffectAttachment,
+): string {
+  const effectDescription = typeof effect.description === 'string' ? effect.description.trim() : '';
+  if (!effectDescription) {
+    return effect.name;
   }
-  return `End of turn: ${Math.round(skill.persistentHealValue * 100)}% HP for ${Math.max(1, Math.floor(skill.persistentHealDurationTurns))} turns`;
+  const buffLabel = Math.round(((attachment.buffPercent ?? effect.buffPercent ?? 0.1) ?? 0) * 100);
+  const recoilLabel = Math.round(((attachment.recoilPercent ?? 0.1) ?? 0) * 100);
+  const recoilModeLabel = attachment.recoilMode === 'percent_damage_dealt' ? 'damage dealt' : 'max HP';
+  const persistentMode = attachment.persistentHealMode === 'flat' ? 'HP' : 'max HP';
+  const persistentValue = attachment.persistentHealMode === 'flat'
+    ? Math.max(1, Math.floor(attachment.persistentHealValue ?? 1))
+    : Math.round((attachment.persistentHealValue ?? 0.05) * 100);
+  const persistentTurns = Math.max(1, Math.floor(attachment.persistentHealDurationTurns ?? 1));
+  return effectDescription
+    .replace(/<buff>/g, String(buffLabel))
+    .replace(/<recoil>/g, String(recoilLabel))
+    .replace(/<mode>/g, recoilModeLabel)
+    .replace(/<heal>/g, String(persistentValue))
+    .replace(/<heal_value>/g, String(persistentValue))
+    .replace(/<heal_mode>/g, persistentMode)
+    .replace(/<turns>/g, String(persistentTurns))
+    .replace(/<duration>/g, String(persistentTurns));
 }
 
 function buildSkillTooltip(skill: SkillDefinition, effectList: EffectOption[]): string {
@@ -167,10 +180,6 @@ function buildSkillTooltip(skill: SkillDefinition, effectList: EffectOption[]): 
   const immediateHealLine = formatImmediateHealTooltip(skill);
   if (immediateHealLine) {
     lines.push(immediateHealLine);
-  }
-  const persistentHealLine = formatPersistentHealTooltip(skill);
-  if (persistentHealLine) {
-    lines.push(persistentHealLine);
   }
   const effectById = new Map(effectList.map((effect) => [effect.id, effect]));
   const effectAttachments =
@@ -186,6 +195,15 @@ function buildSkillTooltip(skill: SkillDefinition, effectList: EffectOption[]): 
               recoilPercent: 0.1,
             };
           }
+          if (effect?.effectType === 'persistent_heal') {
+            return {
+              effectId,
+              procChance: 1,
+              persistentHealMode: 'percent_max_hp' as const,
+              persistentHealValue: 0.05,
+              persistentHealDurationTurns: 1,
+            };
+          }
           return {
             effectId,
             buffPercent: effectById.get(effectId)?.buffPercent ?? 0.1,
@@ -199,17 +217,13 @@ function buildSkillTooltip(skill: SkillDefinition, effectList: EffectOption[]): 
       if (!effect) {
         return `${attachment.effectId} (${procLabel}% chance)`;
       }
-      const effectDescription = typeof effect.description === 'string' ? effect.description.trim() : '';
-      if (effectDescription) {
-        const buffLabel = Math.round(((attachment.buffPercent ?? effect.buffPercent ?? 0.1) ?? 0) * 100);
-        const recoilLabel = Math.round(((attachment.recoilPercent ?? 0.1) ?? 0) * 100);
-        const recoilModeLabel = attachment.recoilMode === 'percent_damage_dealt' ? 'damage dealt' : 'max HP';
-        return `${effectDescription
-          .replace(/<buff>/g, String(buffLabel))
-          .replace(/<recoil>/g, String(recoilLabel))
-          .replace(/<mode>/g, recoilModeLabel)} (${procLabel}% chance)`;
+      const usesPersistent = effectUsesPersistentHealConfig(effect.effectType);
+      if (usesPersistent) {
+        const formatted = formatAttachmentDescription(effect, attachment);
+        const text = formatted === effect.name ? formatPersistentHealAttachmentTooltip(attachment) : formatted;
+        return `${text} (${procLabel}% chance)`;
       }
-      return `${effect.name} (${procLabel}% chance)`;
+      return `${formatAttachmentDescription(effect, attachment)} (${procLabel}% chance)`;
     });
   for (const effectLine of effectLines) {
     if (effectLine.trim()) {
@@ -274,9 +288,6 @@ interface SkillDraft {
   damage: string;
   healMode: SkillHealMode;
   healValue: string;
-  persistentHealMode: SkillDraftPersistentHealMode;
-  persistentHealValue: string;
-  persistentHealDurationTurns: string;
   effectAttachments: SkillEffectAttachmentDraft[];
   targetKind: string;
   targetTeamOption: string;
@@ -289,6 +300,9 @@ interface SkillEffectAttachmentDraft {
   procChance: string;
   recoilMode: SkillRecoilMode;
   recoilPercent: string;
+  persistentHealMode: 'flat' | 'percent_max_hp';
+  persistentHealValue: string;
+  persistentHealDurationTurns: string;
 }
 
 const emptyDraft: SkillDraft = {
@@ -300,9 +314,6 @@ const emptyDraft: SkillDraft = {
   damage: '20',
   healMode: 'none',
   healValue: '0',
-  persistentHealMode: 'none',
-  persistentHealValue: '0',
-  persistentHealDurationTurns: '1',
   effectAttachments: [],
   targetKind: 'select_enemies',
   targetTeamOption: 'user_only',
@@ -345,6 +356,28 @@ function sanitizeAttachmentNumber(rawValue: string, fallback: number): number {
   return Math.max(0, Math.min(1, parsed));
 }
 
+function sanitizePersistentHealValue(
+  mode: SkillEffectAttachmentDraft['persistentHealMode'],
+  rawValue: string,
+): number {
+  const parsed = Number.parseFloat(rawValue);
+  if (!Number.isFinite(parsed)) {
+    return mode === 'flat' ? 1 : 0.05;
+  }
+  if (mode === 'flat') {
+    return Math.max(1, Math.floor(parsed));
+  }
+  return Math.max(0, Math.min(1, parsed));
+}
+
+function sanitizePersistentHealDuration(rawValue: string): number {
+  const parsed = Number.parseInt(rawValue, 10);
+  if (!Number.isFinite(parsed)) {
+    return 1;
+  }
+  return Math.max(1, Math.min(999, Math.floor(parsed)));
+}
+
 function normalizeSkillAttachmentDrafts(
   skill: SkillDefinition,
   effectList: EffectOption[],
@@ -360,6 +393,8 @@ function normalizeSkillAttachmentDrafts(
       }
       const fallbackBuff = typeof effectById.get(id)?.buffPercent === 'number' ? effectById.get(id)!.buffPercent! : 0.1;
       const effectType = effectById.get(id)?.effectType;
+      const persistentHealMode =
+        attachment.persistentHealMode === 'flat' ? 'flat' : 'percent_max_hp';
       normalized.set(id, {
         effectId: id,
         buffPercent: String(Math.max(0, Math.min(1, attachment.buffPercent ?? fallbackBuff))),
@@ -369,11 +404,23 @@ function normalizeSkillAttachmentDrafts(
             ? attachment.recoilMode
             : 'percent_max_hp',
         recoilPercent: String(Math.max(0, Math.min(1, attachment.recoilPercent ?? 0.1))),
+        persistentHealMode,
+        persistentHealValue: String(
+          attachment.persistentHealValue ?? (persistentHealMode === 'flat' ? 1 : 0.05),
+        ),
+        persistentHealDurationTurns: String(Math.max(1, Math.floor(attachment.persistentHealDurationTurns ?? 1))),
       });
       if (effectType === 'recoil') {
         const existing = normalized.get(id);
         if (existing) {
           existing.buffPercent = String(fallbackBuff);
+        }
+      } else if (effectType === 'persistent_heal') {
+        const existing = normalized.get(id);
+        if (existing) {
+          existing.buffPercent = String(fallbackBuff);
+          existing.recoilPercent = '0.1';
+          existing.recoilMode = 'percent_max_hp';
         }
       }
     }
@@ -392,6 +439,9 @@ function normalizeSkillAttachmentDrafts(
         procChance: '1',
         recoilMode: 'percent_max_hp',
         recoilPercent: effectType === 'recoil' ? '0.1' : '0',
+        persistentHealMode: 'percent_max_hp',
+        persistentHealValue: '0.05',
+        persistentHealDurationTurns: '1',
       });
     }
   }
@@ -400,7 +450,6 @@ function normalizeSkillAttachmentDrafts(
 
 function skillToDraft(skill: SkillDefinition, effectList: EffectOption[]): SkillDraft {
   const healMode = normalizeDraftHealMode(skill.type, skill.healMode ?? 'none');
-  const persistentHealMode = skill.persistentHealMode ?? 'none';
   const targetKind =
     skill.type === 'damage'
       ? (SKILL_TARGET_KIND_DAMAGE.includes((skill.targetKind ?? 'select_enemies') as SkillTargetKindDamage)
@@ -421,13 +470,6 @@ function skillToDraft(skill: SkillDefinition, effectList: EffectOption[]): Skill
     damage: skill.type === 'damage' && skill.damage != null ? String(skill.damage) : '20',
     healMode,
     healValue: typeof skill.healValue === 'number' ? String(skill.healValue) : '0',
-    persistentHealMode,
-    persistentHealValue:
-      skill.persistentHealValue != null
-        ? String(skill.persistentHealValue)
-        : getDefaultPersistentHealValueForMode(persistentHealMode),
-    persistentHealDurationTurns:
-      skill.persistentHealDurationTurns != null ? String(skill.persistentHealDurationTurns) : '1',
     effectAttachments: normalizeSkillAttachmentDrafts(skill, effectList),
     targetKind: targetKind ?? (skill.type === 'damage' ? 'select_enemies' : 'select_allies'),
     targetTeamOption: targetTeamOption ?? 'user_only',
@@ -455,6 +497,13 @@ function buildSkillEffectAttachmentsFromDraft(
         ? entry.recoilMode
         : 'percent_max_hp';
       normalized.recoilPercent = sanitizeAttachmentNumber(entry.recoilPercent, 0.1);
+    } else if (effectType === 'persistent_heal') {
+      normalized.persistentHealMode = entry.persistentHealMode === 'flat' ? 'flat' : 'percent_max_hp';
+      normalized.persistentHealValue = sanitizePersistentHealValue(
+        normalized.persistentHealMode,
+        entry.persistentHealValue,
+      );
+      normalized.persistentHealDurationTurns = sanitizePersistentHealDuration(entry.persistentHealDurationTurns);
     } else {
       normalized.buffPercent = sanitizeAttachmentNumber(entry.buffPercent, 0.1);
     }
@@ -473,6 +522,9 @@ function buildAttachmentDraftFromEffectOption(effect: EffectOption): SkillEffect
     procChance: '1',
     recoilMode: 'percent_max_hp',
     recoilPercent: effect.effectType === 'recoil' ? '0.1' : '0',
+    persistentHealMode: 'percent_max_hp',
+    persistentHealValue: '0.05',
+    persistentHealDurationTurns: '1',
   };
 }
 
@@ -665,9 +717,6 @@ export function MoveTool() {
         damage: s.type === 'damage' ? s.damage : undefined,
         healMode: s.healMode,
         healValue: s.healMode ? s.healValue : undefined,
-        persistentHealMode: s.persistentHealMode,
-        persistentHealValue: s.persistentHealValue,
-        persistentHealDurationTurns: s.persistentHealDurationTurns,
         targetKind: s.targetKind,
         targetTeamOption: s.targetTeamOption,
         targetSelectCount: s.targetSelectCount,
@@ -715,18 +764,6 @@ export function MoveTool() {
     const priority = Math.max(1, Math.min(999, parseInt(draft.priority, 10) || 1));
     const damageNum = draft.type === 'damage' ? Math.max(1, parseInt(draft.damage, 10) || 20) : undefined;
     const healValue = parseDraftHealValue(activeHealMode, draft.healValue);
-    const resolvedPersistentHealMode: SkillPersistentHealMode | undefined =
-      draft.persistentHealMode === 'none' ? undefined : draft.persistentHealMode;
-    const persistentHealNum =
-      resolvedPersistentHealMode === 'flat'
-        ? Math.max(1, parseInt(draft.persistentHealValue, 10) || 1)
-        : resolvedPersistentHealMode
-          ? Math.max(0, Math.min(1, parseFloat(draft.persistentHealValue) || 0))
-          : undefined;
-    const persistentHealDurationTurns =
-      resolvedPersistentHealMode
-        ? Math.max(1, Math.min(999, parseInt(draft.persistentHealDurationTurns, 10) || 1))
-        : undefined;
     const effectAttachments = buildSkillEffectAttachmentsFromDraft(draft.effectAttachments, effectById);
     const effectIds = effectAttachments.map((attachment) => attachment.effectId);
     const newSkill: SkillDefinition = {
@@ -738,9 +775,6 @@ export function MoveTool() {
       ...(draft.type === 'damage' && { damage: damageNum }),
       ...(draft.type === 'support' && activeHealMode !== 'none' && { healMode: activeHealMode, healValue }),
       ...(draft.type === 'damage' && activeHealMode !== 'none' && { healMode: activeHealMode, healValue }),
-      ...(resolvedPersistentHealMode && { persistentHealMode: resolvedPersistentHealMode }),
-      ...(persistentHealNum != null && { persistentHealValue: persistentHealNum }),
-      ...(persistentHealDurationTurns != null && { persistentHealDurationTurns }),
       ...(effectAttachments.length > 0 && { effectAttachments }),
       ...(effectIds.length > 0 && { effectIds }),
       targetKind: (draft.targetKind as SkillTargetKindDamage | SkillTargetKindSupport) || (draft.type === 'damage' ? 'select_enemies' : 'select_allies'),
@@ -999,64 +1033,6 @@ export function MoveTool() {
               />
             </label>
           )}
-          <div className="admin-grid-2">
-            <label>
-              Persistent Heal Mode
-              <select
-                value={draft.persistentHealMode}
-                onChange={(e) =>
-                  setDraft((d) => {
-                    const nextMode = e.target.value as SkillDraftPersistentHealMode;
-                    return {
-                      ...d,
-                      persistentHealMode: nextMode,
-                      persistentHealValue:
-                        d.persistentHealMode === nextMode
-                          ? d.persistentHealValue
-                          : nextMode === 'none'
-                            ? '0'
-                            : getDefaultPersistentHealValueForMode(nextMode),
-                      persistentHealDurationTurns:
-                        d.persistentHealMode === nextMode
-                          ? d.persistentHealDurationTurns
-                          : nextMode === 'none'
-                            ? '1'
-                            : '1',
-                    };
-                  })}
-              >
-                {PERSISTENT_HEAL_MODE_OPTIONS.map((mode) => (
-                  <option key={mode.value} value={mode.value}>{mode.label}</option>
-                ))}
-              </select>
-            </label>
-            {draft.persistentHealMode !== 'none' && (
-              <label>
-                {getPersistentHealValueLabel(draft.persistentHealMode)}
-                <input
-                  type="number"
-                  min={draft.persistentHealMode === 'flat' ? 1 : 0}
-                  max={draft.persistentHealMode === 'flat' ? undefined : 1}
-                  step={draft.persistentHealMode === 'flat' ? 1 : 0.01}
-                  value={draft.persistentHealValue}
-                  onChange={(e) => setDraft((d) => ({ ...d, persistentHealValue: e.target.value }))}
-                />
-              </label>
-            )}
-          </div>
-          {draft.persistentHealMode !== 'none' && (
-            <label>
-              Persistent Duration (turns)
-              <input
-                type="number"
-                min={1}
-                max={999}
-                step={1}
-                value={draft.persistentHealDurationTurns}
-                onChange={(e) => setDraft((d) => ({ ...d, persistentHealDurationTurns: e.target.value }))}
-              />
-            </label>
-          )}
           {showHealValueInput && usesPercentHealValue && (
             <p className="admin-note">Percent heal values use 0-1 decimals. Example: 0.25 = 25%.</p>
           )}
@@ -1072,8 +1048,20 @@ export function MoveTool() {
                   const id = attachment.effectId;
                   const usesRecoil = effectUsesRecoilConfig(opt?.effectType);
                   const usesBuff = effectUsesBuffPercent(opt?.effectType);
+                  const usesPersistentHeal = effectUsesPersistentHealConfig(opt?.effectType);
                   const valueLabel = usesRecoil
                     ? `recoil ${Math.round(sanitizeAttachmentNumber(attachment.recoilPercent, 0.1) * 100)}% (${attachment.recoilMode})`
+                    : usesPersistentHeal
+                      ? formatPersistentHealAttachmentTooltip({
+                        persistentHealMode: attachment.persistentHealMode,
+                        persistentHealValue: sanitizePersistentHealValue(
+                          attachment.persistentHealMode,
+                          attachment.persistentHealValue,
+                        ),
+                        persistentHealDurationTurns: sanitizePersistentHealDuration(
+                          attachment.persistentHealDurationTurns,
+                        ),
+                      })
                     : usesBuff
                       ? `buff ${Math.round(sanitizeAttachmentNumber(attachment.buffPercent, 0.1) * 100)}%`
                       : 'config';
@@ -1176,6 +1164,7 @@ export function MoveTool() {
                   const effect = effectList.find((entry) => entry.id === attachment.effectId);
                   const usesRecoil = effectUsesRecoilConfig(effect?.effectType);
                   const usesBuff = effectUsesBuffPercent(effect?.effectType);
+                  const usesPersistentHeal = effectUsesPersistentHealConfig(effect?.effectType);
                   return (
                     <div key={attachment.effectId} className="admin-panel" style={{ margin: 0 }}>
                       <h5 style={{ marginTop: 0, marginBottom: '0.4rem' }}>
@@ -1241,6 +1230,72 @@ export function MoveTool() {
                                   effectAttachments: d.effectAttachments.map((entry) =>
                                     entry.effectId === attachment.effectId
                                       ? { ...entry, recoilPercent: e.target.value }
+                                      : entry,
+                                  ),
+                                }))
+                              }
+                            />
+                          </label>
+                        </>
+                      )}
+                      {usesPersistentHeal && (
+                        <>
+                          <label>
+                            Persistent Heal Mode
+                            <select
+                              value={attachment.persistentHealMode}
+                              onChange={(e) =>
+                                setDraft((d) => ({
+                                  ...d,
+                                  effectAttachments: d.effectAttachments.map((entry) =>
+                                    entry.effectId === attachment.effectId
+                                      ? { ...entry, persistentHealMode: e.target.value as 'flat' | 'percent_max_hp' }
+                                      : entry,
+                                  ),
+                                }))
+                              }
+                            >
+                              {PERSISTENT_HEAL_MODE_OPTIONS.map((mode) => (
+                                <option key={mode.value} value={mode.value}>
+                                  {mode.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            {attachment.persistentHealMode === 'flat' ? 'Heal HP each turn' : 'Heal % max HP each turn (0–1)'}
+                            <input
+                              type="number"
+                              min={attachment.persistentHealMode === 'flat' ? 1 : 0}
+                              max={attachment.persistentHealMode === 'flat' ? undefined : 1}
+                              step={attachment.persistentHealMode === 'flat' ? 1 : 0.01}
+                              value={attachment.persistentHealValue}
+                              onChange={(e) =>
+                                setDraft((d) => ({
+                                  ...d,
+                                  effectAttachments: d.effectAttachments.map((entry) =>
+                                    entry.effectId === attachment.effectId
+                                      ? { ...entry, persistentHealValue: e.target.value }
+                                      : entry,
+                                  ),
+                                }))
+                              }
+                            />
+                          </label>
+                          <label>
+                            Duration (turns)
+                            <input
+                              type="number"
+                              min={1}
+                              max={999}
+                              step={1}
+                              value={attachment.persistentHealDurationTurns}
+                              onChange={(e) =>
+                                setDraft((d) => ({
+                                  ...d,
+                                  effectAttachments: d.effectAttachments.map((entry) =>
+                                    entry.effectId === attachment.effectId
+                                      ? { ...entry, persistentHealDurationTurns: e.target.value }
                                       : entry,
                                   ),
                                 }))

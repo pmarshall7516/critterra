@@ -53,6 +53,7 @@ const STAT_OR_CRIT_EFFECT_TYPE_SET = new Set<SkillEffectType>([
   'target_speed_debuff',
   'crit_buff',
 ]);
+const PERSISTENT_HEAL_EFFECT_ID_FALLBACK = 'persistent-heal';
 
 function clampInt(value: unknown, min: number, max: number, fallback: number): number {
   const parsed = typeof value === 'number' && Number.isFinite(value)
@@ -116,6 +117,52 @@ function sanitizeSkillHealValue(
     1,
     0,
   );
+}
+
+function normalizePersistentHealMode(raw: unknown): SkillPersistentHealMode {
+  const normalized = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  return normalized === 'flat' ? 'flat' : 'percent_max_hp';
+}
+
+function sanitizePersistentHealAttachment(
+  record: Record<string, unknown>,
+): Pick<SkillEffectAttachment, 'persistentHealMode' | 'persistentHealValue' | 'persistentHealDurationTurns'> {
+  const mode = normalizePersistentHealMode(record.persistentHealMode ?? record.persistent_heal_mode);
+  const value =
+    mode === 'flat'
+      ? clampInt(record.persistentHealValue ?? record.persistent_heal_value, 1, 9999, 1)
+      : clampFloat(record.persistentHealValue ?? record.persistent_heal_value, 0, 1, 0.05);
+  const durationTurns = clampInt(
+    record.persistentHealDurationTurns ?? record.persistent_heal_duration_turns,
+    1,
+    999,
+    1,
+  );
+  return {
+    persistentHealMode: mode,
+    persistentHealValue: value,
+    persistentHealDurationTurns: durationTurns,
+  };
+}
+
+function findPersistentHealEffectId(
+  knownEffectIds?: Set<string>,
+  effectTypeById?: ReadonlyMap<string, SkillEffectType>,
+): string | null {
+  if (effectTypeById) {
+    for (const [effectId, effectType] of effectTypeById.entries()) {
+      if (effectType !== 'persistent_heal') {
+        continue;
+      }
+      if (!knownEffectIds || knownEffectIds.has(effectId)) {
+        return effectId;
+      }
+    }
+  }
+  if (!knownEffectIds || knownEffectIds.has(PERSISTENT_HEAL_EFFECT_ID_FALLBACK)) {
+    return PERSISTENT_HEAL_EFFECT_ID_FALLBACK;
+  }
+  return null;
 }
 
 function resolveSkillHealConfig(
@@ -218,6 +265,13 @@ function sanitizeSkillEffectAttachments(
       record.recoil_mode !== undefined ||
       record.recoilPercent !== undefined ||
       record.recoil_percent !== undefined;
+    const hasPersistentHealConfig =
+      record.persistentHealMode !== undefined ||
+      record.persistent_heal_mode !== undefined ||
+      record.persistentHealValue !== undefined ||
+      record.persistent_heal_value !== undefined ||
+      record.persistentHealDurationTurns !== undefined ||
+      record.persistent_heal_duration_turns !== undefined;
     const legacyBuffFallback = legacyEffectBuffPercentById?.get(effectId);
     const procChance = clampFloat(record.procChance ?? record.proc_chance, 0, 1, 1);
     const normalized: SkillEffectAttachment = {
@@ -241,7 +295,14 @@ function sanitizeSkillEffectAttachments(
         0.1,
       );
     }
-    if (effectType !== 'recoil' || !hasRecoilConfig) {
+    if (effectType === 'persistent_heal' || hasPersistentHealConfig) {
+      Object.assign(normalized, sanitizePersistentHealAttachment(record));
+    }
+    if (
+      (effectType == null || STAT_OR_CRIT_EFFECT_TYPE_SET.has(effectType)) &&
+      effectType !== 'persistent_heal' &&
+      !hasPersistentHealConfig
+    ) {
       normalized.buffPercent = clampFloat(
         record.buffPercent ?? record.buff_percent,
         0,
@@ -439,6 +500,15 @@ export function sanitizeSkillDefinition(
           recoilPercent: 0.1,
         };
       }
+      if (effectType === 'persistent_heal') {
+        return {
+          effectId,
+          procChance: 1,
+          persistentHealMode: 'percent_max_hp',
+          persistentHealValue: 0.05,
+          persistentHealDurationTurns: 1,
+        };
+      }
       return {
         effectId,
         procChance: 1,
@@ -460,6 +530,18 @@ export function sanitizeSkillDefinition(
           recoilPercent: clampFloat(attachment.recoilPercent, 0, 1, 0.1),
         };
       }
+      if (effectType === 'persistent_heal') {
+        const persistent = sanitizePersistentHealAttachment({
+          persistentHealMode: attachment.persistentHealMode,
+          persistentHealValue: attachment.persistentHealValue,
+          persistentHealDurationTurns: attachment.persistentHealDurationTurns,
+        });
+        return {
+          effectId: attachment.effectId,
+          procChance: clampFloat(attachment.procChance, 0, 1, 1),
+          ...persistent,
+        };
+      }
       const fallbackBuff = legacyEffectBuffPercentById?.get(attachment.effectId);
       const shouldDefaultBuff =
         effectType == null || STAT_OR_CRIT_EFFECT_TYPE_SET.has(effectType);
@@ -476,6 +558,36 @@ export function sanitizeSkillDefinition(
         }),
       };
     });
+  }
+
+  if (persistentHealMode && persistentHealValue != null && persistentHealDurationTurns != null) {
+    const persistentHealEffectId = findPersistentHealEffectId(knownEffectIds, effectTypeById);
+    if (persistentHealEffectId) {
+      const nextAttachments = effectAttachments ? [...effectAttachments] : [];
+      const existingIndex = nextAttachments.findIndex((entry) => {
+        if (entry.effectId !== persistentHealEffectId) {
+          return false;
+        }
+        const effectType = effectTypeById?.get(entry.effectId);
+        return effectType === 'persistent_heal' || persistentHealEffectId === PERSISTENT_HEAL_EFFECT_ID_FALLBACK;
+      });
+      const persistentAttachment: SkillEffectAttachment = {
+        effectId: persistentHealEffectId,
+        procChance: 1,
+        persistentHealMode,
+        persistentHealValue,
+        persistentHealDurationTurns,
+      };
+      if (existingIndex >= 0) {
+        nextAttachments[existingIndex] = {
+          ...nextAttachments[existingIndex],
+          ...persistentAttachment,
+        };
+      } else {
+        nextAttachments.push(persistentAttachment);
+      }
+      effectAttachments = nextAttachments;
+    }
   }
   if (!effectIds && effectAttachments && effectAttachments.length > 0) {
     effectIds = effectAttachments.map((entry) => entry.effectId);
@@ -529,9 +641,6 @@ export function sanitizeSkillDefinition(
     ...(type === 'damage' && { damage }),
     ...(healMode && { healMode }),
     ...(typeof healValue === 'number' && { healValue }),
-    ...(persistentHealMode && { persistentHealMode }),
-    ...(persistentHealValue != null && { persistentHealValue }),
-    ...(persistentHealDurationTurns != null && { persistentHealDurationTurns }),
     ...(effectAttachments && effectAttachments.length > 0 && { effectAttachments }),
     ...(effectIds && effectIds.length > 0 && { effectIds }),
     ...(targetKind && { targetKind }),

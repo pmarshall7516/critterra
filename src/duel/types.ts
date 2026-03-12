@@ -137,6 +137,14 @@ export interface DuelBattleCritterState {
   equipmentDefensePositiveBonus?: number;
   /** Pending crit chance bonus from crit_buff effects (consumed on next attack). 0–1. */
   pendingCritChanceBonus?: number;
+  /** Active skill-applied persistent heal state. Cleared on swap/KO/battle end. */
+  persistentHeal: {
+    effectId: string;
+    sourceName: string;
+    mode: 'flat' | 'percent_max_hp';
+    value: number;
+    remainingTurns: number;
+  } | null;
   /** Consecutive successful guard streak (RPG-aligned). */
   consecutiveSuccessfulGuardCount: number;
 }
