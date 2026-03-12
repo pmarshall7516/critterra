@@ -1848,6 +1848,12 @@ function getMissionTypeLabel(missionType: CritterMissionType): string {
   if (missionType === 'heal_critter') {
     return 'Heal Critter';
   }
+  if (missionType === 'heal_with_skills') {
+    return 'Heal with Skills';
+  }
+  if (missionType === 'land_critical_hits') {
+    return 'Land Critical Hits';
+  }
   if (missionType === 'ascension') {
     return 'Ascension';
   }
@@ -1875,6 +1881,12 @@ function toMissionTypeValue(value: string): CritterMissionType {
   }
   if (value === 'heal_critter') {
     return 'heal_critter';
+  }
+  if (value === 'heal_with_skills') {
+    return 'heal_with_skills';
+  }
+  if (value === 'land_critical_hits') {
+    return 'land_critical_hits';
   }
   if (value === 'ascension') {
     return 'ascension';

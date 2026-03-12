@@ -2,6 +2,7 @@ import type { CritterDefinition } from '@/game/critters/types';
 import type { GameItemDefinition } from '@/game/items/types';
 import type { SkillDefinition, SkillEffectDefinition, ElementChart } from '@/game/skills/types';
 import type { EquipmentEffectDefinition } from '@/game/equipmentEffects/types';
+import type { EquipmentEffectInstance } from '@/game/equipmentEffects/resolver';
 
 export type DuelBattleFormat = 'singles' | 'doubles' | 'triples';
 export type DuelControlMode = 'human' | 'random-agent';
@@ -129,6 +130,8 @@ export interface DuelBattleCritterState {
   activeEffectValueById: Record<string, number>;
   /** Effect IDs from equipped items. */
   equipmentEffectIds: string[];
+  /** Normalized per-item equipment effect instances active on this critter. */
+  equipmentEffectInstances: EquipmentEffectInstance[];
   /** Equipped item IDs carried into battle UI for icon display and tooltips. */
   equippedItemIds: string[];
   /** Item name per equipment effect ID. */

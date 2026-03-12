@@ -1,14 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { apiFetchJson } from '@/shared/apiClient';
 import {
-  EQUIPMENT_EFFECT_MODES,
-  EQUIPMENT_PERSISTENT_HEAL_MODES,
-  EQUIPMENT_EFFECT_STATS,
+  EQUIPMENT_EFFECT_TYPES_EDITOR,
   type EquipmentEffectDefinition,
-  type EquipmentEffectMode,
-  type EquipmentEffectModifier,
-  type EquipmentPersistentHealMode,
-  type EquipmentEffectStat,
+  type EquipmentEffectType,
 } from '@/game/equipmentEffects/types';
 import { sanitizeEquipmentEffectLibrary } from '@/game/equipmentEffects/schema';
 
@@ -42,84 +37,52 @@ interface LoadSupabaseIconsResponse {
 interface EffectDraft {
   effect_id: string;
   effect_name: string;
+  effect_type: EquipmentEffectType;
   description: string;
   iconUrl: string;
-  modifiers: Array<{
-    stat: EquipmentEffectStat;
-    mode: EquipmentEffectMode;
-    value: string;
-  }>;
-  persistentHealMode: EquipmentPersistentHealMode | 'none';
-  persistentHealValue: string;
 }
 
 const emptyDraft: EffectDraft = {
   effect_id: '',
   effect_name: '',
+  effect_type: 'def_buff',
   description: '',
   iconUrl: '',
-  modifiers: [
-    {
-      stat: 'defense',
-      mode: 'flat',
-      value: '1',
-    },
-  ],
-  persistentHealMode: 'none',
-  persistentHealValue: '0.05',
 };
 
 function effectToDraft(effect: EquipmentEffectDefinition): EffectDraft {
-  const persistentHealMode = effect.persistentHeal?.mode ?? 'none';
   return {
     effect_id: effect.effect_id,
     effect_name: effect.effect_name,
-    description: effect.description,
+    effect_type: effect.effect_type,
+    description: effect.description ?? '',
     iconUrl: effect.iconUrl ?? '',
-    modifiers: (effect.modifiers ?? []).map((modifier) => ({
-      stat: modifier.stat,
-      mode: modifier.mode,
-      value: String(modifier.value),
-    })),
-    persistentHealMode,
-    persistentHealValue: String(effect.persistentHeal?.value ?? 0.05),
   };
 }
 
-function parseDraftModifiers(raw: EffectDraft['modifiers']): EquipmentEffectModifier[] {
-  const parsed: EquipmentEffectModifier[] = [];
-  for (const entry of raw) {
-    const value = Number.parseFloat(entry.value);
-    if (!Number.isFinite(value)) {
-      continue;
-    }
-    parsed.push({
-      stat: entry.stat,
-      mode: entry.mode,
-      value,
-    });
+function buildLegacyFallbackFields(effectType: EquipmentEffectType): Pick<EquipmentEffectDefinition, 'modifiers' | 'persistentHeal'> {
+  if (effectType === 'atk_buff') {
+    return { modifiers: [{ stat: 'attack', mode: 'percent', value: 0.1 }], persistentHeal: undefined };
   }
-  return parsed;
-}
-
-function parseDraftPersistentHeal(
-  draft: Pick<EffectDraft, 'persistentHealMode' | 'persistentHealValue'>,
-): EquipmentEffectDefinition['persistentHeal'] {
-  if (draft.persistentHealMode === 'none') {
-    return undefined;
+  if (effectType === 'def_buff') {
+    return { modifiers: [{ stat: 'defense', mode: 'percent', value: 0.1 }], persistentHeal: undefined };
   }
-  const parsed = Number.parseFloat(draft.persistentHealValue);
-  const value = Number.isFinite(parsed) ? parsed : draft.persistentHealMode === 'flat' ? 1 : 0.05;
-  if (draft.persistentHealMode === 'flat') {
+  if (effectType === 'speed_buff') {
+    return { modifiers: [{ stat: 'speed', mode: 'percent', value: 0.1 }], persistentHeal: undefined };
+  }
+  if (effectType === 'hp_buff') {
+    return { modifiers: [{ stat: 'hp', mode: 'percent', value: 0.1 }], persistentHeal: undefined };
+  }
+  if (effectType === 'persistent_heal') {
     return {
-      mode: 'flat',
-      value: Math.max(1, Math.floor(value)),
+      modifiers: [],
+      persistentHeal: {
+        mode: 'percent_max_hp',
+        value: 0.05,
+      },
     };
   }
-  return {
-    mode: 'percent_max_hp',
-    value: Math.max(0, Math.min(1, value)),
-  };
+  return { modifiers: [], persistentHeal: undefined };
 }
 
 export function EquipmentEffectsTool() {
@@ -167,7 +130,7 @@ export function EquipmentEffectsTool() {
         setSelectedId(null);
         setDraft(emptyDraft);
       }
-      setStatus(`Loaded ${loaded.length} equipment effect(s).`);
+      setStatus(`Loaded ${loaded.length} equipment effect template(s).`);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : 'Unable to load equipment effects.');
     } finally {
@@ -208,6 +171,7 @@ export function EquipmentEffectsTool() {
       const payload = effects.map((effect) => ({
         effect_id: effect.effect_id,
         effect_name: effect.effect_name,
+        effect_type: effect.effect_type,
         description: effect.description,
         iconUrl: effect.iconUrl,
         modifiers: effect.modifiers,
@@ -221,7 +185,7 @@ export function EquipmentEffectsTool() {
       if (!result.ok) {
         throw new Error(result.error ?? result.data?.error ?? 'Unable to save equipment effects.');
       }
-      setStatus(`Saved ${effects.length} equipment effect(s).`);
+      setStatus(`Saved ${effects.length} equipment effect template(s).`);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : 'Unable to save equipment effects.');
     } finally {
@@ -246,24 +210,30 @@ export function EquipmentEffectsTool() {
       setError('Effect ID and name are required.');
       return;
     }
-    const modifiers = parseDraftModifiers(draft.modifiers);
-    const persistentHeal = parseDraftPersistentHeal(draft);
-    if (modifiers.length === 0 && !persistentHeal) {
-      setError('Add at least one modifier or configure persistent heal.');
-      return;
-    }
+
+    const existing = effects.find((entry) => entry.effect_id === effectId);
+    const legacyFallback = existing ?? {
+      effect_id: effectId,
+      effect_name: effectName,
+      effect_type: draft.effect_type,
+      description: '',
+      iconUrl: '',
+      ...buildLegacyFallbackFields(draft.effect_type),
+    };
+
     const parsed = sanitizeEquipmentEffectLibrary([
       {
         effect_id: effectId,
         effect_name: effectName,
+        effect_type: draft.effect_type,
         description: draft.description,
         iconUrl: draft.iconUrl,
-        modifiers,
-        ...(persistentHeal && { persistentHeal }),
+        modifiers: legacyFallback.modifiers,
+        ...(legacyFallback.persistentHeal && { persistentHeal: legacyFallback.persistentHeal }),
       },
     ])[0];
     if (!parsed) {
-      setError('Unable to parse equipment effect draft.');
+      setError('Unable to parse equipment effect template draft.');
       return;
     }
 
@@ -272,7 +242,7 @@ export function EquipmentEffectsTool() {
     setEffects(next);
     setSelectedId(parsed.effect_id);
     setDraft(effectToDraft(parsed));
-    setStatus(existingIndex >= 0 ? 'Updated equipment effect.' : 'Added equipment effect.');
+    setStatus(existingIndex >= 0 ? 'Updated equipment effect template.' : 'Added equipment effect template.');
     setError('');
   };
 
@@ -289,20 +259,20 @@ export function EquipmentEffectsTool() {
       setSelectedId(null);
       setDraft(emptyDraft);
     }
-    setStatus('Removed equipment effect.');
+    setStatus('Removed equipment effect template.');
   };
 
   return (
     <section className="admin-layout admin-layout--single">
       <section className="admin-layout__left">
         <section className="admin-panel">
-          <h3>Equipment Effects</h3>
+          <h3>Equipment Effect Templates</h3>
           <div className="admin-row">
             <button type="button" className="secondary" onClick={() => void loadAll()} disabled={isLoading}>
               {isLoading ? 'Loading...' : 'Reload'}
             </button>
             <button type="button" className="secondary" onClick={addNew}>
-              New Effect
+              New Template
             </button>
             <button type="button" className="secondary" onClick={() => selected && setDraft(effectToDraft(selected))}>
               Reset to selected
@@ -311,7 +281,7 @@ export function EquipmentEffectsTool() {
               Remove
             </button>
             <button type="button" className="primary" onClick={() => void saveEffects()} disabled={isSaving}>
-              {isSaving ? 'Saving...' : 'Save Effects'}
+              {isSaving ? 'Saving...' : 'Save Templates'}
             </button>
           </div>
           {status && <p className="admin-note">{status}</p>}
@@ -334,17 +304,17 @@ export function EquipmentEffectsTool() {
                 {entry.effect_id} - {entry.effect_name}
               </button>
             ))}
-            {effects.length === 0 && <p className="admin-note">No equipment effects yet.</p>}
+            {effects.length === 0 && <p className="admin-note">No equipment effect templates yet.</p>}
           </div>
         </section>
       </section>
 
       <section className="admin-layout__right">
         <section className="admin-panel">
-          <h4>Effect details</h4>
+          <h4>Template details</h4>
           <div className="admin-grid-2">
             <label>
-              Effect ID
+              Template ID
               <input
                 value={draft.effect_id}
                 onChange={(event) =>
@@ -356,11 +326,26 @@ export function EquipmentEffectsTool() {
               />
             </label>
             <label>
-              Effect name
+              Template name
               <input
                 value={draft.effect_name}
                 onChange={(event) => setDraft((current) => ({ ...current, effect_name: event.target.value }))}
               />
+            </label>
+            <label>
+              Template Type
+              <select
+                value={draft.effect_type}
+                onChange={(event) =>
+                  setDraft((current) => ({ ...current, effect_type: event.target.value as EquipmentEffectType }))
+                }
+              >
+                {EQUIPMENT_EFFECT_TYPES_EDITOR.map((type) => (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                ))}
+              </select>
             </label>
           </div>
           <label>
@@ -368,144 +353,12 @@ export function EquipmentEffectsTool() {
             <input
               value={draft.description}
               onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
-              placeholder="Increases defense while equipped."
+              placeholder="Template description shown in UI tooltips."
             />
           </label>
-
-          <section className="admin-panel" style={{ marginTop: '0.5rem' }}>
-            <h4>Modifiers</h4>
-            <div className="saved-paint-list">
-              {draft.modifiers.map((modifier, index) => (
-                <div key={`modifier-${index}`} className="admin-grid-2" style={{ marginBottom: '0.35rem' }}>
-                  <label>
-                    Stat
-                    <select
-                      value={modifier.stat}
-                      onChange={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          modifiers: current.modifiers.map((entry, entryIndex) =>
-                            entryIndex === index ? { ...entry, stat: event.target.value as EquipmentEffectStat } : entry,
-                          ),
-                        }))
-                      }
-                    >
-                      {EQUIPMENT_EFFECT_STATS.map((stat) => (
-                        <option key={stat} value={stat}>
-                          {stat}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Mode
-                    <select
-                      value={modifier.mode}
-                      onChange={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          modifiers: current.modifiers.map((entry, entryIndex) =>
-                            entryIndex === index ? { ...entry, mode: event.target.value as EquipmentEffectMode } : entry,
-                          ),
-                        }))
-                      }
-                    >
-                      {EQUIPMENT_EFFECT_MODES.map((mode) => (
-                        <option key={mode} value={mode}>
-                          {mode}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Value
-                    <input
-                      type="number"
-                      step={modifier.mode === 'percent' ? '0.01' : '1'}
-                      value={modifier.value}
-                      onChange={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          modifiers: current.modifiers.map((entry, entryIndex) =>
-                            entryIndex === index ? { ...entry, value: event.target.value } : entry,
-                          ),
-                        }))
-                      }
-                    />
-                  </label>
-                  <label>
-                    Remove
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() =>
-                        setDraft((current) => ({
-                          ...current,
-                          modifiers: current.modifiers.filter((_, entryIndex) => entryIndex !== index),
-                        }))
-                      }
-                    >
-                      Remove modifier
-                    </button>
-                  </label>
-                </div>
-              ))}
-            </div>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() =>
-                setDraft((current) => ({
-                  ...current,
-                  modifiers: [...current.modifiers, { stat: 'defense', mode: 'flat', value: '1' }],
-                }))
-              }
-            >
-              Add modifier
-            </button>
-          </section>
-
-          <section className="admin-panel" style={{ marginTop: '0.5rem' }}>
-            <h4>Persistent Heal</h4>
-            <p className="admin-note" style={{ marginBottom: '0.4rem' }}>
-              Optional passive heal that applies at end of turn while this equipment is equipped and active in battle.
-            </p>
-            <div className="admin-grid-2">
-              <label>
-                Mode
-                <select
-                  value={draft.persistentHealMode}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      persistentHealMode: event.target.value as EquipmentPersistentHealMode | 'none',
-                    }))
-                  }
-                >
-                  <option value="none">None</option>
-                  {EQUIPMENT_PERSISTENT_HEAL_MODES.map((mode) => (
-                    <option key={mode} value={mode}>
-                      {mode}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {draft.persistentHealMode !== 'none' && (
-                <label>
-                  {draft.persistentHealMode === 'flat' ? 'Heal HP each turn' : 'Heal % max HP each turn (0–1)'}
-                  <input
-                    type="number"
-                    min={draft.persistentHealMode === 'flat' ? 1 : 0}
-                    max={draft.persistentHealMode === 'flat' ? undefined : 1}
-                    step={draft.persistentHealMode === 'flat' ? '1' : '0.01'}
-                    value={draft.persistentHealValue}
-                    onChange={(event) => setDraft((current) => ({ ...current, persistentHealValue: event.target.value }))}
-                  />
-                </label>
-              )}
-            </div>
-          </section>
-
+          <p className="admin-note">
+            Numeric values now come from item-level equipment effect attachments in the Items editor.
+          </p>
           <section className="admin-panel" style={{ marginTop: '0.5rem' }}>
             <h4>Icon (Supabase bucket: {ICONS_BUCKET})</h4>
             <div className="admin-row">
@@ -517,7 +370,7 @@ export function EquipmentEffectsTool() {
               Search Icons
               <input
                 type="text"
-                placeholder="Search by icon name/path"
+                placeholder="Search by name or path"
                 value={iconSearchInput}
                 onChange={(event) => setIconSearchInput(event.target.value)}
               />
@@ -525,11 +378,7 @@ export function EquipmentEffectsTool() {
             {draft.iconUrl ? (
               <div className="admin-row" style={{ alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                 <img src={draft.iconUrl} alt="Selected icon" style={{ width: 32, height: 32, objectFit: 'contain' }} />
-                <span
-                  className="admin-note"
-                  style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}
-                  title={draft.iconUrl}
-                >
+                <span className="admin-note" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }} title={draft.iconUrl}>
                   {draft.iconUrl}
                 </span>
                 <button type="button" className="secondary" onClick={() => setDraft((current) => ({ ...current, iconUrl: '' }))}>
@@ -556,14 +405,13 @@ export function EquipmentEffectsTool() {
                 </div>
               ))}
               {filteredIconEntries.length === 0 && (
-                <p className="admin-note">No icons found in bucket "{ICONS_BUCKET}".</p>
+                <p className="admin-note">{isLoadingIcons ? 'Loading icons...' : 'No matching icons found.'}</p>
               )}
             </div>
           </section>
-
-          <div className="admin-row">
+          <div className="admin-row" style={{ marginTop: '0.75rem' }}>
             <button type="button" className="primary" onClick={createOrUpdateFromDraft}>
-              {effects.some((entry) => entry.effect_id === draft.effect_id.trim()) ? 'Update' : 'Add'} effect
+              Add / Update Template
             </button>
           </div>
         </section>

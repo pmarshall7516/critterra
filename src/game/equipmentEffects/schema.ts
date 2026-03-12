@@ -3,14 +3,17 @@ import type {
   EquipmentEffectModifier,
   EquipmentEffectMode,
   EquipmentEffectStat,
+  EquipmentEffectType,
   EquipmentPersistentHealMode,
 } from '@/game/equipmentEffects/types';
 import {
+  EQUIPMENT_EFFECT_TYPES,
   EQUIPMENT_EFFECT_MODES,
   EQUIPMENT_EFFECT_STATS,
   EQUIPMENT_PERSISTENT_HEAL_MODES,
 } from '@/game/equipmentEffects/types';
 
+const EFFECT_TYPE_SET = new Set<EquipmentEffectType>(EQUIPMENT_EFFECT_TYPES);
 const EFFECT_MODE_SET = new Set<EquipmentEffectMode>(EQUIPMENT_EFFECT_MODES);
 const EFFECT_STAT_SET = new Set<EquipmentEffectStat>(EQUIPMENT_EFFECT_STATS);
 const PERSISTENT_HEAL_MODE_SET = new Set<EquipmentPersistentHealMode>(EQUIPMENT_PERSISTENT_HEAL_MODES);
@@ -27,6 +30,15 @@ export function sanitizeEquipmentEffectDefinition(raw: unknown, fallbackIndex = 
       : typeof record.effectName === 'string' && record.effectName.trim()
         ? record.effectName.trim().slice(0, 80)
         : effect_id;
+  const modifiers = sanitizeEquipmentEffectModifiers(record.modifiers);
+  const persistentHeal = sanitizeEquipmentPersistentHealConfig(record);
+  const effect_type = sanitizeEquipmentEffectType(
+    record.effect_type ?? record.effectType,
+    effect_id,
+    effect_name,
+    modifiers,
+    persistentHeal,
+  );
   const description = typeof record.description === 'string' ? record.description.trim().slice(0, 240) : '';
   const iconUrl =
     typeof record.iconUrl === 'string' && record.iconUrl.trim()
@@ -34,12 +46,11 @@ export function sanitizeEquipmentEffectDefinition(raw: unknown, fallbackIndex = 
       : typeof record.icon_url === 'string' && record.icon_url.trim()
         ? record.icon_url.trim()
         : undefined;
-  const modifiers = sanitizeEquipmentEffectModifiers(record.modifiers);
-  const persistentHeal = sanitizeEquipmentPersistentHealConfig(record);
 
   return {
     effect_id,
     effect_name,
+    effect_type,
     description,
     ...(iconUrl && { iconUrl }),
     modifiers,
@@ -62,6 +73,55 @@ export function sanitizeEquipmentEffectLibrary(raw: unknown): EquipmentEffectDef
     parsed.push(effect);
   }
   return parsed;
+}
+
+function sanitizeEquipmentEffectType(
+  raw: unknown,
+  effectId: string,
+  effectName: string,
+  modifiers: EquipmentEffectModifier[],
+  persistentHeal: EquipmentEffectDefinition['persistentHeal'],
+): EquipmentEffectType {
+  const explicit =
+    typeof raw === 'string'
+      ? raw.trim().toLowerCase()
+      : '';
+  if (EFFECT_TYPE_SET.has(explicit as EquipmentEffectType)) {
+    return explicit as EquipmentEffectType;
+  }
+
+  if (persistentHeal) {
+    return 'persistent_heal';
+  }
+
+  const firstModifierStat = modifiers[0]?.stat;
+  if (firstModifierStat === 'attack') {
+    return 'atk_buff';
+  }
+  if (firstModifierStat === 'defense') {
+    return 'def_buff';
+  }
+  if (firstModifierStat === 'speed') {
+    return 'speed_buff';
+  }
+  if (firstModifierStat === 'hp') {
+    return 'hp_buff';
+  }
+
+  const haystack = `${effectId} ${effectName}`.toLowerCase();
+  if (haystack.includes('crit')) {
+    return 'crit_buff';
+  }
+  if (haystack.includes('atk') || haystack.includes('attack')) {
+    return 'atk_buff';
+  }
+  if (haystack.includes('speed') || haystack.includes('spd')) {
+    return 'speed_buff';
+  }
+  if (haystack.includes('hp')) {
+    return 'hp_buff';
+  }
+  return 'def_buff';
 }
 
 function sanitizeEquipmentEffectModifiers(raw: unknown): EquipmentEffectModifier[] {
@@ -116,7 +176,7 @@ function sanitizeEquipmentPersistentHealConfig(
 }
 
 function sanitizeModifierValue(mode: EquipmentEffectMode, raw: unknown): number {
-  const parsed = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
+  const parsed = parseNumeric(raw, 0);
   if (mode === 'percent') {
     return clamp(parsed, -5, 5);
   }

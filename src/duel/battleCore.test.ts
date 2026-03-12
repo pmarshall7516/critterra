@@ -9,7 +9,7 @@ import type {
   DuelSquadMember,
 } from '@/duel/types';
 import type { CritterDefinition } from '@/game/critters/types';
-import type { EquipmentEffectDefinition } from '@/game/equipmentEffects/types';
+import type { EquipmentEffectAttachment, EquipmentEffectDefinition } from '@/game/equipmentEffects/types';
 import type { GameItemDefinition } from '@/game/items/types';
 import type { ElementChart, SkillDefinition, SkillEffectDefinition } from '@/game/skills/types';
 
@@ -103,7 +103,12 @@ function createEquipmentItem(input: {
   id: string;
   name: string;
   effectIds: string[];
+  effectAttachments?: EquipmentEffectAttachment[];
 }): GameItemDefinition {
+  const effectIds = [
+    ...input.effectIds,
+    ...(input.effectAttachments ?? []).map((entry) => entry.effectId),
+  ].filter((entry, index, values) => entry.trim().length > 0 && values.indexOf(entry) === index);
   return {
     id: input.id,
     name: input.name,
@@ -115,7 +120,10 @@ function createEquipmentItem(input: {
     effectType: 'equip_effect',
     effectConfig: {
       equipSize: 1,
-      equipmentEffectIds: input.effectIds,
+      ...(input.effectAttachments && input.effectAttachments.length > 0
+        ? { equipmentEffectAttachments: input.effectAttachments }
+        : {}),
+      equipmentEffectIds: effectIds,
     },
     consumable: false,
     maxStack: 99,
@@ -724,6 +732,13 @@ describe('duel battle core - doubles and replacements', () => {
       id: 'regen-charm',
       name: 'Regen Charm',
       effectIds: ['equip-persistent-heal'],
+      effectAttachments: [
+        {
+          effectId: 'equip-persistent-heal',
+          persistentHealMode: 'flat',
+          persistentHealValue: 3,
+        },
+      ],
     });
     const catalogs = createCatalogs({
       critters: [
@@ -736,6 +751,7 @@ describe('duel battle core - doubles and replacements', () => {
         {
           effect_id: 'equip-persistent-heal',
           effect_name: 'Equip Persistent Heal',
+          effect_type: 'persistent_heal',
           description: '',
           modifiers: [],
           persistentHeal: {
@@ -780,6 +796,132 @@ describe('duel battle core - doubles and replacements', () => {
         (entry) => entry.turn === 2 && entry.kind === 'heal' && entry.text.includes('Hero restored'),
       ),
     ).toBe(true);
+  });
+
+  it('applies attachment-based equipment stat buffs and stacks same template IDs across equipped items', () => {
+    const peck = createSkill({ id: 'peck', name: 'Peck', damage: 1 });
+    const catalogs = createCatalogs({
+      critters: [
+        createCritter({ id: 51, name: 'Hero', defense: 20, speed: 40, unlockedSkillIds: ['peck'] }),
+        createCritter({ id: 52, name: 'Enemy', speed: 20, unlockedSkillIds: ['peck'] }),
+      ],
+      skills: [peck],
+      items: [
+        createEquipmentItem({
+          id: 'def-band-1',
+          name: 'Defense Band I',
+          effectIds: ['equip-def-buff'],
+          effectAttachments: [{ effectId: 'equip-def-buff', mode: 'flat', value: 2 }],
+        }),
+        createEquipmentItem({
+          id: 'def-band-2',
+          name: 'Defense Band II',
+          effectIds: ['equip-def-buff'],
+          effectAttachments: [{ effectId: 'equip-def-buff', mode: 'percent', value: 0.25 }],
+        }),
+      ],
+      equipmentEffects: [
+        {
+          effect_id: 'equip-def-buff',
+          effect_name: 'Equip Def Buff',
+          effect_type: 'def_buff',
+          description: '',
+          modifiers: [{ stat: 'defense', mode: 'flat', value: 1 }],
+        },
+      ],
+    });
+    const controller = startBattle({
+      format: 'singles',
+      playerSquad: createSquad('p', 'Player', [
+        createMember(
+          51,
+          ['peck', null, null, null],
+          [
+            { itemId: 'def-band-1', slotIndex: 0 },
+            { itemId: 'def-band-2', slotIndex: 1 },
+          ],
+        ),
+      ]),
+      opponentSquad: createSquad('o', 'Opponent', [createMember(52, ['peck', null, null, null])]),
+      catalogs,
+      rngValues: [0.5, 0.5, 0.5, 0.5],
+    });
+
+    const hero = controller.state.player.team[0];
+    expect(hero.defense).toBe(27);
+    expect(hero.equipmentEffectIds).toEqual(['equip-def-buff']);
+    expect(hero.equipmentEffectInstances).toHaveLength(2);
+  });
+
+  it('applies equipment crit bonus on every attack without consuming it', () => {
+    const strike = createSkill({ id: 'strike', name: 'Strike', damage: 90 });
+    const buildController = (withCritItem: boolean) =>
+      startBattle({
+        format: 'singles',
+        playerSquad: createSquad('p', 'Player', [
+          createMember(
+            61,
+            ['strike', null, null, null],
+            withCritItem ? [{ itemId: 'crit-charm', slotIndex: 0 }] : [],
+          ),
+        ]),
+        opponentSquad: createSquad('o', 'Opponent', [createMember(62, ['strike', null, null, null])]),
+        catalogs: createCatalogs({
+          critters: [
+            createCritter({ id: 61, name: 'Hero', attack: 140, speed: 70, unlockedSkillIds: ['strike'] }),
+            createCritter({ id: 62, name: 'Dummy', hp: 400, defense: 10, speed: 10, unlockedSkillIds: ['strike'] }),
+          ],
+          skills: [strike],
+          items: withCritItem
+            ? [
+                createEquipmentItem({
+                  id: 'crit-charm',
+                  name: 'Crit Charm',
+                  effectIds: ['equip-crit-buff'],
+                  effectAttachments: [{ effectId: 'equip-crit-buff', critChanceBonus: 1 }],
+                }),
+              ]
+            : [],
+          equipmentEffects: [
+            {
+              effect_id: 'equip-crit-buff',
+              effect_name: 'Equip Crit Buff',
+              effect_type: 'crit_buff',
+              description: '',
+              modifiers: [],
+            },
+          ],
+        }),
+        rngValues: [0.9, 0.5, 0.5, 0.9, 0.5, 0.5],
+      });
+
+    const runTwoTurnsAndCollectDamages = (controller: ReturnType<typeof createDuelBattleController>): number[] => {
+      submitTurn(
+        controller,
+        [{ kind: 'skill', actorMemberIndex: 0, skillSlotIndex: 0, targetMemberIndex: 0 }],
+        [{ kind: 'guard', actorMemberIndex: 0 }],
+      );
+      submitTurn(
+        controller,
+        [{ kind: 'skill', actorMemberIndex: 0, skillSlotIndex: 0, targetMemberIndex: 0 }],
+        [{ kind: 'guard', actorMemberIndex: 0 }],
+      );
+      return controller.state.logs
+        .filter((entry) => entry.kind === 'damage' && entry.text.startsWith('Dummy took '))
+        .map((entry) => {
+          const matched = entry.text.match(/Dummy took (\d+) damage\./);
+          return matched ? Number.parseInt(matched[1], 10) : 0;
+        })
+        .filter((value) => value > 0)
+        .slice(0, 2);
+    };
+
+    const boostedDamages = runTwoTurnsAndCollectDamages(buildController(true));
+    const baselineDamages = runTwoTurnsAndCollectDamages(buildController(false));
+    expect(boostedDamages).toHaveLength(2);
+    expect(baselineDamages).toHaveLength(2);
+    expect(boostedDamages[0]).toBeGreaterThan(baselineDamages[0]);
+    expect(boostedDamages[1]).toBeGreaterThan(baselineDamages[1]);
   });
 
   it('requires replacement selection before next turn and supports draw on simultaneous all-faint via recoil', () => {

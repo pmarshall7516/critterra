@@ -665,7 +665,12 @@ export function MoveTool() {
           .filter((effect) => typeof effect.buffPercent === 'number' && Number.isFinite(effect.buffPercent))
           .map((effect) => [effect.id, effect.buffPercent as number]),
       );
-      const loaded = sanitizeSkillLibrary(rawSkills, knownEffectIds, legacyEffectBuffPercentById, effectTypeById);
+      const elements = await loadAdminGameElements();
+      const allowedElementIds = elements.length > 0 ? elements.map((e) => e.element_id) : undefined;
+      if (elements.length > 0) {
+        setGameElements(elements.map((e) => e.element_id));
+      }
+      const loaded = sanitizeSkillLibrary(rawSkills, knownEffectIds, legacyEffectBuffPercentById, effectTypeById, allowedElementIds);
       setSkills(loaded);
       if (loaded.length > 0 && !selectedSkillId) {
         setSelectedSkillId(loaded[0].skill_id);
@@ -769,7 +774,7 @@ export function MoveTool() {
     const newSkill: SkillDefinition = {
       skill_id: id,
       skill_name: name,
-      element: draft.element as SkillDefinition['element'],
+      element: draft.element,
       type: draft.type,
       priority,
       ...(draft.type === 'damage' && { damage: damageNum }),
@@ -844,7 +849,7 @@ export function MoveTool() {
           {error && <p className="admin-note" style={{ color: '#f7b9b9' }}>{error}</p>}
           <div className="admin-item-grid">
             {filteredSkills.map((skill) => {
-              const elementColor = ELEMENT_SKILL_COLORS[skill.element as keyof typeof ELEMENT_SKILL_COLORS];
+              const elementColor = ELEMENT_SKILL_COLORS[skill.element] ?? '#9e9e9e';
               const style = elementColor
                 ? { ['--admin-skill-bg' as string]: elementColor }
                 : undefined;

@@ -393,6 +393,7 @@ export function sanitizeSkillDefinition(
   knownEffectIds?: Set<string>,
   legacyEffectBuffPercentById?: ReadonlyMap<string, number>,
   effectTypeById?: ReadonlyMap<string, SkillEffectType>,
+  allowedElementIds?: ReadonlySet<string> | string[],
 ): SkillDefinition | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return null;
@@ -411,9 +412,21 @@ export function sanitizeSkillDefinition(
   const elementRaw = typeof record.element === 'string'
     ? (record.element as string).trim().toLowerCase()
     : '';
-  const element = ELEMENT_SET.has(elementRaw as CritterElement)
-    ? (elementRaw as CritterElement)
-    : 'normal';
+  const allowedSet =
+    allowedElementIds == null
+      ? null
+      : Array.isArray(allowedElementIds)
+        ? new Set(allowedElementIds.map((id) => (typeof id === 'string' ? id.trim().toLowerCase() : '')).filter(Boolean))
+        : new Set(Array.from(allowedElementIds).map((id) => (typeof id === 'string' ? id.trim().toLowerCase() : '')).filter(Boolean));
+  const element = allowedSet
+    ? (allowedSet.has(elementRaw)
+        ? elementRaw
+        : allowedSet.has('normal')
+          ? 'normal'
+          : Array.from(allowedSet)[0] ?? 'normal')
+    : ELEMENT_SET.has(elementRaw as CritterElement)
+      ? (elementRaw as CritterElement)
+      : 'normal';
   const typeRaw = typeof record.type === 'string'
     ? (record.type as string).trim().toLowerCase()
     : 'damage';
@@ -654,6 +667,7 @@ export function sanitizeSkillLibrary(
   knownEffectIds?: Set<string>,
   legacyEffectBuffPercentById?: ReadonlyMap<string, number>,
   effectTypeById?: ReadonlyMap<string, SkillEffectType>,
+  allowedElementIds?: ReadonlySet<string> | string[],
 ): SkillDefinition[] {
   if (!Array.isArray(raw)) {
     return [];
@@ -667,6 +681,7 @@ export function sanitizeSkillLibrary(
       knownEffectIds,
       legacyEffectBuffPercentById,
       effectTypeById,
+      allowedElementIds,
     );
     if (!skill || seen.has(skill.skill_id)) {
       continue;
@@ -734,7 +749,7 @@ export function sanitizeElementChartWithElements(raw: unknown, elements: string[
       const defender = typeof record.defender === 'string' ? record.defender.trim().toLowerCase() : '';
       if (!set.has(attacker) || !set.has(defender)) continue;
       const multiplier = clampFloat(record.multiplier, 0, 4, 1);
-      byKey.set(`${attacker}:${defender}`, { attacker: attacker as CritterElement, defender: defender as CritterElement, multiplier });
+      byKey.set(`${attacker}:${defender}`, { attacker, defender, multiplier });
     }
   }
   const result: ElementChartEntry[] = [];
@@ -742,7 +757,7 @@ export function sanitizeElementChartWithElements(raw: unknown, elements: string[
     for (const defender of unique) {
       const key = `${attacker}:${defender}`;
       const existing = byKey.get(key);
-      result.push(existing ?? { attacker: attacker as CritterElement, defender: defender as CritterElement, multiplier: 1 });
+      result.push(existing ?? { attacker, defender, multiplier: 1 });
     }
   }
   return result;
@@ -760,8 +775,8 @@ export function buildDefaultElementChart(): ElementChart {
 
 export function getElementChartMultiplier(
   chart: ElementChart,
-  attackerElement: CritterElement,
-  defenderElement: CritterElement,
+  attackerElement: string,
+  defenderElement: string,
 ): number {
   const entry = chart.find(
     (e) => e.attacker === attackerElement && e.defender === defenderElement,

@@ -167,7 +167,7 @@ export function readStoredWorldContent(): StoredWorldContent | null {
         : [],
       critters: sanitizeCritterDatabase(parsed.critters),
       encounterTables: sanitizeEncounterTableLibrary(parsed.encounterTables),
-      critterSkills: sanitizeStoredSkills(parsed.critterSkills, parsed.skillEffects),
+      critterSkills: sanitizeStoredSkills(parsed.critterSkills, parsed.skillEffects, gameElements),
       skillEffects: sanitizeSkillEffectLibrary(parsed.skillEffects),
       gameElements,
       elementChart: sanitizeElementChartWithElements(parsed.elementChart, gameElements.map((e) => e.id)),
@@ -183,6 +183,7 @@ export function readStoredWorldContent(): StoredWorldContent | null {
 function sanitizeStoredSkills(
   rawSkills: unknown,
   rawEffects: unknown,
+  gameElements?: GameElementDefinition[],
 ): SkillDefinition[] {
   const effects = sanitizeSkillEffectLibrary(rawEffects);
   const knownEffectIds = new Set(effects.map((e) => e.effect_id));
@@ -192,7 +193,8 @@ function sanitizeStoredSkills(
       .filter((effect) => typeof effect.buffPercent === 'number' && Number.isFinite(effect.buffPercent))
       .map((effect) => [effect.effect_id, effect.buffPercent as number]),
   );
-  return sanitizeSkillLibrary(rawSkills, knownEffectIds, legacyEffectBuffPercentById, effectTypeById);
+  const allowedElementIds = gameElements?.length ? gameElements.map((e) => e.id) : undefined;
+  return sanitizeSkillLibrary(rawSkills, knownEffectIds, legacyEffectBuffPercentById, effectTypeById, allowedElementIds);
 }
 
 export function persistWorldContent(content: StoredWorldContent): void {
@@ -271,6 +273,7 @@ export async function hydrateWorldContentFromServer(): Promise<void> {
       knownEffectIds,
       legacyEffectBuffPercentById,
       effectTypeById,
+      gameElements.length ? gameElements.map((e) => e.id) : undefined,
     ),
     skillEffects,
     gameElements,

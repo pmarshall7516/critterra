@@ -37,7 +37,7 @@ const MAX_UPDATE_STEPS_PER_FRAME = 6;
 const MAX_AUTO_ADVANCE_CATCH_UP_STEPS = 4;
 
 type SideMenuView = 'root' | 'squad' | 'collection' | 'backpack';
-type CollectionSort = 'id' | 'name';
+type CollectionSort = 'id' | 'name' | 'squad';
 type CritterCardEntry = RuntimeSnapshot['critters']['collection'][number];
 type BattleSnapshot = NonNullable<RuntimeSnapshot['battle']>;
 type BattleTeamEntry = BattleSnapshot['playerTeam'][number];
@@ -1001,14 +1001,30 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
   const hasAssignedSquadCritter = assignedSquadCritterIds.size > 0;
   const displayCollection = useMemo(() => {
     const query = collectionSearchInput.trim().toLowerCase();
-    const filtered = !query
+    const squadOrderByCritterId = new Map<number, number>();
+    for (const slot of squadSlots) {
+      if (typeof slot.critterId === 'number' && !squadOrderByCritterId.has(slot.critterId)) {
+        squadOrderByCritterId.set(slot.critterId, slot.index);
+      }
+    }
+    let filtered = !query
       ? [...collection]
       : collection.filter(
           (entry) =>
             entry.name.toLowerCase().includes(query) ||
             String(entry.critterId).includes(query),
         );
+    if (collectionSort === 'squad') {
+      filtered = filtered.filter((entry) => assignedSquadCritterIds.has(entry.critterId));
+    }
     filtered.sort((left, right) => {
+      if (collectionSort === 'squad') {
+        const leftOrder = squadOrderByCritterId.get(left.critterId) ?? Number.POSITIVE_INFINITY;
+        const rightOrder = squadOrderByCritterId.get(right.critterId) ?? Number.POSITIVE_INFINITY;
+        if (leftOrder !== rightOrder) {
+          return leftOrder - rightOrder;
+        }
+      }
       if (collectionSort === 'name') {
         const compared = left.name.localeCompare(right.name, undefined, { sensitivity: 'base' });
         return compared !== 0 ? compared : left.critterId - right.critterId;
@@ -1016,7 +1032,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
       return left.critterId - right.critterId;
     });
     return filtered;
-  }, [collection, collectionSearchInput, collectionSort]);
+  }, [assignedSquadCritterIds, collection, collectionSearchInput, collectionSort, squadSlots]);
   const displayBackpackItems = useMemo(() => {
     const query = backpackSearchInput.trim().toLowerCase();
     let filtered = !query
@@ -1514,6 +1530,13 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                   >
                     Name
                   </button>
+                  <button
+                    type="button"
+                    className={`secondary ${collectionSort === 'squad' ? 'is-selected' : ''}`}
+                    onClick={() => setCollectionSort('squad')}
+                  >
+                    Squad
+                  </button>
                 </div>
               </div>
               <div className="collection-grid">
@@ -1945,7 +1968,7 @@ function CritterCard({
         <div className="collection-card__skill-grid">
           {entry.unlocked
             ? equippedSlots.map((slot, index) => {
-                const color = slot && ELEMENT_SKILL_COLORS[slot.element as keyof typeof ELEMENT_SKILL_COLORS] ? ELEMENT_SKILL_COLORS[slot.element as keyof typeof ELEMENT_SKILL_COLORS] : undefined;
+                const color = slot ? (ELEMENT_SKILL_COLORS[slot.element] ?? undefined) : undefined;
                 const tooltip = slot ? buildSkillSlotTooltip(slot) : undefined;
                 return (
                   <button
@@ -2615,7 +2638,7 @@ function BattleOverlay({
                     return (
                   <>
                     {(battle.playerActiveSkillSlots ?? [null, null, null, null]).map((slot, index) => {
-                      const color = slot && ELEMENT_SKILL_COLORS[slot.element as keyof typeof ELEMENT_SKILL_COLORS] ? ELEMENT_SKILL_COLORS[slot.element as keyof typeof ELEMENT_SKILL_COLORS] : undefined;
+                      const color = slot ? (ELEMENT_SKILL_COLORS[slot.element] ?? undefined) : undefined;
                       const tooltip = slot ? buildSkillSlotTooltip(slot) : undefined;
                       return (
                         <button
@@ -3083,6 +3106,12 @@ function formatMissionTypeLabel(mission: {
       return `Heal Critter (${requiredHealingItemNames.join(', ')})`;
     }
     return 'Heal Critter';
+  }
+  if (mission.type === 'heal_with_skills') {
+    return 'Heal with Skills';
+  }
+  if (mission.type === 'land_critical_hits') {
+    return 'Land Critical Hits';
   }
   if (mission.type === 'ascension') {
     const sourceLabel = mission.ascendsFromCritterName

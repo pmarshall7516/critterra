@@ -106,6 +106,13 @@ import { sanitizeShopCatalog } from '@/game/shops/schema';
 import type { ShopDefinition, ShopEntryDefinition } from '@/game/shops/types';
 import type { EquipmentEffectDefinition, EquipmentEffectModifier, EquipmentEffectStat } from '@/game/equipmentEffects/types';
 import { sanitizeEquipmentEffectLibrary } from '@/game/equipmentEffects/schema';
+import {
+  groupEquipmentEffectInstancesById,
+  resolveEquipmentEffectIdsForItem,
+  resolveEquipmentEffectInstancesForItem,
+  summarizeEquipmentEffectInstanceValues,
+  type EquipmentEffectInstance,
+} from '@/game/equipmentEffects/resolver';
 
 interface MoveStep {
   from: Vector2;
@@ -287,6 +294,8 @@ interface BattleCritterState {
   activeEffectSourceById: Record<string, string>;
   /** Passive equipment effect IDs active for this critter in battle. */
   equipmentEffectIds: string[];
+  /** Normalized per-item equipment effect instances (allows same template with different values). */
+  equipmentEffectInstances: EquipmentEffectInstance[];
   /** Source equipment item names keyed by effect id (for tooltip context). */
   equipmentEffectSourceById: Record<string, string[]>;
   /** Active skill-applied end-of-turn healing. Cleared on switch, KO, or battle end. */
@@ -296,6 +305,8 @@ interface BattleCritterState {
     mode: 'flat' | 'percent_max_hp';
     value: number;
     remainingTurns: number;
+    /** When set, this persistent heal was from a player skill; credit this critter for heal_with_skills on tick. */
+    playerSourceCritterId?: number;
   } | null;
   consecutiveSuccessfulGuardCount: number;
   /** Player team only: skill ids for 4 slots. */
@@ -372,6 +383,10 @@ interface BattleNarrationEvent {
   /** When present, apply this damage to the defender when this event is shown (so HP bars update in attack order). */
   applyDamageDefender?: 'player' | 'opponent';
   applyDamageAmount?: number;
+  /** When present and attacker was player, used for mission tracking (e.g. land_critical_hits). */
+  playerAttackerCritterId?: number | null;
+  /** When true with playerAttackerCritterId, the damage move was a critical hit. */
+  wasCriticalHit?: boolean;
   /** Per-box healing/buff mutations that resolve when this narration event is shown. */
   postDamageResolution?: BattlePostDamageResolution;
   /** Static follow-up boxes that should be queued immediately after this one. */
@@ -394,6 +409,10 @@ interface BattlePostDamageResolution {
   attackerCritChanceBuffPercent: number;
   attackerEffectSourceName?: string;
   healMessageAttackerName?: string;
+  /** When set, credit this player critter for heal_with_skills (e.g. end-of-turn persistent heal from skill). */
+  skillHealSourceCritterId?: number;
+  /** When skillHealSourceCritterId is set, credit at most this much for heal_with_skills (defaults to healToAttacker). */
+  skillHealAmount?: number;
   persistentHeals?: Array<{
     targetTeam: 'player' | 'opponent';
     effectId: string;
@@ -401,6 +420,8 @@ interface BattlePostDamageResolution {
     mode: 'flat' | 'percent_max_hp';
     value: number;
     remainingTurns: number;
+    /** When set, this persistent heal was from a player skill; credit this critter for heal_with_skills on tick. */
+    playerSourceCritterId?: number;
   }>;
 }
 
@@ -2103,7 +2124,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     progress.statBonus = derived.statBonus;
     progress.effectiveStats = derived.effectiveStats;
     const equipmentState = this.resolveEquipmentStateForCritter(progress, critter, true);
-    const equipmentEffects = this.getEquipmentEffectsFromAnchors(equipmentState.anchors);
+    const equipmentEffects = this.getEquipmentEffectInstancesFromAnchors(equipmentState.anchors);
     const adjustedStats = this.applyEquipmentEffectsToStats(derived.effectiveStats, equipmentEffects);
     const nextMaxHp = Math.max(1, adjustedStats.hp);
     // Unlocks and level-ups both restore HP to full.
@@ -4990,7 +5011,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     }
 
     const equipmentState = this.resolveEquipmentStateForCritter(progress, critter, true);
-    const equipmentEffects = this.getEquipmentEffectsFromAnchors(equipmentState.anchors);
+    const equipmentEffects = this.getEquipmentEffectInstancesFromAnchors(equipmentState.anchors);
     const adjustedStats = this.applyEquipmentEffectsToStats(progress.effectiveStats, equipmentEffects);
     const maxHp = Math.max(1, adjustedStats.hp);
     const currentHp = clamp(progress.currentHp, 0, maxHp);
@@ -5477,7 +5498,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       const derived = computeCritterDerivedProgress(critter, level);
       const effectiveStats = progress.effectiveStats ?? derived.effectiveStats;
       const equipmentState = this.resolveEquipmentStateForCritter(progress, critter, true);
-      const equipmentEffects = this.getEquipmentEffectsFromAnchors(equipmentState.anchors);
+      const equipmentEffects = this.getEquipmentEffectInstancesFromAnchors(equipmentState.anchors);
       const equipmentEffectSourceById: Record<string, string[]> = {};
       for (const anchor of equipmentState.anchors) {
         const item = this.getEquipmentItemById(anchor.itemId);
@@ -5494,7 +5515,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       }
       const equipmentAdjustedStats = this.applyEquipmentEffectsToStats(effectiveStats, equipmentEffects);
       const equipmentEffectIds = equipmentEffects
-        .map((effect) => effect.effect_id)
+        .map((effect) => effect.effectId)
         .filter((id, idx, arr) => arr.indexOf(id) === idx);
       const maxHp = Math.max(1, equipmentAdjustedStats.hp);
       const currentHp = clamp(progress.currentHp, 0, maxHp);
@@ -5523,6 +5544,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         activeEffectValueById: {},
         activeEffectSourceById: {},
         equipmentEffectIds,
+        equipmentEffectInstances: equipmentEffects.map((effect) => ({ ...effect })),
         equipmentEffectSourceById,
         persistentHeal: null,
         consecutiveSuccessfulGuardCount: 0,
@@ -5610,6 +5632,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       activeEffectValueById: {},
       activeEffectSourceById: {},
       equipmentEffectIds: [],
+      equipmentEffectInstances: [],
       equipmentEffectSourceById: {},
       persistentHeal: null,
       consecutiveSuccessfulGuardCount: 0,
@@ -5857,8 +5880,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
 
     const applyDamageDefender: 'player' | 'opponent' = defenderTeam;
     const defenderActiveIndex = attackingTeam === 'player' ? battle.opponentActiveIndex : battle.playerActiveIndex;
-    const consumedCritBonus = clamp(attacker.pendingCritChanceBonus, 0, 1);
-    if (consumedCritBonus > 0) {
+    const equipmentCritChanceBonus = this.getEquipmentCritChanceBonus(attacker);
+    const consumedCritBonus = clamp(attacker.pendingCritChanceBonus + equipmentCritChanceBonus, 0, 1);
+    if (attacker.pendingCritChanceBonus > 0) {
       attacker.pendingCritChanceBonus = 0;
     }
 
@@ -5871,6 +5895,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       attachmentResolution.persistentHealAttachments,
       skill.skill_name,
       skill.type === 'support' ? attackingTeam : defenderTeam,
+      attackingTeam === 'player' && battle.playerActiveIndex != null
+        ? battle.playerTeam[battle.playerActiveIndex]?.critterId
+        : undefined,
     );
 
     if (skill.type === 'support') {
@@ -5987,6 +6014,11 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
           attacker: attackingTeam,
           applyDamageDefender,
           applyDamageAmount: damage,
+          ...(attackingTeam === 'player' &&
+            battle.playerActiveIndex != null && {
+              playerAttackerCritterId: battle.playerTeam[battle.playerActiveIndex]?.critterId ?? null,
+            }),
+          ...(isCrit && { wasCriticalHit: true }),
           followUpEvents,
           pendingKnockoutResolution:
             wouldFaint && defenderActiveIndex !== null
@@ -6026,6 +6058,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     attachments: SkillEffectAttachment[],
     sourceName: string,
     targetTeam: 'player' | 'opponent',
+    playerSourceCritterId?: number,
   ): NonNullable<BattlePostDamageResolution['persistentHeals']> {
     const resolved: NonNullable<BattlePostDamageResolution['persistentHeals']> = [];
     for (const attachment of attachments) {
@@ -6047,6 +6080,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         mode,
         value,
         remainingTurns: Math.max(1, Math.floor(attachment.persistentHealDurationTurns ?? 1)),
+        ...(playerSourceCritterId != null && { playerSourceCritterId }),
       });
     }
     return resolved;
@@ -6112,6 +6146,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       mode: persistentHeal.mode,
       value: persistentHeal.value,
       remainingTurns: persistentHeal.remainingTurns,
+      ...(persistentHeal.playerSourceCritterId != null && { playerSourceCritterId: persistentHeal.playerSourceCritterId }),
     };
     if (!target.activeEffectIds.includes(persistentHeal.effectId)) {
       target.activeEffectIds.push(persistentHeal.effectId);
@@ -6148,6 +6183,18 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     }
 
     const actualHeal = this.applyBattleHeal(attacker, resolution.healToAttacker);
+    if (actualHeal > 0) {
+      const critterIdToCredit =
+        resolution.skillHealSourceCritterId ??
+        (resolution.attackingTeam === 'player' ? attacker.critterId : undefined);
+      if (critterIdToCredit != null) {
+        const amountToCredit =
+          resolution.skillHealSourceCritterId != null
+            ? (resolution.skillHealAmount ?? actualHeal)
+            : actualHeal;
+        this.advanceHealWithSkillsMissions(critterIdToCredit, amountToCredit);
+      }
+    }
     if (resolution.persistentHeals && resolution.persistentHeals.length > 0) {
       for (const persistentHeal of resolution.persistentHeals) {
         const target = this.getActiveBattleCritter(battle, persistentHeal.targetTeam);
@@ -6340,8 +6387,12 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         continue;
       }
       let requestedHeal = 0;
+      let skillHealRequested = 0;
+      let skillHealSourceCritterId: number | undefined;
       if (critter.persistentHeal) {
-        requestedHeal += this.resolvePersistentHealAmount(critter, critter.persistentHeal);
+        skillHealRequested = this.resolvePersistentHealAmount(critter, critter.persistentHeal);
+        skillHealSourceCritterId = critter.persistentHeal.playerSourceCritterId;
+        requestedHeal += skillHealRequested;
         critter.persistentHeal.remainingTurns = Math.max(0, critter.persistentHeal.remainingTurns - 1);
         if (critter.persistentHeal.remainingTurns <= 0) {
           this.clearPersistentHealStateForCritter(critter);
@@ -6354,6 +6405,8 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       if (actualHeal <= 0) {
         continue;
       }
+      const skillHealAmount =
+        skillHealSourceCritterId != null ? Math.min(skillHealRequested, actualHeal) : undefined;
       events.push({
         message:
           team === 'player'
@@ -6368,6 +6421,10 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
           attackerEffectIds: [],
           defenderEffectIds: [],
           attackerCritChanceBuffPercent: 0,
+          ...(skillHealSourceCritterId != null && {
+            skillHealSourceCritterId,
+            ...(skillHealAmount != null && { skillHealAmount }),
+          }),
         },
       });
     }
@@ -6378,21 +6435,33 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     critter: BattleCritterState,
   ): Array<{ mode: 'flat' | 'percent_max_hp'; value: number }> {
     const configs: Array<{ mode: 'flat' | 'percent_max_hp'; value: number }> = [];
-    for (const effectId of critter.equipmentEffectIds ?? []) {
-      const effect = this.equipmentEffectLookupById[effectId];
-      if (!effect?.persistentHeal) {
+    for (const effect of critter.equipmentEffectInstances ?? []) {
+      if (effect.effectType !== 'persistent_heal') {
         continue;
       }
-      const mode = effect.persistentHeal.mode === 'flat' ? 'flat' : 'percent_max_hp';
+      const mode = effect.persistentHealMode === 'flat' ? 'flat' : 'percent_max_hp';
       const value = mode === 'flat'
-        ? Math.max(1, Math.floor(effect.persistentHeal.value))
-        : clamp(effect.persistentHeal.value, 0, 1);
+        ? Math.max(1, Math.floor(effect.persistentHealValue ?? 1))
+        : clamp(effect.persistentHealValue ?? 0, 0, 1);
       if (value <= 0) {
         continue;
       }
       configs.push({ mode, value });
     }
     return configs;
+  }
+
+  private getEquipmentCritChanceBonus(
+    critter: Pick<BattleCritterState, 'equipmentEffectInstances'>,
+  ): number {
+    let total = 0;
+    for (const effect of critter.equipmentEffectInstances ?? []) {
+      if (effect.effectType !== 'crit_buff') {
+        continue;
+      }
+      total += clamp(effect.critChanceBonus ?? 0, 0, 1);
+    }
+    return clamp(total, 0, 1);
   }
 
   private resolvePersistentHealAmount(
@@ -6532,6 +6601,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         if (defender.fainted) {
           this.clearPersistentHealStateForCritter(defender);
         }
+      }
+      if (next.playerAttackerCritterId != null && next.wasCriticalHit === true) {
+        this.advanceLandCriticalHitsMissions(next.playerAttackerCritterId, 1);
       }
     }
 
@@ -6953,6 +7025,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       }
     }
 
+    const equipmentInstancesById = groupEquipmentEffectInstancesById(entry.equipmentEffectInstances ?? []);
     const activeEffectIds = [...(entry.equipmentEffectIds ?? []), ...(entry.activeEffectIds ?? [])]
       .filter((id, index, values) => values.indexOf(id) === index);
     const activeEffectIconUrls: string[] = [];
@@ -7017,7 +7090,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         activeEffectIconUrls.push(url);
         activeEffectDescriptions.push(
           this.formatBattleEffectTooltip(
-            this.summarizeEquipmentEffect(equipmentEffect),
+            this.summarizeEquipmentEffect(equipmentEffect, equipmentInstancesById.get(id) ?? []),
             entry.equipmentEffectSourceById[id] ?? [],
           ),
         );
@@ -8040,7 +8113,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         }))
         .filter((item) => item.itemId.length > 0);
       const equipmentState = resolveEquipmentState(rawAnchors, slotCount, (itemId) => this.getEquipmentItemSizeById(itemId));
-      const equipmentEffects = this.getEquipmentEffectsFromAnchors(equipmentState.anchors);
+      const equipmentEffects = this.getEquipmentEffectInstancesFromAnchors(equipmentState.anchors);
       const equipmentEffectSourceById: Record<string, string[]> = {};
       for (const anchor of equipmentState.anchors) {
         const item = this.getEquipmentItemById(anchor.itemId);
@@ -8066,7 +8139,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         this.skillLookupById[member.equippedSkillIds[3] ?? ''] ? member.equippedSkillIds[3] : null,
       ];
       const equipmentEffectIds = equipmentEffects
-        .map((effect) => effect.effect_id)
+        .map((effect) => effect.effectId)
         .filter((id, idx, all) => all.indexOf(id) === idx);
       team.push({
         slotIndex: null,
@@ -8091,6 +8164,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         activeEffectValueById: {},
         activeEffectSourceById: {},
         equipmentEffectIds,
+        equipmentEffectInstances: equipmentEffects.map((effect) => ({ ...effect })),
         equipmentEffectSourceById,
         persistentHeal: null,
         consecutiveSuccessfulGuardCount: 0,
@@ -8253,6 +8327,84 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
 
     if (updated) {
       progress.lastProgressAt = new Date().toISOString();
+    }
+    return updated;
+  }
+
+  private advanceHealWithSkillsMissions(critterId: number, amount: number): boolean {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return false;
+    }
+    const critter = this.critterLookup[critterId];
+    const progress = this.playerCritterProgress.collection.find((entry) => entry.critterId === critterId);
+    if (!critter || !progress?.unlocked) {
+      return false;
+    }
+    const currentLevel = Math.max(1, progress.level);
+    const targetLevel = currentLevel + 1;
+    const levelRow = critter.levels.find((entry) => entry.level === targetLevel);
+    if (!levelRow) {
+      return false;
+    }
+    if (this.hasPendingStoryFlagMission(levelRow.missions, levelRow.level, progress.missionProgress)) {
+      return false;
+    }
+    let updated = false;
+    for (const mission of levelRow.missions) {
+      if (mission.type !== 'heal_with_skills') {
+        continue;
+      }
+      const key = missionProgressKey(levelRow.level, mission.id);
+      const currentValue = Math.max(0, progress.missionProgress[key] ?? 0);
+      const nextValue = Math.min(mission.targetValue, currentValue + amount);
+      if (nextValue <= currentValue) {
+        continue;
+      }
+      progress.missionProgress[key] = nextValue;
+      updated = true;
+    }
+    if (updated) {
+      progress.lastProgressAt = new Date().toISOString();
+      this.markProgressDirty();
+    }
+    return updated;
+  }
+
+  private advanceLandCriticalHitsMissions(critterId: number, count: number): boolean {
+    if (!Number.isFinite(count) || count <= 0) {
+      return false;
+    }
+    const critter = this.critterLookup[critterId];
+    const progress = this.playerCritterProgress.collection.find((entry) => entry.critterId === critterId);
+    if (!critter || !progress?.unlocked) {
+      return false;
+    }
+    const currentLevel = Math.max(1, progress.level);
+    const targetLevel = currentLevel + 1;
+    const levelRow = critter.levels.find((entry) => entry.level === targetLevel);
+    if (!levelRow) {
+      return false;
+    }
+    if (this.hasPendingStoryFlagMission(levelRow.missions, levelRow.level, progress.missionProgress)) {
+      return false;
+    }
+    let updated = false;
+    for (const mission of levelRow.missions) {
+      if (mission.type !== 'land_critical_hits') {
+        continue;
+      }
+      const key = missionProgressKey(levelRow.level, mission.id);
+      const currentValue = Math.max(0, progress.missionProgress[key] ?? 0);
+      const nextValue = Math.min(mission.targetValue, currentValue + count);
+      if (nextValue <= currentValue) {
+        continue;
+      }
+      progress.missionProgress[key] = nextValue;
+      updated = true;
+    }
+    if (updated) {
+      progress.lastProgressAt = new Date().toISOString();
+      this.markProgressDirty();
     }
     return updated;
   }
@@ -8554,14 +8706,11 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
   }
 
   private getEquipmentEffectIdsForItem(item: GameItemDefinition): string[] {
-    const config = item.effectConfig as { equipmentEffectIds?: string[] };
-    if (!Array.isArray(config.equipmentEffectIds)) {
-      return [];
-    }
-    return config.equipmentEffectIds
-      .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-      .map((entry) => entry.trim())
-      .filter((entry, index, values) => values.indexOf(entry) === index);
+    return resolveEquipmentEffectIdsForItem(item, this.equipmentEffectLookupById);
+  }
+
+  private getEquipmentEffectInstancesForItem(item: GameItemDefinition): EquipmentEffectInstance[] {
+    return resolveEquipmentEffectInstancesForItem(item, this.equipmentEffectLookupById);
   }
 
   private resolveEquipmentStateForCritter(
@@ -8606,28 +8755,21 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     return count;
   }
 
-  private getEquipmentEffectsFromAnchors(anchors: EquippedEquipmentAnchor[]): EquipmentEffectDefinition[] {
-    const effects: EquipmentEffectDefinition[] = [];
+  private getEquipmentEffectInstancesFromAnchors(anchors: EquippedEquipmentAnchor[]): EquipmentEffectInstance[] {
+    const instances: EquipmentEffectInstance[] = [];
     for (const anchor of anchors) {
       const item = this.getEquipmentItemById(anchor.itemId);
       if (!item) {
         continue;
       }
-      const effectIds = this.getEquipmentEffectIdsForItem(item);
-      for (const effectId of effectIds) {
-        const effect = this.equipmentEffectLookupById[effectId];
-        if (!effect) {
-          continue;
-        }
-        effects.push(effect);
-      }
+      instances.push(...this.getEquipmentEffectInstancesForItem(item));
     }
-    return effects;
+    return instances;
   }
 
   private applyEquipmentEffectsToStats(
     baseStats: CritterStats,
-    effects: EquipmentEffectDefinition[],
+    effects: EquipmentEffectInstance[],
   ): CritterStats {
     const flatByStat: Record<EquipmentEffectStat, number> = {
       hp: 0,
@@ -8642,12 +8784,24 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       speed: 0,
     };
     for (const effect of effects) {
-      for (const modifier of effect.modifiers ?? []) {
-        if (modifier.mode === 'flat') {
-          flatByStat[modifier.stat] += modifier.value;
-        } else {
-          percentByStat[modifier.stat] += modifier.value;
-        }
+      const stat =
+        effect.effectType === 'atk_buff'
+          ? 'attack'
+          : effect.effectType === 'def_buff'
+            ? 'defense'
+            : effect.effectType === 'speed_buff'
+              ? 'speed'
+              : effect.effectType === 'hp_buff'
+                ? 'hp'
+                : null;
+      if (!stat) {
+        continue;
+      }
+      const value = typeof effect.value === 'number' && Number.isFinite(effect.value) ? effect.value : 0;
+      if (effect.mode === 'flat') {
+        flatByStat[stat] += value;
+      } else {
+        percentByStat[stat] += value;
       }
     }
     return {
@@ -8658,10 +8812,20 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     };
   }
 
-  private summarizeEquipmentEffect(effect: EquipmentEffectDefinition): string {
+  private summarizeEquipmentEffect(
+    effect: EquipmentEffectDefinition,
+    instances: EquipmentEffectInstance[] = [],
+  ): string {
+    const valueSummary = summarizeEquipmentEffectInstanceValues(effect.effect_type, instances);
     const description = effect.description.trim();
+    if (description && valueSummary) {
+      return `${description}\n${valueSummary}`;
+    }
     if (description) {
       return description;
+    }
+    if (valueSummary) {
+      return valueSummary;
     }
     const parts = effect.modifiers.map((modifier: EquipmentEffectModifier) => {
       const stat = modifier.stat.toUpperCase();
@@ -8688,13 +8852,23 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     slot: EquippedEquipmentSlot,
   ): RuntimeSnapshot['critters']['squadSlots'][number]['equipmentSlots'][number] {
     const item = this.getEquipmentItemById(slot.itemId);
-    const effectDefs = item ? this.getEquipmentEffectsFromAnchors([{ itemId: item.id, slotIndex: slot.anchorSlotIndex }]) : [];
-    const effectIconUrls = effectDefs
-      .map((effect) => effect.iconUrl)
-      .filter((url): url is string => typeof url === 'string' && url.trim().length > 0);
-    const effectDescriptions = effectDefs
-      .map((effect) => this.summarizeEquipmentEffect(effect))
-      .filter((entry) => entry.length > 0);
+    const effectInstances = item ? this.getEquipmentEffectInstancesForItem(item) : [];
+    const groupedInstances = groupEquipmentEffectInstancesById(effectInstances);
+    const effectIconUrls: string[] = [];
+    const effectDescriptions: string[] = [];
+    for (const [effectId, instances] of groupedInstances.entries()) {
+      const effect = this.equipmentEffectLookupById[effectId];
+      if (!effect) {
+        continue;
+      }
+      if (typeof effect.iconUrl === 'string' && effect.iconUrl.trim().length > 0) {
+        effectIconUrls.push(effect.iconUrl);
+      }
+      const summary = this.summarizeEquipmentEffect(effect, instances);
+      if (summary.trim().length > 0) {
+        effectDescriptions.push(summary);
+      }
+    }
     return {
       itemId: slot.itemId,
       itemName: item?.name ?? slot.itemId,
@@ -8819,7 +8993,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       const effectiveStats = progress?.effectiveStats ?? derived.effectiveStats;
       if (unlocked && progress) {
         const equipmentState = this.resolveEquipmentStateForCritter(progress, critter, true);
-        const equipmentEffects = this.getEquipmentEffectsFromAnchors(equipmentState.anchors);
+        const equipmentEffects = this.getEquipmentEffectInstancesFromAnchors(equipmentState.anchors);
         equipmentStateByCritterId.set(critter.id, equipmentState);
         equipmentAdjustedStatsByCritterId.set(
           critter.id,
@@ -9287,7 +9461,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       return false;
     }
     const equipmentState = this.resolveEquipmentStateForCritter(progress, critter, true);
-    const equipmentEffects = this.getEquipmentEffectsFromAnchors(equipmentState.anchors);
+    const equipmentEffects = this.getEquipmentEffectInstancesFromAnchors(equipmentState.anchors);
     const adjustedStats = this.applyEquipmentEffectsToStats(progress.effectiveStats, equipmentEffects);
     const maxHp = Math.max(1, adjustedStats.hp);
     return clamp(progress.currentHp, 0, maxHp) >= maxHp;
@@ -9391,7 +9565,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         continue;
       }
       const equipmentState = this.resolveEquipmentStateForCritter(entry, critter, true);
-      const equipmentEffects = this.getEquipmentEffectsFromAnchors(equipmentState.anchors);
+      const equipmentEffects = this.getEquipmentEffectInstancesFromAnchors(equipmentState.anchors);
       const adjustedStats = this.applyEquipmentEffectsToStats(entry.effectiveStats, equipmentEffects);
       const maxHp = Math.max(1, adjustedStats.hp);
       entry.currentHp = maxHp;
@@ -9926,12 +10100,18 @@ function describeItemEffect(item: GameItemDefinition): string {
     return 'Tool action';
   }
   if (item.effectType === 'equip_effect' || item.effectType === 'equip_stub') {
-    const effect = item.effectConfig as { equipSize?: number; equipmentEffectIds?: string[] };
+    const effect = item.effectConfig as { equipSize?: number; equipmentEffectIds?: string[]; equipmentEffectAttachments?: Array<{ effectId?: string }> };
     const equipSize =
       typeof effect.equipSize === 'number' && Number.isFinite(effect.equipSize)
         ? Math.max(1, Math.floor(effect.equipSize))
         : 1;
-    const effectCount = Array.isArray(effect.equipmentEffectIds) ? effect.equipmentEffectIds.length : 0;
+    const effectCountFromAttachments = Array.isArray(effect.equipmentEffectAttachments)
+      ? effect.equipmentEffectAttachments
+          .filter((entry) => entry && typeof entry.effectId === 'string' && entry.effectId.trim().length > 0)
+          .length
+      : 0;
+    const effectCountFromIds = Array.isArray(effect.equipmentEffectIds) ? effect.equipmentEffectIds.length : 0;
+    const effectCount = Math.max(effectCountFromAttachments, effectCountFromIds);
     return effectCount > 0
       ? `Equipment (${equipSize} slot${equipSize === 1 ? '' : 's'}) • ${effectCount} effect${effectCount === 1 ? '' : 's'}`
       : `Equipment (${equipSize} slot${equipSize === 1 ? '' : 's'})`;

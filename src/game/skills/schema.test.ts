@@ -209,6 +209,42 @@ describe('sanitizeSkillDefinition', () => {
     });
   });
 
+  it('preserves element from element database when allowedElementIds is provided (e.g. forge)', () => {
+    const skill = sanitizeSkillDefinition(
+      {
+        skill_id: 'forge-strike',
+        skill_name: 'Forge Strike',
+        element: 'forge',
+        type: 'damage',
+        damage: 35,
+      },
+      0,
+      undefined,
+      undefined,
+      undefined,
+      ['bloom', 'ember', 'forge', 'normal'],
+    );
+    expect(skill?.element).toBe('forge');
+  });
+
+  it('falls back to normal when element not in allowedElementIds', () => {
+    const skill = sanitizeSkillDefinition(
+      {
+        skill_id: 'unknown-element',
+        skill_name: 'Unknown',
+        element: 'unknown_element',
+        type: 'damage',
+        damage: 10,
+      },
+      0,
+      undefined,
+      undefined,
+      undefined,
+      ['bloom', 'normal'],
+    );
+    expect(skill?.element).toBe('normal');
+  });
+
   it('parses and clamps persistent-heal attachment config', () => {
     const skill = sanitizeSkillDefinition(
       {

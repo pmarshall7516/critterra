@@ -1,5 +1,10 @@
 import { computeCritterDerivedProgress } from '@/game/critters/schema';
-import type { EquipmentEffectDefinition, EquipmentEffectModifier } from '@/game/equipmentEffects/types';
+import type { EquipmentEffectDefinition } from '@/game/equipmentEffects/types';
+import {
+  resolveEquipmentEffectIdsForItem,
+  resolveEquipmentEffectInstancesForItem,
+  type EquipmentEffectInstance,
+} from '@/game/equipmentEffects/resolver';
 import type { GameItemDefinition } from '@/game/items/types';
 import type { SkillDefinition, SkillEffectAttachment, SkillEffectType, SkillTargetKindDamage, SkillTargetKindSupport } from '@/game/skills/types';
 import {
@@ -164,7 +169,7 @@ function buildBattleCritterState(
   }
   const derived = computeCritterDerivedProgress(critter, member.level);
   const baseStats = derived.effectiveStats;
-  const equipmentEffects = collectEquipmentEffects(member.equippedItems, indexes.itemById, indexes.equipmentEffectById);
+  const equipmentEffects = collectEquipmentEffectInstances(member.equippedItems, indexes.itemById, indexes.equipmentEffectById);
   const adjustedStats = applyEquipmentEffectsToStats(baseStats, equipmentEffects);
   const equipmentDefensePositiveBonus = Math.max(
     0,
@@ -204,6 +209,7 @@ function buildBattleCritterState(
     activeEffectSourceById: {},
     activeEffectValueById: {},
     equipmentEffectIds,
+    equipmentEffectInstances: equipmentEffects.map((effect) => ({ ...effect })),
     equippedItemIds,
     equipmentEffectSourceById,
     equipmentDefensePositiveBonus,
@@ -225,8 +231,7 @@ function collectEquipmentEffectIdsAndSources(
     if (!item || item.category !== 'equipment') {
       continue;
     }
-    const config = item.effectConfig as { equipmentEffectIds?: string[] };
-    const ids = Array.isArray(config.equipmentEffectIds) ? config.equipmentEffectIds : [];
+    const ids = resolveEquipmentEffectIdsForItem(item, equipmentEffectById);
     const itemName = item.name?.trim() || item.id;
     for (const effectId of ids) {
       const normalized = effectId?.trim?.();
@@ -244,39 +249,47 @@ function collectEquipmentEffectIdsAndSources(
   return { effectIds, sourceById };
 }
 
-function collectEquipmentEffects(
+function collectEquipmentEffectInstances(
   equippedItems: DuelSquadMember['equippedItems'],
   itemById: Map<string, GameItemDefinition>,
   equipmentEffectById: Map<string, EquipmentEffectDefinition>,
-): EquipmentEffectDefinition[] {
-  const effects: EquipmentEffectDefinition[] = [];
+): EquipmentEffectInstance[] {
+  const effects: EquipmentEffectInstance[] = [];
   for (const equipped of equippedItems) {
     const item = itemById.get(equipped.itemId);
     if (!item || item.category !== 'equipment') {
       continue;
     }
-    const config = item.effectConfig as { equipmentEffectIds?: string[] };
-    const effectIds = Array.isArray(config.equipmentEffectIds) ? config.equipmentEffectIds : [];
-    for (const effectId of effectIds) {
-      const effect = equipmentEffectById.get(effectId);
-      if (!effect) {
-        continue;
-      }
-      effects.push(effect);
-    }
+    effects.push(...resolveEquipmentEffectInstancesForItem(item, equipmentEffectById));
   }
   return effects;
 }
 
 function applyEquipmentEffectsToStats(
   base: { hp: number; attack: number; defense: number; speed: number },
-  effects: EquipmentEffectDefinition[],
+  effects: EquipmentEffectInstance[],
 ): { hp: number; attack: number; defense: number; speed: number } {
   const flat = { hp: 0, attack: 0, defense: 0, speed: 0 };
   const percent = { hp: 0, attack: 0, defense: 0, speed: 0 };
   for (const effect of effects) {
-    for (const modifier of effect.modifiers ?? []) {
-      applyEquipmentModifier(modifier, flat, percent);
+    const stat =
+      effect.effectType === 'atk_buff'
+        ? 'attack'
+        : effect.effectType === 'def_buff'
+          ? 'defense'
+          : effect.effectType === 'speed_buff'
+            ? 'speed'
+            : effect.effectType === 'hp_buff'
+              ? 'hp'
+              : null;
+    if (!stat) {
+      continue;
+    }
+    const value = typeof effect.value === 'number' && Number.isFinite(effect.value) ? effect.value : 0;
+    if (effect.mode === 'flat') {
+      flat[stat] += value;
+    } else {
+      percent[stat] += value;
     }
   }
   return {
@@ -285,18 +298,6 @@ function applyEquipmentEffectsToStats(
     defense: applyStatModifier(base.defense, flat.defense, percent.defense),
     speed: applyStatModifier(base.speed, flat.speed, percent.speed),
   };
-}
-
-function applyEquipmentModifier(
-  modifier: EquipmentEffectModifier,
-  flat: { hp: number; attack: number; defense: number; speed: number },
-  percent: { hp: number; attack: number; defense: number; speed: number },
-): void {
-  if (modifier.mode === 'flat') {
-    flat[modifier.stat] += modifier.value;
-    return;
-  }
-  percent[modifier.stat] += modifier.value;
 }
 
 function applyStatModifier(base: number, flat: number, percent: number): number {
@@ -840,8 +841,11 @@ function applySkillDamage(
   skill: SkillDefinition,
   context: ResolveContext,
 ): number {
-  const consumedCritBonus = Math.max(0, Math.min(1, attacker.pendingCritChanceBonus ?? 0));
-  if (consumedCritBonus > 0) {
+  const consumedCritBonus = Math.max(
+    0,
+    Math.min(1, (attacker.pendingCritChanceBonus ?? 0) + getEquipmentCritChanceBonus(attacker)),
+  );
+  if ((attacker.pendingCritChanceBonus ?? 0) > 0) {
     attacker.pendingCritChanceBonus = 0;
   }
   const result = computeBattleDamage({
@@ -1121,24 +1125,33 @@ function clearPersistentHealState(critter: DuelBattleCritterState): void {
 
 function getEquipmentPersistentHealConfigs(
   critter: DuelBattleCritterState,
-  equipmentEffectById: Map<string, EquipmentEffectDefinition>,
 ): Array<{ mode: 'flat' | 'percent_max_hp'; value: number }> {
   const configs: Array<{ mode: 'flat' | 'percent_max_hp'; value: number }> = [];
-  for (const effectId of critter.equipmentEffectIds ?? []) {
-    const effect = equipmentEffectById.get(effectId);
-    if (!effect?.persistentHeal) {
+  for (const effect of critter.equipmentEffectInstances ?? []) {
+    if (effect.effectType !== 'persistent_heal') {
       continue;
     }
-    const mode = effect.persistentHeal.mode === 'flat' ? 'flat' : 'percent_max_hp';
+    const mode = effect.persistentHealMode === 'flat' ? 'flat' : 'percent_max_hp';
     const value = mode === 'flat'
-      ? Math.max(1, Math.floor(effect.persistentHeal.value))
-      : Math.max(0, Math.min(1, effect.persistentHeal.value));
+      ? Math.max(1, Math.floor(effect.persistentHealValue ?? 1))
+      : Math.max(0, Math.min(1, effect.persistentHealValue ?? 0));
     if (value <= 0) {
       continue;
     }
     configs.push({ mode, value });
   }
   return configs;
+}
+
+function getEquipmentCritChanceBonus(critter: DuelBattleCritterState): number {
+  let total = 0;
+  for (const effect of critter.equipmentEffectInstances ?? []) {
+    if (effect.effectType !== 'crit_buff') {
+      continue;
+    }
+    total += Math.max(0, Math.min(1, effect.critChanceBonus ?? 0));
+  }
+  return Math.max(0, Math.min(1, total));
 }
 
 function resolvePersistentHealAmount(
@@ -1167,7 +1180,7 @@ function applyEndTurnPersistentHealing(state: DuelBattleState, context: ResolveC
           clearPersistentHealState(critter);
         }
       }
-      const equipmentPersistentHeals = getEquipmentPersistentHealConfigs(critter, context.indexes.equipmentEffectById);
+      const equipmentPersistentHeals = getEquipmentPersistentHealConfigs(critter);
       for (const healConfig of equipmentPersistentHeals) {
         requestedHeal += resolvePersistentHealAmount(critter.maxHp, healConfig);
       }

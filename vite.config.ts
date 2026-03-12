@@ -371,7 +371,10 @@ async function listSupabasePngSpriteSheets(
   return files;
 }
 
-function sanitizeIdentifier(value: string, fallback: string): string {
+function sanitizeIdentifier(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') {
+    return fallback;
+  }
   const trimmed = value.trim();
   if (!trimmed) {
     return fallback;
@@ -1133,6 +1136,8 @@ const CRITTER_MISSION_TYPE_OPTIONS = new Set([
   'use_guard',
   'swap_in',
   'heal_critter',
+  'heal_with_skills',
+  'land_critical_hits',
   'ascension',
   'story_flag',
 ]);
@@ -1869,18 +1874,91 @@ function parseItemEffectConfig(effectType: string, rawConfig: Record<string, unk
           ? rawConfig.equip_size
           : 1;
     next.equipSize = critterClampInt(equipSize, 1, 8, 1);
+    const attachments = parseEquipmentEffectAttachments(
+      Array.isArray(rawConfig.equipmentEffectAttachments)
+        ? rawConfig.equipmentEffectAttachments
+        : Array.isArray(rawConfig.equipment_effect_attachments)
+          ? rawConfig.equipment_effect_attachments
+          : [],
+    );
     const rawEffectIds = Array.isArray(rawConfig.equipmentEffectIds)
       ? rawConfig.equipmentEffectIds
       : Array.isArray(rawConfig.equipment_effect_ids)
         ? rawConfig.equipment_effect_ids
         : [];
-    next.equipmentEffectIds = rawEffectIds
+    const idsFromRaw = rawEffectIds
       .filter((entry): entry is string => typeof entry === 'string')
       .map((entry) => sanitizeIdentifier(entry, ''))
       .filter((entry, index, values) => entry.length > 0 && values.indexOf(entry) === index)
       .slice(0, 16);
+    const idsFromAttachments = attachments
+      .map((entry) => sanitizeIdentifier(entry.effectId, ''))
+      .filter((entry, index, values) => entry.length > 0 && values.indexOf(entry) === index);
+    next.equipmentEffectIds = [...idsFromRaw, ...idsFromAttachments]
+      .filter((entry, index, values) => values.indexOf(entry) === index)
+      .slice(0, 16);
+    if (attachments.length > 0) {
+      next.equipmentEffectAttachments = attachments;
+    } else {
+      delete next.equipmentEffectAttachments;
+    }
   }
   return next;
+}
+
+function parseEquipmentEffectAttachments(raw: unknown[]): Array<Record<string, unknown>> {
+  const parsed: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const effectId = sanitizeIdentifier(record.effectId ?? record.effect_id, '');
+    if (!effectId || seen.has(effectId)) {
+      continue;
+    }
+    const modeRaw = typeof record.mode === 'string' ? record.mode.trim().toLowerCase() : '';
+    const mode = modeRaw === 'flat' || modeRaw === 'percent' ? modeRaw : undefined;
+    const value = parseAttachmentNumeric(record.value);
+    const critChanceBonus = parseAttachmentNumeric(record.critChanceBonus ?? record.crit_chance_bonus);
+    const persistentHealModeRaw =
+      typeof (record.persistentHealMode ?? record.persistent_heal_mode) === 'string'
+        ? String(record.persistentHealMode ?? record.persistent_heal_mode).trim().toLowerCase()
+        : '';
+    const persistentHealMode = persistentHealModeRaw === 'flat' || persistentHealModeRaw === 'percent_max_hp'
+      ? persistentHealModeRaw
+      : undefined;
+    const persistentHealValue = parseAttachmentNumeric(record.persistentHealValue ?? record.persistent_heal_value);
+    parsed.push({
+      effectId,
+      ...(mode && { mode }),
+      ...(value != null && { value: mode === 'flat' ? Math.floor(Math.max(-999, Math.min(999, value))) : Math.max(-5, Math.min(5, value)) }),
+      ...(critChanceBonus != null && { critChanceBonus: Math.max(0, Math.min(1, critChanceBonus)) }),
+      ...(persistentHealMode && { persistentHealMode }),
+      ...(persistentHealValue != null && {
+        persistentHealValue:
+          persistentHealMode === 'flat'
+            ? Math.max(1, Math.floor(Math.max(1, Math.min(9999, persistentHealValue))))
+            : Math.max(0, Math.min(1, persistentHealValue)),
+      }),
+    });
+    seen.add(effectId);
+    if (parsed.length >= 16) {
+      break;
+    }
+  }
+  return parsed;
+}
+
+function parseAttachmentNumeric(raw: unknown): number | undefined {
+  const parsed =
+    typeof raw === 'number' && Number.isFinite(raw)
+      ? raw
+      : typeof raw === 'string' && raw.trim().length > 0
+        ? Number.parseFloat(raw)
+        : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function deriveItemValueFromEffectConfig(effectType: string, effectConfig: Record<string, unknown>): number | undefined {

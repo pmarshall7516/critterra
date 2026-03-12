@@ -26,6 +26,8 @@ export const CRITTER_MISSION_TYPES = [
   'swap_in',
   'swap_out',
   'heal_critter',
+  'heal_with_skills',
+  'land_critical_hits',
   'ascension',
   'story_flag',
 ] as const;

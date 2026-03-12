@@ -8,9 +8,20 @@ import {
   type ItemEffectType,
   type PlayerItemInventory,
 } from '@/game/items/types';
+import type {
+  EquipmentEffectAttachment,
+  EquipmentEffectMode,
+  EquipmentPersistentHealMode,
+} from '@/game/equipmentEffects/types';
+import {
+  EQUIPMENT_EFFECT_MODES,
+  EQUIPMENT_PERSISTENT_HEAL_MODES,
+} from '@/game/equipmentEffects/types';
 
 const CORE_CATEGORY_SET = new Set<string>(ITEM_CORE_CATEGORIES);
 const EFFECT_TYPE_SET = new Set<string>(ITEM_EFFECT_TYPES);
+const EQUIPMENT_EFFECT_MODE_SET = new Set<EquipmentEffectMode>(EQUIPMENT_EFFECT_MODES);
+const EQUIPMENT_PERSISTENT_HEAL_MODE_SET = new Set<EquipmentPersistentHealMode>(EQUIPMENT_PERSISTENT_HEAL_MODES);
 
 export function sanitizeItemCatalog(raw: unknown): GameItemDefinition[] {
   if (!Array.isArray(raw)) {
@@ -199,18 +210,29 @@ function sanitizeEffectConfig(effectType: ItemEffectType, raw: unknown): ItemEff
         : typeof record.equip_size === 'number'
           ? record.equip_size
           : 1;
+    const equipmentEffectAttachments = sanitizeEquipmentEffectAttachments(
+      record.equipmentEffectAttachments ?? record.equipment_effect_attachments,
+    );
     const equipmentEffectIds = Array.isArray(record.equipmentEffectIds)
       ? record.equipmentEffectIds
       : Array.isArray(record.equipment_effect_ids)
         ? record.equipment_effect_ids
         : [];
-    return {
-      equipSize: clampInt(equipSize, 1, 8, 1),
-      equipmentEffectIds: equipmentEffectIds
+    const dedupedEquipmentEffectIds = [
+      ...equipmentEffectIds
         .filter((entry): entry is string => typeof entry === 'string')
         .map((entry) => sanitizeIdentifier(entry, ''))
-        .filter((entry, index, values) => entry.length > 0 && values.indexOf(entry) === index)
-        .slice(0, 16),
+        .filter((entry, index, values) => entry.length > 0 && values.indexOf(entry) === index),
+      ...equipmentEffectAttachments
+        .map((entry) => sanitizeIdentifier(entry.effectId, ''))
+        .filter((entry, index, values) => entry.length > 0 && values.indexOf(entry) === index),
+    ]
+      .filter((entry, index, values) => values.indexOf(entry) === index)
+      .slice(0, 16);
+    return {
+      equipSize: clampInt(equipSize, 1, 8, 1),
+      ...(equipmentEffectAttachments.length > 0 && { equipmentEffectAttachments }),
+      equipmentEffectIds: dedupedEquipmentEffectIds,
       slot: sanitizeOptionalText(record.slot, 40),
     };
   }
@@ -309,6 +331,78 @@ function sanitizeOptionalNumber(raw: unknown, min: number, max: number): number 
     return undefined;
   }
   return Math.max(min, Math.min(max, raw));
+}
+
+function sanitizeEquipmentEffectAttachments(raw: unknown): EquipmentEffectAttachment[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const parsed: EquipmentEffectAttachment[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const effectId = sanitizeIdentifier(record.effectId ?? record.effect_id, '');
+    if (!effectId || seen.has(effectId)) {
+      continue;
+    }
+
+    const modeRaw = typeof record.mode === 'string' ? record.mode.trim().toLowerCase() : '';
+    const mode = EQUIPMENT_EFFECT_MODE_SET.has(modeRaw as EquipmentEffectMode)
+      ? (modeRaw as EquipmentEffectMode)
+      : undefined;
+    const hasValue = typeof record.value === 'number' || (typeof record.value === 'string' && record.value.trim().length > 0);
+    const parsedValue = parseOptionalNumeric(record.value);
+    const value = hasValue || mode
+      ? mode === 'flat'
+        ? Math.floor(clampNumber(parsedValue ?? 1, -999, 999, 1))
+        : clampNumber(parsedValue ?? 0.1, -5, 5, 0.1)
+      : undefined;
+
+    const parsedCrit = parseOptionalNumeric(record.critChanceBonus ?? record.crit_chance_bonus);
+    const critChanceBonus = parsedCrit == null ? undefined : clampNumber(parsedCrit, 0, 1, 0.05);
+
+    const persistentModeRaw =
+      typeof (record.persistentHealMode ?? record.persistent_heal_mode) === 'string'
+        ? String(record.persistentHealMode ?? record.persistent_heal_mode).trim().toLowerCase()
+        : '';
+    const persistentHealMode = EQUIPMENT_PERSISTENT_HEAL_MODE_SET.has(persistentModeRaw as EquipmentPersistentHealMode)
+      ? (persistentModeRaw as EquipmentPersistentHealMode)
+      : undefined;
+    const parsedPersistentValue = parseOptionalNumeric(record.persistentHealValue ?? record.persistent_heal_value);
+    const persistentHealValue =
+      persistentHealMode == null && parsedPersistentValue == null
+        ? undefined
+        : persistentHealMode === 'flat'
+          ? Math.max(1, Math.floor(clampNumber(parsedPersistentValue ?? 1, 1, 9999, 1)))
+          : clampNumber(parsedPersistentValue ?? 0.05, 0, 1, 0.05);
+
+    parsed.push({
+      effectId,
+      ...(mode && { mode }),
+      ...(value != null && { value }),
+      ...(typeof critChanceBonus === 'number' && { critChanceBonus }),
+      ...(persistentHealMode && { persistentHealMode }),
+      ...(typeof persistentHealValue === 'number' && { persistentHealValue }),
+    });
+    seen.add(effectId);
+    if (parsed.length >= 16) {
+      break;
+    }
+  }
+  return parsed;
+}
+
+function parseOptionalNumeric(raw: unknown): number | undefined {
+  const parsed =
+    typeof raw === 'number' && Number.isFinite(raw)
+      ? raw
+      : typeof raw === 'string' && raw.trim().length > 0
+        ? Number.parseFloat(raw)
+        : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function deriveValueFromEffectConfig(effectType: ItemEffectType, effectConfig: ItemEffectConfig): number | undefined {

@@ -47,5 +47,44 @@ describe('sanitizeItemDefinition', () => {
       equipmentEffectIds: ['bulk-up'],
     });
   });
-});
 
+  it('normalizes equipment effect attachments and merges ids', () => {
+    const item = sanitizeItemDefinition(
+      {
+        id: 'hybrid-charm',
+        name: 'Hybrid Charm',
+        category: 'equipment',
+        effectType: 'equip_effect',
+        effectConfig: {
+          equipSize: 2,
+          equipmentEffectIds: ['legacy-def', 'legacy-def'],
+          equipmentEffectAttachments: [
+            { effectId: 'equip-def-buff', mode: 'percent', value: 9 },
+            { effectId: 'equip-atk-buff', mode: 'flat', value: '12.8' },
+            { effectId: 'equip-crit-buff', critChanceBonus: 2 },
+            { effect_id: 'equip-persistent-heal', persistent_heal_mode: 'flat', persistent_heal_value: -4 },
+          ],
+        },
+      },
+      0,
+    );
+
+    expect(item).not.toBeNull();
+    expect(item?.effectConfig).toMatchObject({
+      equipSize: 2,
+      equipmentEffectIds: [
+        'legacy-def',
+        'equip-def-buff',
+        'equip-atk-buff',
+        'equip-crit-buff',
+        'equip-persistent-heal',
+      ],
+      equipmentEffectAttachments: [
+        { effectId: 'equip-def-buff', mode: 'percent', value: 5 },
+        { effectId: 'equip-atk-buff', mode: 'flat', value: 12 },
+        { effectId: 'equip-crit-buff', critChanceBonus: 1 },
+        { effectId: 'equip-persistent-heal', persistentHealMode: 'flat', persistentHealValue: 1 },
+      ],
+    });
+  });
+});

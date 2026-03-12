@@ -13,9 +13,14 @@ import type { DuelBattleCritterState } from '@/duel/types';
 import type { CritterDefinition } from '@/game/critters/types';
 import type { GameItemDefinition } from '@/game/items/types';
 import type { EquipmentEffectDefinition } from '@/game/equipmentEffects/types';
+import {
+  groupEquipmentEffectInstancesById,
+  resolveEquipmentEffectInstancesForItem,
+  summarizeEquipmentEffectInstanceValues,
+  type EquipmentEffectInstance,
+} from '@/game/equipmentEffects/resolver';
 import type { SkillDefinition, SkillEffectDefinition } from '@/game/skills/types';
 import { ELEMENT_SKILL_COLORS, getSkillValueDisplayNumber } from '@/game/skills/types';
-import type { CritterElement } from '@/game/critters/types';
 import { MIN_BATTLE_STAT_MODIFIER } from '@/game/battle/damageAndEffects';
 import { apiFetchJson } from '@/shared/apiClient';
 import { setAuthToken } from '@/shared/authStorage';
@@ -270,42 +275,22 @@ function buildDuelSkillTooltip(skill: SkillDefinition, catalogs: DuelCatalogCont
   return lines.join('\n');
 }
 
-function summarizeDuelEquipmentEffect(effect: EquipmentEffectDefinition): string {
+function summarizeDuelEquipmentEffect(
+  effect: EquipmentEffectDefinition,
+  instances: EquipmentEffectInstance[] = [],
+): string {
+  const valueSummary = summarizeEquipmentEffectInstanceValues(effect.effect_type, instances);
   const description = typeof effect.description === 'string' ? effect.description.trim() : '';
+  if (description && valueSummary) {
+    return `${description}; ${valueSummary}`;
+  }
   if (description) {
     return description;
   }
-  const persistentHeal = effect.persistentHeal;
-  const persistentHealLine = persistentHeal
-    ? persistentHeal.mode === 'flat'
-      ? `End turn heal +${Math.max(1, Math.floor(persistentHeal.value))} HP while equipped`
-      : `End turn heal +${Math.round(Math.max(0, persistentHeal.value) * 100)}% max HP while equipped`
-    : null;
-  const modifiers = Array.isArray(effect.modifiers) ? effect.modifiers : [];
-  if (modifiers.length <= 0 && !persistentHealLine) {
-    return effect.effect_name || effect.effect_id;
+  if (valueSummary) {
+    return valueSummary;
   }
-  const modifierSummary = modifiers
-    .map((modifier) => {
-      const statLabel = modifier.stat === 'attack'
-        ? 'ATK'
-        : modifier.stat === 'defense'
-          ? 'DEF'
-          : modifier.stat === 'speed'
-            ? 'SPD'
-            : 'HP';
-      if (modifier.mode === 'percent') {
-        const value = Math.round(modifier.value * 100);
-        return `${value >= 0 ? '+' : ''}${value}% ${statLabel}`;
-      }
-      const value = Math.round(modifier.value);
-      return `${value >= 0 ? '+' : ''}${value} ${statLabel}`;
-    })
-    .join(', ');
-  if (modifierSummary && persistentHealLine) {
-    return `${modifierSummary}; ${persistentHealLine}`;
-  }
-  return modifierSummary || persistentHealLine || effect.effect_name || effect.effect_id;
+  return effect.effect_name || effect.effect_id;
 }
 
 function getItemEquipmentTooltip(
@@ -317,30 +302,20 @@ function getItemEquipmentTooltip(
     return fallbackItemId;
   }
   const lines = [item.name];
-  const effectConfig = item.effectConfig as { equipmentEffectIds?: string[] } | null | undefined;
-  const equipmentEffectIds = Array.isArray(effectConfig?.equipmentEffectIds)
-    ? effectConfig.equipmentEffectIds
-        .map((entry) => entry.trim())
-        .filter((entry) => entry.length > 0)
-    : [];
-  if (equipmentEffectIds.length <= 0) {
+  const instances = resolveEquipmentEffectInstancesForItem(item, equipmentEffectById);
+  if (instances.length <= 0) {
     lines.push('Effect: None');
     return lines.join('\n');
   }
-  const seen = new Set<string>();
-  equipmentEffectIds.forEach((effectId) => {
-    const normalized = effectId.trim();
-    if (!normalized || seen.has(normalized)) {
-      return;
-    }
-    seen.add(normalized);
-    const effect = equipmentEffectById.get(normalized);
+  const grouped = groupEquipmentEffectInstancesById(instances);
+  grouped.forEach((effectInstances, effectId) => {
+    const effect = equipmentEffectById.get(effectId);
     if (!effect) {
-      lines.push(`Effect: ${normalized}`);
+      lines.push(`Effect: ${effectId}`);
       return;
     }
-    const effectName = effect.effect_name?.trim() || normalized;
-    const summary = summarizeDuelEquipmentEffect(effect);
+    const effectName = effect.effect_name?.trim() || effectId;
+    const summary = summarizeDuelEquipmentEffect(effect, effectInstances);
     if (summary && summary !== effectName) {
       lines.push(`Effect: ${effectName} - ${summary}`);
       return;
@@ -439,6 +414,7 @@ function getDuelCritterEffectIconsAndTooltips(
   if (!critter) return { iconUrls, tooltips };
   const skillEffectById = new Map(catalogs.skillEffects.map((e) => [e.effect_id, e] as const));
   const equipmentEffectById = new Map(catalogs.equipmentEffects.map((e) => [e.effect_id, e] as const));
+  const equipmentInstancesById = groupEquipmentEffectInstancesById(critter.equipmentEffectInstances ?? []);
   const equipmentIds = critter.equipmentEffectIds ?? [];
   const activeIds = critter.activeEffectIds ?? [];
   const seen = new Set<string>();
@@ -478,7 +454,10 @@ function getDuelCritterEffectIconsAndTooltips(
       const url = equipmentEffect.iconUrl?.trim();
       if (url) {
         iconUrls.push(url);
-        const summary = equipmentEffect.description?.trim() || equipmentEffect.effect_name || normalized;
+        const summary = summarizeDuelEquipmentEffect(
+          equipmentEffect,
+          equipmentInstancesById.get(normalized) ?? [],
+        );
         tooltips.push(`${summary} (${sourceName})`);
       }
     }
@@ -3041,10 +3020,7 @@ function BattleActionPanel({
               const skill = skillId ? skillById.get(skillId) : null;
               const isSelected = currentDraft?.kind === 'skill' && currentDraft.skillSlotIndex === slotIndex;
               const elementKey = skill ? (skill.element ?? '').toString().trim().toLowerCase() : '';
-              const elementColor =
-                elementKey && elementKey in ELEMENT_SKILL_COLORS
-                  ? ELEMENT_SKILL_COLORS[elementKey as CritterElement]
-                  : undefined;
+              const elementColor = elementKey ? (ELEMENT_SKILL_COLORS[elementKey] ?? '#9e9e9e') : undefined;
               const elementLogoUrl = skill ? buildElementLogoUrlFromIconsBucket(skill.element, iconsBucketRoot) : null;
               const value = skill ? getSkillValueDisplayNumber(skill) : null;
               const effectIconUrls = skill ? getSkillEffectIconUrlsForDuel(skill, catalogs) : [];
@@ -3558,7 +3534,7 @@ function ActionSelectionPanel({
                       skill?.type === 'damage'
                         ? `Damage ${typeof skill.damage === 'number' ? Math.max(1, Math.floor(skill.damage)) : '--'}`
                         : 'Support';
-                    const elementColor = skill ? ELEMENT_SKILL_COLORS[skill.element as keyof typeof ELEMENT_SKILL_COLORS] : undefined;
+                    const elementColor = skill ? (ELEMENT_SKILL_COLORS[skill.element] ?? '#9e9e9e') : undefined;
                     const tileStyle: CSSProperties | undefined = elementColor
                       ? ({
                           ['--duel-skill-bg' as string]: elementColor,

@@ -3,7 +3,15 @@ import { sanitizeItemCatalog, sanitizeItemDefinition } from '@/game/items/schema
 import { ITEM_CORE_CATEGORIES, ITEM_EFFECT_TYPES, type GameItemDefinition } from '@/game/items/types';
 import { apiFetchJson } from '@/shared/apiClient';
 import { sanitizeEquipmentEffectLibrary } from '@/game/equipmentEffects/schema';
-import type { EquipmentEffectDefinition } from '@/game/equipmentEffects/types';
+import {
+  EQUIPMENT_EFFECT_MODES,
+  EQUIPMENT_PERSISTENT_HEAL_MODES,
+  type EquipmentEffectAttachment,
+  type EquipmentEffectDefinition,
+  type EquipmentEffectMode,
+  type EquipmentEffectType,
+  type EquipmentPersistentHealMode,
+} from '@/game/equipmentEffects/types';
 
 interface ItemListResponse {
   ok: boolean;
@@ -48,12 +56,21 @@ interface ItemDraft {
   effectType: string;
   effectConfigJson: string;
   equipSizeInput: string;
-  equipmentEffectIds: string[];
+  equipmentEffectAttachments: EquipmentEffectAttachmentDraft[];
   valueInput: string;
   consumable: boolean;
   maxStack: string;
   isActive: boolean;
   starterGrantAmount: string;
+}
+
+interface EquipmentEffectAttachmentDraft {
+  effectId: string;
+  mode: EquipmentEffectMode;
+  value: string;
+  critChanceBonus: string;
+  persistentHealMode: EquipmentPersistentHealMode;
+  persistentHealValue: string;
 }
 
 const DEFAULT_ITEM_BUCKET = 'items';
@@ -92,8 +109,8 @@ export function ItemTool() {
     if (!selectedItem) {
       return true;
     }
-    return JSON.stringify(itemToDraft(selectedItem)) !== JSON.stringify(draft);
-  }, [selectedItem, draft]);
+    return JSON.stringify(itemToDraft(selectedItem, equipmentEffects)) !== JSON.stringify(draft);
+  }, [selectedItem, draft, equipmentEffects]);
 
   const categoryOptions = useMemo(() => {
     const dynamic = new Set<string>(ITEM_CORE_CATEGORIES);
@@ -116,7 +133,10 @@ export function ItemTool() {
     );
   }, [imageEntries, imageSearchInput]);
 
-  const selectedEquipmentEffectIds = useMemo(() => draft.equipmentEffectIds ?? [], [draft.equipmentEffectIds]);
+  const selectedEquipmentEffectIds = useMemo(
+    () => draft.equipmentEffectAttachments.map((attachment) => attachment.effectId),
+    [draft.equipmentEffectAttachments],
+  );
 
   const filteredEquipmentEffects = useMemo(() => {
     const query = equipmentEffectSearchInput.trim().toLowerCase();
@@ -150,7 +170,7 @@ export function ItemTool() {
       setPendingRemovalIds(new Set());
       if (loadedItems.length > 0) {
         setSelectedItemId(loadedItems[0].id);
-        setDraft(itemToDraft(loadedItems[0]));
+        setDraft(itemToDraft(loadedItems[0], equipmentEffects));
       } else {
         setSelectedItemId(null);
         setDraft(createEmptyDraft(loadedItems));
@@ -225,7 +245,7 @@ export function ItemTool() {
 
   const selectItem = (item: GameItemDefinition) => {
     setSelectedItemId(item.id);
-    setDraft(itemToDraft(item));
+    setDraft(itemToDraft(item, equipmentEffects));
     const matchingEntry = imageEntries.find(
       (entry) => normalizeAssetUrlForCompare(entry.publicUrl) === normalizeAssetUrlForCompare(item.imageUrl),
     );
@@ -272,9 +292,15 @@ export function ItemTool() {
       return;
     }
     const equipSizeRaw = Number.parseInt(draft.equipSizeInput, 10);
+    const equipmentEffectById = new Map(equipmentEffects.map((effect) => [effect.effect_id, effect] as const));
+    const equipmentEffectAttachments = buildEquipmentEffectAttachmentsFromDraft(
+      draft.equipmentEffectAttachments,
+      equipmentEffectById,
+    );
     const equipmentConfig = {
       equipSize: Number.isFinite(equipSizeRaw) ? Math.max(1, Math.min(8, Math.floor(equipSizeRaw))) : 1,
-      equipmentEffectIds: [...new Set((draft.equipmentEffectIds ?? []).map((entry) => entry.trim()).filter((entry) => entry.length > 0))],
+      equipmentEffectAttachments,
+      equipmentEffectIds: equipmentEffectAttachments.map((entry) => entry.effectId),
     };
     const syncedEffectConfig = isEquipmentCategory
       ? equipmentConfig
@@ -321,7 +347,7 @@ export function ItemTool() {
 
     setItems(nextItems);
     setSelectedItemId(parsed.id);
-    setDraft(itemToDraft(parsed));
+    setDraft(itemToDraft(parsed, equipmentEffects));
     setPendingRemovalIds((current) => {
       const next = new Set(current);
       next.delete(parsed.id);
@@ -366,7 +392,7 @@ export function ItemTool() {
         : itemsToPersist[0] ?? null;
       if (nextSelected) {
         setSelectedItemId(nextSelected.id);
-        setDraft(itemToDraft(nextSelected));
+        setDraft(itemToDraft(nextSelected, equipmentEffects));
       } else {
         setSelectedItemId(null);
         setDraft(createEmptyDraft(itemsToPersist));
@@ -704,7 +730,7 @@ export function ItemTool() {
           {draft.category === 'equipment' ? (
             <>
               <label className="admin-effect-picker-wrap">
-                <span>Equipment Effects</span>
+                <span>Equipment Effect Templates</span>
                 <div className="admin-effect-picker" onClick={() => setEquipmentEffectDropdownOpen(true)}>
                   {selectedEquipmentEffectIds.map((id) => {
                     const effect = equipmentEffects.find((entry) => entry.effect_id === id);
@@ -719,7 +745,9 @@ export function ItemTool() {
                             event.stopPropagation();
                             setDraft((current) => ({
                               ...current,
-                              equipmentEffectIds: current.equipmentEffectIds.filter((entry) => entry !== id),
+                              equipmentEffectAttachments: current.equipmentEffectAttachments.filter(
+                                (entry) => entry.effectId !== id,
+                              ),
                             }));
                           }}
                         >
@@ -739,17 +767,17 @@ export function ItemTool() {
                       if ((event.key === 'Backspace' || event.key === 'Delete') && !equipmentEffectSearchInput && selectedEquipmentEffectIds.length > 0) {
                         setDraft((current) => ({
                           ...current,
-                          equipmentEffectIds: current.equipmentEffectIds.slice(0, -1),
+                          equipmentEffectAttachments: current.equipmentEffectAttachments.slice(0, -1),
                         }));
                       }
                     }}
-                    placeholder={selectedEquipmentEffectIds.length === 0 ? 'Search equipment effects…' : 'Add another effect'}
+                    placeholder={selectedEquipmentEffectIds.length === 0 ? 'Search equipment effect templates…' : 'Add another template'}
                   />
                   {equipmentEffectDropdownOpen && (
                     <div className="admin-effect-picker__dropdown" onMouseDown={(event) => event.preventDefault()}>
                       {filteredEquipmentEffects.length === 0 ? (
                         <div className="admin-effect-picker__dropdown-empty">
-                          {equipmentEffectSearchInput.trim() ? 'No matching equipment effects' : 'All effects selected'}
+                          {equipmentEffectSearchInput.trim() ? 'No matching equipment templates' : 'All templates selected'}
                         </div>
                       ) : (
                         filteredEquipmentEffects.map((effect) => (
@@ -760,13 +788,16 @@ export function ItemTool() {
                             onMouseDown={() => {
                               setDraft((current) => ({
                                 ...current,
-                                equipmentEffectIds: [...current.equipmentEffectIds, effect.effect_id],
+                                equipmentEffectAttachments: [
+                                  ...current.equipmentEffectAttachments,
+                                  buildEquipmentEffectAttachmentDraftFromTemplate(effect),
+                                ],
                               }));
                               setEquipmentEffectSearchInput('');
                               setEquipmentEffectDropdownOpen(false);
                             }}
                           >
-                            {effect.effect_name} ({effect.effect_id})
+                            {effect.effect_name} ({effect.effect_id}) • {effect.effect_type}
                           </button>
                         ))
                       )}
@@ -774,8 +805,138 @@ export function ItemTool() {
                   )}
                 </div>
               </label>
+              {draft.equipmentEffectAttachments.length > 0 && (
+                <section className="admin-panel" style={{ marginTop: '0.5rem' }}>
+                  <h4>Template Attachments</h4>
+                  {draft.equipmentEffectAttachments.map((attachment) => {
+                    const effect = equipmentEffects.find((entry) => entry.effect_id === attachment.effectId);
+                    const effectType = effect?.effect_type;
+                    const isStatTemplate = isStatEquipmentEffectType(effectType);
+                    return (
+                      <div key={`equipment-attachment-${attachment.effectId}`} className="admin-grid-2" style={{ marginBottom: '0.75rem' }}>
+                        <label style={{ gridColumn: '1 / -1' }}>
+                          Template
+                          <input value={effect ? `${effect.effect_name} (${effect.effect_id})` : attachment.effectId} readOnly />
+                        </label>
+                        {isStatTemplate && (
+                          <>
+                            <label>
+                              Mode
+                              <select
+                                value={attachment.mode}
+                                onChange={(event) =>
+                                  setDraft((current) => ({
+                                    ...current,
+                                    equipmentEffectAttachments: current.equipmentEffectAttachments.map((entry) =>
+                                      entry.effectId === attachment.effectId
+                                        ? { ...entry, mode: event.target.value as EquipmentEffectMode }
+                                        : entry,
+                                    ),
+                                  }))
+                                }
+                              >
+                                {EQUIPMENT_EFFECT_MODES.map((mode) => (
+                                  <option key={mode} value={mode}>
+                                    {mode}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label>
+                              Value
+                              <input
+                                type="number"
+                                step={attachment.mode === 'flat' ? '1' : '0.01'}
+                                value={attachment.value}
+                                onChange={(event) =>
+                                  setDraft((current) => ({
+                                    ...current,
+                                    equipmentEffectAttachments: current.equipmentEffectAttachments.map((entry) =>
+                                      entry.effectId === attachment.effectId
+                                        ? { ...entry, value: event.target.value }
+                                        : entry,
+                                    ),
+                                  }))
+                                }
+                              />
+                            </label>
+                          </>
+                        )}
+                        {effectType === 'crit_buff' && (
+                          <label style={{ gridColumn: '1 / -1' }}>
+                            Crit Chance Bonus (0-1)
+                            <input
+                              type="number"
+                              min={0}
+                              max={1}
+                              step="0.01"
+                              value={attachment.critChanceBonus}
+                              onChange={(event) =>
+                                setDraft((current) => ({
+                                  ...current,
+                                  equipmentEffectAttachments: current.equipmentEffectAttachments.map((entry) =>
+                                    entry.effectId === attachment.effectId
+                                      ? { ...entry, critChanceBonus: event.target.value }
+                                      : entry,
+                                  ),
+                                }))
+                              }
+                            />
+                          </label>
+                        )}
+                        {effectType === 'persistent_heal' && (
+                          <>
+                            <label>
+                              Heal Mode
+                              <select
+                                value={attachment.persistentHealMode}
+                                onChange={(event) =>
+                                  setDraft((current) => ({
+                                    ...current,
+                                    equipmentEffectAttachments: current.equipmentEffectAttachments.map((entry) =>
+                                      entry.effectId === attachment.effectId
+                                        ? { ...entry, persistentHealMode: event.target.value as EquipmentPersistentHealMode }
+                                        : entry,
+                                    ),
+                                  }))
+                                }
+                              >
+                                {EQUIPMENT_PERSISTENT_HEAL_MODES.map((mode) => (
+                                  <option key={mode} value={mode}>
+                                    {mode}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label>
+                              Heal Value
+                              <input
+                                type="number"
+                                min={attachment.persistentHealMode === 'flat' ? 1 : 0}
+                                max={attachment.persistentHealMode === 'flat' ? undefined : 1}
+                                step={attachment.persistentHealMode === 'flat' ? '1' : '0.01'}
+                                value={attachment.persistentHealValue}
+                                onChange={(event) =>
+                                  setDraft((current) => ({
+                                    ...current,
+                                    equipmentEffectAttachments: current.equipmentEffectAttachments.map((entry) =>
+                                      entry.effectId === attachment.effectId
+                                        ? { ...entry, persistentHealValue: event.target.value }
+                                        : entry,
+                                    ),
+                                  }))
+                                }
+                              />
+                            </label>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </section>
+              )}
               <p className="admin-note">
-                Equipment is non-consumable and is equipped from the Squad screen. Choose one or more equipment effects and an equip size.
+                Equipment is non-consumable and equipped from the Squad screen. Select template(s) and configure per-item attachment values here.
               </p>
             </>
           ) : (
@@ -816,7 +977,7 @@ function createEmptyDraft(existingItems: GameItemDefinition[]): ItemDraft {
     effectType: 'other_stub',
     effectConfigJson: JSON.stringify({ actionId: 'other-action' }, null, 2),
     equipSizeInput: '1',
-    equipmentEffectIds: [],
+    equipmentEffectAttachments: [],
     valueInput: '',
     consumable: true,
     maxStack: '99',
@@ -825,18 +986,38 @@ function createEmptyDraft(existingItems: GameItemDefinition[]): ItemDraft {
   };
 }
 
-function itemToDraft(item: GameItemDefinition): ItemDraft {
+function itemToDraft(item: GameItemDefinition, equipmentEffects: EquipmentEffectDefinition[] = []): ItemDraft {
   const derivedValue = deriveValueFromItem(item);
-  const equipmentConfig = item.effectConfig as { equipSize?: number; equipmentEffectIds?: string[] };
+  const equipmentConfig = item.effectConfig as {
+    equipSize?: number;
+    equipmentEffectIds?: string[];
+    equipmentEffectAttachments?: EquipmentEffectAttachment[];
+  };
   const equipSize =
     typeof equipmentConfig.equipSize === 'number' && Number.isFinite(equipmentConfig.equipSize)
       ? Math.max(1, Math.min(8, Math.floor(equipmentConfig.equipSize)))
       : 1;
+  const equipmentEffectById = new Map(equipmentEffects.map((effect) => [effect.effect_id, effect] as const));
   const equipmentEffectIds = Array.isArray(equipmentConfig.equipmentEffectIds)
     ? equipmentConfig.equipmentEffectIds
         .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
         .map((entry) => entry.trim())
     : [];
+  const equipmentEffectAttachments = Array.isArray(equipmentConfig.equipmentEffectAttachments)
+    ? equipmentConfig.equipmentEffectAttachments
+        .filter((entry): entry is EquipmentEffectAttachment => Boolean(entry && typeof entry === 'object'))
+        .map((entry) => buildEquipmentEffectAttachmentDraft(entry, equipmentEffectById.get(entry.effectId)))
+    : equipmentEffectIds.map((effectId) =>
+        buildEquipmentEffectAttachmentDraftFromTemplate(
+          equipmentEffectById.get(effectId) ?? {
+            effect_id: effectId,
+            effect_name: effectId,
+            effect_type: inferEquipmentEffectTypeFromId(effectId),
+            description: '',
+            modifiers: [],
+          },
+        ),
+      );
   return {
     id: item.id,
     name: item.name,
@@ -848,13 +1029,194 @@ function itemToDraft(item: GameItemDefinition): ItemDraft {
     effectType: item.effectType,
     effectConfigJson: JSON.stringify(item.effectConfig ?? {}, null, 2),
     equipSizeInput: String(equipSize),
-    equipmentEffectIds,
+    equipmentEffectAttachments,
     valueInput: typeof derivedValue === 'number' && Number.isFinite(derivedValue) ? String(derivedValue) : '',
     consumable: item.consumable,
     maxStack: String(item.maxStack),
     isActive: item.isActive,
     starterGrantAmount: String(item.starterGrantAmount),
   };
+}
+
+function isStatEquipmentEffectType(effectType: EquipmentEffectType | undefined): boolean {
+  return (
+    effectType === 'atk_buff' ||
+    effectType === 'def_buff' ||
+    effectType === 'speed_buff' ||
+    effectType === 'hp_buff'
+  );
+}
+
+function buildEquipmentEffectAttachmentDraftFromTemplate(
+  effect: EquipmentEffectDefinition,
+): EquipmentEffectAttachmentDraft {
+  const statFallback = findTemplateStatFallback(effect);
+  const persistentFallback = effect.persistentHeal;
+  return {
+    effectId: effect.effect_id,
+    mode: statFallback?.mode ?? 'percent',
+    value: String(statFallback?.value ?? 0.1),
+    critChanceBonus: String(0.05),
+    persistentHealMode: persistentFallback?.mode ?? 'percent_max_hp',
+    persistentHealValue: String(persistentFallback?.value ?? 0.05),
+  };
+}
+
+function buildEquipmentEffectAttachmentDraft(
+  attachment: EquipmentEffectAttachment,
+  template: EquipmentEffectDefinition | undefined,
+): EquipmentEffectAttachmentDraft {
+  const base = template
+    ? buildEquipmentEffectAttachmentDraftFromTemplate(template)
+    : buildEquipmentEffectAttachmentDraftFromTemplate({
+        effect_id: attachment.effectId,
+        effect_name: attachment.effectId,
+        effect_type: inferEquipmentEffectTypeFromId(attachment.effectId),
+        description: '',
+        modifiers: [],
+      });
+  const mode = attachment.mode === 'flat' || attachment.mode === 'percent' ? attachment.mode : base.mode;
+  const persistentHealMode =
+    attachment.persistentHealMode === 'flat' || attachment.persistentHealMode === 'percent_max_hp'
+      ? attachment.persistentHealMode
+      : base.persistentHealMode;
+  return {
+    effectId: attachment.effectId,
+    mode,
+    value: String(typeof attachment.value === 'number' && Number.isFinite(attachment.value) ? attachment.value : base.value),
+    critChanceBonus: String(
+      typeof attachment.critChanceBonus === 'number' && Number.isFinite(attachment.critChanceBonus)
+        ? attachment.critChanceBonus
+        : base.critChanceBonus,
+    ),
+    persistentHealMode,
+    persistentHealValue: String(
+      typeof attachment.persistentHealValue === 'number' && Number.isFinite(attachment.persistentHealValue)
+        ? attachment.persistentHealValue
+        : base.persistentHealValue,
+    ),
+  };
+}
+
+function buildEquipmentEffectAttachmentsFromDraft(
+  draftAttachments: EquipmentEffectAttachmentDraft[],
+  equipmentEffectById: Map<string, EquipmentEffectDefinition>,
+): EquipmentEffectAttachment[] {
+  const parsed: EquipmentEffectAttachment[] = [];
+  const seen = new Set<string>();
+  for (const attachment of draftAttachments) {
+    const effectId = normalizeEffectId(attachment.effectId);
+    if (!effectId || seen.has(effectId)) {
+      continue;
+    }
+    const template = equipmentEffectById.get(effectId);
+    const effectType = template?.effect_type ?? inferEquipmentEffectTypeFromId(effectId);
+
+    if (effectType === 'crit_buff') {
+      parsed.push({
+        effectId,
+        critChanceBonus: clampFloatFromInput(attachment.critChanceBonus, 0, 1, 0.05),
+      });
+      seen.add(effectId);
+      continue;
+    }
+
+    if (effectType === 'persistent_heal') {
+      const persistentHealMode =
+        attachment.persistentHealMode === 'flat' || attachment.persistentHealMode === 'percent_max_hp'
+          ? attachment.persistentHealMode
+          : 'percent_max_hp';
+      const persistentHealValue = persistentHealMode === 'flat'
+        ? Math.max(1, Math.floor(clampFloatFromInput(attachment.persistentHealValue, 1, 9999, 1)))
+        : clampFloatFromInput(attachment.persistentHealValue, 0, 1, 0.05);
+      parsed.push({
+        effectId,
+        persistentHealMode,
+        persistentHealValue,
+      });
+      seen.add(effectId);
+      continue;
+    }
+
+    const mode = attachment.mode === 'flat' || attachment.mode === 'percent' ? attachment.mode : 'percent';
+    const value = mode === 'flat'
+      ? Math.floor(clampFloatFromInput(attachment.value, -999, 999, 1))
+      : clampFloatFromInput(attachment.value, -5, 5, 0.1);
+    parsed.push({
+      effectId,
+      mode,
+      value,
+    });
+    seen.add(effectId);
+  }
+  return parsed;
+}
+
+function findTemplateStatFallback(effect: EquipmentEffectDefinition): { mode: EquipmentEffectMode; value: number } | null {
+  if (effect.effect_type === 'atk_buff') {
+    return getTemplateModifier(effect, 'attack');
+  }
+  if (effect.effect_type === 'def_buff') {
+    return getTemplateModifier(effect, 'defense');
+  }
+  if (effect.effect_type === 'speed_buff') {
+    return getTemplateModifier(effect, 'speed');
+  }
+  if (effect.effect_type === 'hp_buff') {
+    return getTemplateModifier(effect, 'hp');
+  }
+  return null;
+}
+
+function getTemplateModifier(
+  effect: EquipmentEffectDefinition,
+  stat: 'attack' | 'defense' | 'speed' | 'hp',
+): { mode: EquipmentEffectMode; value: number } | null {
+  const match = effect.modifiers.find((entry) => entry.stat === stat);
+  if (!match) {
+    return null;
+  }
+  const mode = match.mode === 'flat' ? 'flat' : 'percent';
+  const value = mode === 'flat'
+    ? Math.floor(clampFloat(match.value, -999, 999))
+    : clampFloat(match.value, -5, 5);
+  return { mode, value };
+}
+
+function inferEquipmentEffectTypeFromId(effectId: string): EquipmentEffectType {
+  const normalized = effectId.toLowerCase();
+  if (normalized.includes('crit')) {
+    return 'crit_buff';
+  }
+  if (normalized.includes('heal') || normalized.includes('regen')) {
+    return 'persistent_heal';
+  }
+  if (normalized.includes('atk') || normalized.includes('attack')) {
+    return 'atk_buff';
+  }
+  if (normalized.includes('speed') || normalized.includes('spd')) {
+    return 'speed_buff';
+  }
+  if (normalized.includes('hp')) {
+    return 'hp_buff';
+  }
+  return 'def_buff';
+}
+
+function normalizeEffectId(raw: string): string {
+  return raw.trim();
+}
+
+function clampFloatFromInput(raw: string, min: number, max: number, fallback: number): number {
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return clampFloat(parsed, min, max);
+}
+
+function clampFloat(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 function parseEffectConfigJson(raw: string): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } {

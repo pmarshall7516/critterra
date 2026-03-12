@@ -543,7 +543,11 @@ function sanitizeLevelMission(raw: unknown, index: number, level: number): Critt
         ? 'swap_in'
         : typeRaw === 'swap-out' || typeRaw === 'swapout'
           ? 'swap_out'
-      : typeRaw;
+          : typeRaw === 'heal-with-skills' || typeRaw === 'healwithskills'
+            ? 'heal_with_skills'
+            : typeRaw === 'land-critical-hits' || typeRaw === 'landcriticalhits'
+              ? 'land_critical_hits'
+              : typeRaw;
   const type = MISSION_TYPE_SET.has(normalizedTypeRaw as CritterMissionType)
     ? (normalizedTypeRaw as CritterMissionType)
     : 'opposing_knockouts';

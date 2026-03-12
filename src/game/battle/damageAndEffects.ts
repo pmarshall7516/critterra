@@ -1,4 +1,3 @@
-import type { CritterElement } from '@/game/critters/types';
 import type { ElementChart } from '@/game/skills/types';
 import { getElementChartMultiplier } from '@/game/skills/schema';
 import type {
@@ -89,17 +88,15 @@ export function computeBattleDamage(params: ComputeBattleDamageParams): ComputeB
   const levelTerm = (2 * attacker.level) / 5 + 2;
   const base = ((levelTerm * power * A) / D) / 50 + 2;
 
-  const typeMult = getElementChartMultiplier(
-    elementChart,
-    skill.element as CritterElement,
-    defender.element as CritterElement,
-  );
+  const typeMult = getElementChartMultiplier(elementChart, skill.element, defender.element);
   const stab = skill.element === attacker.element ? 1.2 : 1;
 
+  /** Crit chance: base + additive bonus. Skill/equipment crit_buff use 0..1 (e.g. 0.5 = +50% chance). */
   const critChance = clamp(BASE_CRIT_CHANCE + consumedCritBonus, 0, 1);
   const isCrit = rng() < critChance;
   const critMult = isCrit ? 2 : 1;
 
+  /** On crit, ignore defense buffs (> 1) but still apply defense debuffs (< 1). */
   const equipmentBonus = Math.max(0, defender.equipmentDefensePositiveBonus ?? 0);
   const defenseWithoutPositiveEquipment = Math.max(1, defender.defense - equipmentBonus);
   const defenseModifierForCrit = Math.max(

@@ -1,5 +1,3 @@
-import type { CritterElement } from '@/game/critters/types';
-
 export const SKILL_EFFECT_TYPES = [
   'atk_buff',
   'def_buff',
@@ -78,7 +76,8 @@ export interface SkillEffectDefinition {
 export interface SkillDefinition {
   skill_id: string;
   skill_name: string;
-  element: CritterElement;
+  /** Element id (e.g. from game element database: bloom, forge, normal, …). */
+  element: string;
   type: SkillType;
   /** Priority used for turn order. Higher acts first. Defaults to 1. */
   priority: number;
@@ -148,15 +147,15 @@ export function getSkillValueDisplayNumber(
 }
 
 export interface ElementChartEntry {
-  attacker: CritterElement;
-  defender: CritterElement;
+  attacker: string;
+  defender: string;
   multiplier: number;
 }
 
 export type ElementChart = ElementChartEntry[];
 
-/** Element display colors for skills (CSS-ready). */
-export const ELEMENT_SKILL_COLORS: Record<CritterElement, string> = {
+/** Element display colors for skills (CSS-ready). Used as fallback when game element colorHex is not available. */
+export const ELEMENT_SKILL_COLORS: Record<string, string> = {
   normal: '#f5f0e1',
   tide: '#b3e5fc',
   ember: '#ffb74d',
@@ -168,6 +167,11 @@ export const ELEMENT_SKILL_COLORS: Record<CritterElement, string> = {
   primal: '#6A4ACD',
   mystic: '#FFD1DC',
 };
+
+/** Resolve display color for a skill element (from built-in map or game element colorHex). */
+export function getSkillElementColor(element: string, colorHexFromElementDb?: string): string {
+  return colorHexFromElementDb ?? ELEMENT_SKILL_COLORS[element] ?? '#9e9e9e';
+}
 
 /** Built-in skill used by opponent/wild when no movepool. */
 export const DEFAULT_TACKLE_SKILL: SkillDefinition = {

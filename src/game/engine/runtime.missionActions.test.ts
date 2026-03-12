@@ -583,4 +583,74 @@ describe('GameRuntime mission action tracking', () => {
       targetValue: 5,
     });
   });
+
+  it('advances heal_with_skills mission by heal amount when player heals via skill', () => {
+    const critter = createCritter({
+      id: 1,
+      name: 'Healer',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+        {
+          level: 2,
+          missions: [{ id: 'heal-skills-1', type: 'heal_with_skills', targetValue: 50 }],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [createCollectionEntry(critter, { level: 1 })],
+    });
+    (runtime as any).advanceHealWithSkillsMissions(1, 10);
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'heal-skills-1')).toBe(10);
+    (runtime as any).advanceHealWithSkillsMissions(1, 15);
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'heal-skills-1')).toBe(25);
+  });
+
+  it('advances land_critical_hits mission when player lands a critical hit', () => {
+    const critter = createCritter({
+      id: 1,
+      name: 'Sniper',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+        {
+          level: 2,
+          missions: [{ id: 'crits-1', type: 'land_critical_hits', targetValue: 5 }],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [createCollectionEntry(critter, { level: 1 })],
+    });
+    (runtime as any).advanceLandCriticalHitsMissions(1, 1);
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'crits-1')).toBe(1);
+    (runtime as any).advanceLandCriticalHitsMissions(1, 1);
+    expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'crits-1')).toBe(2);
+  });
 });

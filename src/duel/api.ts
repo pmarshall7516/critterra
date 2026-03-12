@@ -1,9 +1,11 @@
 import { sanitizeCritterDatabase } from '@/game/critters/schema';
 import { sanitizeEquipmentEffectLibrary } from '@/game/equipmentEffects/schema';
+import { sanitizeGameElements } from '@/game/elements/schema';
 import { sanitizeItemCatalog } from '@/game/items/schema';
 import {
   buildDefaultElementChart,
   sanitizeElementChart,
+  sanitizeElementChartWithElements,
   sanitizeSkillEffectLibrary,
   sanitizeSkillLibrary,
 } from '@/game/skills/schema';
@@ -18,6 +20,7 @@ interface ContentBootstrapResponse {
     skillEffects?: unknown;
     equipmentEffects?: unknown;
     elementChart?: unknown;
+    gameElements?: unknown;
     items?: unknown;
   };
   error?: string;
@@ -54,6 +57,7 @@ export async function fetchDuelCatalogContent(): Promise<DuelCatalogContent> {
   }
   const content = result.data.content;
   const skillEffects = sanitizeSkillEffectLibrary(content.skillEffects);
+  const gameElements = sanitizeGameElements((content as { gameElements?: unknown }).gameElements);
   const knownEffectIds = new Set(skillEffects.map((effect) => effect.effect_id));
   const effectTypeById = new Map(skillEffects.map((effect) => [effect.effect_id, effect.effect_type] as const));
   const legacyBuffById = new Map(
@@ -61,13 +65,16 @@ export async function fetchDuelCatalogContent(): Promise<DuelCatalogContent> {
       .filter((effect) => typeof effect.buffPercent === 'number' && Number.isFinite(effect.buffPercent))
       .map((effect) => [effect.effect_id, effect.buffPercent as number]),
   );
+  const allowedElementIds = gameElements.length ? gameElements.map((e) => e.id) : undefined;
 
   return {
     critters: sanitizeCritterDatabase(content.critters),
-    skills: sanitizeSkillLibrary(content.critterSkills, knownEffectIds, legacyBuffById, effectTypeById),
+    skills: sanitizeSkillLibrary(content.critterSkills, knownEffectIds, legacyBuffById, effectTypeById, allowedElementIds),
     skillEffects,
     equipmentEffects: sanitizeEquipmentEffectLibrary(content.equipmentEffects),
-    elementChart: sanitizeElementChart(content.elementChart ?? buildDefaultElementChart()),
+    elementChart: gameElements.length
+      ? sanitizeElementChartWithElements(content.elementChart, gameElements.map((e) => e.id))
+      : sanitizeElementChart(content.elementChart ?? buildDefaultElementChart()),
     items: sanitizeItemCatalog(content.items),
   };
 }
