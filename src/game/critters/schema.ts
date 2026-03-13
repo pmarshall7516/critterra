@@ -310,14 +310,16 @@ export function sanitizePlayerCritterProgress(
     )
       ? rawLockedDamageTargetCritterId
       : null;
+  const hasConflictingLockedMissionTargets =
+    lockedKnockoutTargetCritterId !== null && lockedDamageTargetCritterId !== null;
 
   return {
     version: PLAYER_CRITTER_PROGRESS_VERSION,
     unlockedSquadSlots,
     squad,
     collection,
-    lockedKnockoutTargetCritterId,
-    lockedDamageTargetCritterId,
+    lockedKnockoutTargetCritterId: hasConflictingLockedMissionTargets ? null : lockedKnockoutTargetCritterId,
+    lockedDamageTargetCritterId: hasConflictingLockedMissionTargets ? null : lockedDamageTargetCritterId,
   };
 }
 

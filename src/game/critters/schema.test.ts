@@ -379,4 +379,92 @@ describe('sanitizePlayerCritterProgress', () => {
     );
     expect(progressWithUnlocked.lockedDamageTargetCritterId).toBeNull();
   });
+
+  it('clears conflicting locked knockout and damage tracker selections from saves', () => {
+    const database: typeof BASE_CRITTER_DATABASE = [
+      ...BASE_CRITTER_DATABASE,
+      {
+        id: 2,
+        name: 'Locked KO',
+        element: 'ember' as const,
+        rarity: 'common' as const,
+        description: '',
+        spriteUrl: '',
+        baseStats: { hp: 12, attack: 8, defense: 8, speed: 8 },
+        abilities: [],
+        levels: [],
+      },
+      {
+        id: 3,
+        name: 'Locked Damage',
+        element: 'tide' as const,
+        rarity: 'common' as const,
+        description: '',
+        spriteUrl: '',
+        baseStats: { hp: 11, attack: 7, defense: 9, speed: 8 },
+        abilities: [],
+        levels: [],
+      },
+    ];
+    const progress = sanitizePlayerCritterProgress(
+      {
+        version: 9,
+        unlockedSquadSlots: 2,
+        squad: [1, null, null, null, null, null, null, null],
+        collection: [
+          {
+            critterId: 1,
+            unlocked: true,
+            unlockedAt: new Date().toISOString(),
+            unlockSource: null,
+            level: 1,
+            currentHp: 14,
+            missionProgress: {},
+            statBonus: { hp: 0, attack: 0, defense: 0, speed: 0 },
+            effectiveStats: { hp: 14, attack: 9, defense: 9, speed: 10 },
+            unlockedAbilityIds: [],
+            equippedSkillIds: [null, null, null, null],
+            equippedEquipmentAnchors: [],
+            lastProgressAt: null,
+          },
+          {
+            critterId: 2,
+            unlocked: false,
+            unlockedAt: null,
+            unlockSource: null,
+            level: 0,
+            currentHp: 0,
+            missionProgress: {},
+            statBonus: { hp: 0, attack: 0, defense: 0, speed: 0 },
+            effectiveStats: { hp: 12, attack: 8, defense: 8, speed: 8 },
+            unlockedAbilityIds: [],
+            equippedSkillIds: [null, null, null, null],
+            equippedEquipmentAnchors: [],
+            lastProgressAt: null,
+          },
+          {
+            critterId: 3,
+            unlocked: false,
+            unlockedAt: null,
+            unlockSource: null,
+            level: 0,
+            currentHp: 0,
+            missionProgress: {},
+            statBonus: { hp: 0, attack: 0, defense: 0, speed: 0 },
+            effectiveStats: { hp: 11, attack: 7, defense: 9, speed: 8 },
+            unlockedAbilityIds: [],
+            equippedSkillIds: [null, null, null, null],
+            equippedEquipmentAnchors: [],
+            lastProgressAt: null,
+          },
+        ],
+        lockedKnockoutTargetCritterId: 2,
+        lockedDamageTargetCritterId: 3,
+      },
+      database,
+    );
+
+    expect(progress.lockedKnockoutTargetCritterId).toBeNull();
+    expect(progress.lockedDamageTargetCritterId).toBeNull();
+  });
 });

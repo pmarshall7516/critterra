@@ -897,7 +897,7 @@ describe('GameRuntime mission action tracking', () => {
       critters: [critterA, critterB],
       collection: [
         createCollectionEntry(critterA, { level: 1 }),
-        createCollectionEntry(critterB, { unlocked: false, level: 0 }),
+        createCollectionEntry(critterB, { unlocked: false, level: 0, seen: true }),
       ],
     });
     runtime.playerCritterProgress.lockedDamageTargetCritterId = 2;
@@ -906,6 +906,150 @@ describe('GameRuntime mission action tracking', () => {
     expect(readMissionProgress(runtime.playerCritterProgress, 2, 1, 'deal-l1')).toBe(100);
     (runtime as any).recordDealDamageProgress(1, 80, 'skill', 'normal');
     expect(readMissionProgress(runtime.playerCritterProgress, 2, 1, 'deal-l1')).toBe(150);
+  });
+
+  it('switching KO tracking clears any existing locked damage target', () => {
+    const knockoutCritter = createCritter({
+      id: 1,
+      name: 'KO Tracker',
+      levels: [
+        {
+          level: 1,
+          missions: [{ id: 'ko-1', type: 'opposing_knockouts', targetValue: 3 }],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const damageCritter = createCritter({
+      id: 2,
+      name: 'Damage Tracker',
+      levels: [
+        {
+          level: 1,
+          missions: [{ id: 'deal-1', type: 'deal_damage', targetValue: 100 }],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const runtime = createRuntimeHarness({
+      critters: [knockoutCritter, damageCritter],
+      collection: [
+        createCollectionEntry(knockoutCritter, { unlocked: false, level: 0, seen: true }),
+        createCollectionEntry(damageCritter, { unlocked: false, level: 0, seen: true }),
+      ],
+    });
+
+    runtime.playerCritterProgress.lockedDamageTargetCritterId = 2;
+
+    expect(runtime.setLockedKnockoutTargetCritter(1)).toBe(true);
+    expect(runtime.playerCritterProgress.lockedKnockoutTargetCritterId).toBe(1);
+    expect(runtime.playerCritterProgress.lockedDamageTargetCritterId).toBeNull();
+  });
+
+  it('switching damage tracking clears any existing locked KO target', () => {
+    const knockoutCritter = createCritter({
+      id: 1,
+      name: 'KO Tracker',
+      levels: [
+        {
+          level: 1,
+          missions: [{ id: 'ko-1', type: 'opposing_knockouts', targetValue: 3 }],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const damageCritter = createCritter({
+      id: 2,
+      name: 'Damage Tracker',
+      levels: [
+        {
+          level: 1,
+          missions: [{ id: 'deal-1', type: 'deal_damage', targetValue: 100 }],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const runtime = createRuntimeHarness({
+      critters: [knockoutCritter, damageCritter],
+      collection: [
+        createCollectionEntry(knockoutCritter, { unlocked: false, level: 0, seen: true }),
+        createCollectionEntry(damageCritter, { unlocked: false, level: 0, seen: true }),
+      ],
+    });
+
+    runtime.playerCritterProgress.lockedKnockoutTargetCritterId = 1;
+
+    expect(runtime.setLockedDamageTargetCritter(2)).toBe(true);
+    expect(runtime.playerCritterProgress.lockedKnockoutTargetCritterId).toBeNull();
+    expect(runtime.playerCritterProgress.lockedDamageTargetCritterId).toBe(2);
+  });
+
+  it('clears both trackers when a legacy conflicting selection reaches the critter summary', () => {
+    const knockoutCritter = createCritter({
+      id: 1,
+      name: 'KO Tracker',
+      levels: [
+        {
+          level: 1,
+          missions: [{ id: 'ko-1', type: 'opposing_knockouts', targetValue: 3 }],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const damageCritter = createCritter({
+      id: 2,
+      name: 'Damage Tracker',
+      levels: [
+        {
+          level: 1,
+          missions: [{ id: 'deal-1', type: 'deal_damage', targetValue: 100 }],
+          requiredMissionCount: 1,
+          unlockEquipSlots: 0,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const runtime = createRuntimeHarness({
+      critters: [knockoutCritter, damageCritter],
+      collection: [
+        createCollectionEntry(knockoutCritter, { unlocked: false, level: 0, seen: true }),
+        createCollectionEntry(damageCritter, { unlocked: false, level: 0, seen: true }),
+      ],
+    });
+    runtime.playerCritterProgress.lockedKnockoutTargetCritterId = 1;
+    runtime.playerCritterProgress.lockedDamageTargetCritterId = 2;
+    runtime.resolveEquippedSkillSlotsForSnapshot = vi.fn(() => [null, null, null, null]);
+    runtime.getCompletedMissionCount = vi.fn(() => 0);
+
+    const summary = runtime.getCritterSummary();
+
+    expect(summary.lockedKnockoutTracker.selectedCritterId).toBeNull();
+    expect(summary.lockedDamageTracker.selectedCritterId).toBeNull();
+    expect(runtime.playerCritterProgress.lockedKnockoutTargetCritterId).toBeNull();
+    expect(runtime.playerCritterProgress.lockedDamageTargetCritterId).toBeNull();
+    expect(runtime.markProgressDirty).toHaveBeenCalled();
   });
 
   it('recordDealDamageProgress ignores non-skill damage sources', () => {

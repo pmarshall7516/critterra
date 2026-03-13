@@ -1195,10 +1195,7 @@ export class GameRuntime {
       state.playerCritterProgress,
       this.critterDatabase,
     );
-    if (this.ensureLockedKnockoutTargetSelectionValid()) {
-      this.dirty = true;
-    }
-    if (this.ensureLockedDamageTargetSelectionValid()) {
+    if (this.ensureLockedMissionTargetSelectionsValid()) {
       this.dirty = true;
     }
     this.playerItemInventory = sanitizePlayerItemInventory(state.playerItemInventory, this.itemDatabase);
@@ -2250,8 +2247,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       progress.equippedSkillIds = next;
     }
     const autoAssignedToSquad = currentLevel === 0 && this.tryAutoAssignFirstUnlockedCritter(critter.id);
-    this.ensureLockedKnockoutTargetSelectionValid();
-    this.ensureLockedDamageTargetSelectionValid();
+    this.ensureLockedMissionTargetSelectionsValid();
 
     this.markProgressDirty();
     this.showMessage(
@@ -2360,11 +2356,15 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     if (!context) {
       return false;
     }
-    if (this.playerCritterProgress.lockedKnockoutTargetCritterId === normalizedCritterId) {
+    if (
+      this.playerCritterProgress.lockedKnockoutTargetCritterId === normalizedCritterId &&
+      this.playerCritterProgress.lockedDamageTargetCritterId === null
+    ) {
       return false;
     }
 
     this.playerCritterProgress.lockedKnockoutTargetCritterId = normalizedCritterId;
+    this.playerCritterProgress.lockedDamageTargetCritterId = null;
     this.markProgressDirty();
     this.showMessage(`Tracking ${context.critter.name}'s KO missions.`, 2200);
     return true;
@@ -9170,6 +9170,32 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     return true;
   }
 
+  private ensureExclusiveLockedMissionTargetSelection(): boolean {
+    if (
+      this.playerCritterProgress.lockedKnockoutTargetCritterId === null ||
+      this.playerCritterProgress.lockedDamageTargetCritterId === null
+    ) {
+      return false;
+    }
+    this.playerCritterProgress.lockedKnockoutTargetCritterId = null;
+    this.playerCritterProgress.lockedDamageTargetCritterId = null;
+    return true;
+  }
+
+  private ensureLockedMissionTargetSelectionsValid(): boolean {
+    let updated = false;
+    if (this.ensureLockedKnockoutTargetSelectionValid()) {
+      updated = true;
+    }
+    if (this.ensureLockedDamageTargetSelectionValid()) {
+      updated = true;
+    }
+    if (this.ensureExclusiveLockedMissionTargetSelection()) {
+      updated = true;
+    }
+    return updated;
+  }
+
   public setLockedDamageTargetCritter(critterId: number | null): boolean {
     if (critterId === null) {
       if (this.playerCritterProgress.lockedDamageTargetCritterId === null) {
@@ -9189,10 +9215,14 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     if (!context) {
       return false;
     }
-    if (this.playerCritterProgress.lockedDamageTargetCritterId === normalizedCritterId) {
+    if (
+      this.playerCritterProgress.lockedDamageTargetCritterId === normalizedCritterId &&
+      this.playerCritterProgress.lockedKnockoutTargetCritterId === null
+    ) {
       return false;
     }
 
+    this.playerCritterProgress.lockedKnockoutTargetCritterId = null;
     this.playerCritterProgress.lockedDamageTargetCritterId = normalizedCritterId;
     this.markProgressDirty();
     this.showMessage(`Tracking ${context.critter.name}'s damage missions.`, 2200);
@@ -9463,7 +9493,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     }
 
     const nowIso = new Date().toISOString();
-    let updatedAny = this.ensureLockedKnockoutTargetSelectionValid() || this.ensureLockedDamageTargetSelectionValid();
+    let updatedAny = this.ensureLockedMissionTargetSelectionsValid();
     const knockoutAttackerProgress = this.playerCritterProgress.collection.find(
       (entry) => entry.critterId === knockoutAttackerCritterId,
     );
@@ -9617,13 +9647,13 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     }
     const damageElementNormalized =
       typeof damageElement === 'string' ? damageElement.trim().toLowerCase() : '';
+    let updatedAny = this.ensureLockedMissionTargetSelectionsValid();
     const critterIdsToCredit = new Set<number>([attackerCritterId]);
     const lockedDamageTargetId = this.playerCritterProgress.lockedDamageTargetCritterId;
     if (lockedDamageTargetId != null && lockedDamageTargetId !== attackerCritterId) {
       critterIdsToCredit.add(lockedDamageTargetId);
     }
     const nowIso = new Date().toISOString();
-    let updatedAny = false;
     for (const critterId of critterIdsToCredit) {
       const critter = this.critterLookup[critterId];
       const progress = this.playerCritterProgress.collection.find((entry) => entry.critterId === critterId);
@@ -10249,7 +10279,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
   }
 
   private getCritterSummary(): RuntimeSnapshot['critters'] {
-    if (this.ensureLockedKnockoutTargetSelectionValid() || this.ensureLockedDamageTargetSelectionValid()) {
+    if (this.ensureLockedMissionTargetSelectionsValid()) {
       this.markProgressDirty();
     }
 

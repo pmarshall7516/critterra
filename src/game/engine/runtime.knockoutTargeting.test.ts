@@ -51,13 +51,14 @@ function createCollectionEntry(
   input: {
     unlocked: boolean;
     level: number;
+    seen?: boolean;
     equippedEquipmentAnchors?: PlayerCritterCollectionEntry['equippedEquipmentAnchors'];
   },
 ): PlayerCritterCollectionEntry {
   return {
     critterId: critter.id,
     unlocked: input.unlocked,
-    seen: input.unlocked,
+    seen: input.seen ?? input.unlocked,
     unlockedAt: input.unlocked ? new Date().toISOString() : null,
     unlockSource: input.unlocked ? 'missions' : null,
     level: input.level,
@@ -256,8 +257,8 @@ describe('GameRuntime knockout mission targeting', () => {
       squad: [1, null, null, null, null, null, null, null],
       collection: [
         createCollectionEntry(attacker, { unlocked: true, level: 1 }),
-        createCollectionEntry(lockedTarget, { unlocked: false, level: 0 }),
-        createCollectionEntry(otherLocked, { unlocked: false, level: 0 }),
+        createCollectionEntry(lockedTarget, { unlocked: false, level: 0, seen: true }),
+        createCollectionEntry(otherLocked, { unlocked: false, level: 0, seen: true }),
       ],
       lockedKnockoutTargetCritterId: 2,
       lockedDamageTargetCritterId: null,
@@ -312,7 +313,7 @@ describe('GameRuntime knockout mission targeting', () => {
       squad: [1, null, null, null, null, null, null, null],
       collection: [
         createCollectionEntry(attacker, { unlocked: true, level: 1 }),
-        createCollectionEntry(lockedTarget, { unlocked: false, level: 0 }),
+        createCollectionEntry(lockedTarget, { unlocked: false, level: 0, seen: true }),
       ],
       lockedKnockoutTargetCritterId: null,
     lockedDamageTargetCritterId: null,
