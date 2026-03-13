@@ -53,6 +53,7 @@ function createCollectionEntry(
   return {
     critterId: critter.id,
     unlocked: input?.unlocked ?? true,
+    seen: input?.seen ?? input?.unlocked ?? true,
     unlockedAt: input?.unlockedAt ?? null,
     unlockSource: input?.unlockSource ?? null,
     level: input?.level ?? 1,

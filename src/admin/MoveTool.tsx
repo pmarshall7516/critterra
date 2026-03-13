@@ -12,7 +12,6 @@ import type {
 } from '@/game/skills/types';
 import {
   DAMAGE_SKILL_HEAL_MODES,
-  ELEMENT_SKILL_COLORS,
   SKILL_EFFECT_TYPES,
   SKILL_PERSISTENT_HEAL_MODES,
   SKILL_RECOIL_MODES,
@@ -21,13 +20,15 @@ import {
   SKILL_TARGET_TEAM_OPTIONS,
   SKILL_TYPES,
   SUPPORT_SKILL_HEAL_MODES,
-  getSkillValueDisplayNumber,
+  getSkillElementColor,
 } from '@/game/skills/types';
 import { sanitizeSkillLibrary } from '@/game/skills/schema';
 import { apiFetchJson } from '@/shared/apiClient';
 import { loadAdminGameElements } from '@/admin/elementsApi';
+import { AdminSkillCellContent, buildAdminSkillTooltip, type AdminSkillEffectOption } from '@/admin/adminSkillPresentation';
 
 type SkillDraftType = SkillDefinition['type'];
+type EffectOption = AdminSkillEffectOption;
 
 function extractSupabasePublicBucketRoot(assetUrl: string): string | null {
   try {
@@ -49,19 +50,6 @@ function extractSupabasePublicBucketRoot(assetUrl: string): string | null {
   } catch {
     return null;
   }
-}
-
-function buildElementLogoUrlFromIconsBucket(element: string, iconsBucketRoot: string | null): string | null {
-  if (!iconsBucketRoot) {
-    return null;
-  }
-  return `${iconsBucketRoot}/${encodeURIComponent(`${element}-element.png`)}`;
-}
-
-interface AdminSkillCellContentProps {
-  skill: SkillDefinition;
-  effectList: EffectOption[];
-  iconsBucketRoot: string | null;
 }
 
 type SkillDraftHealMode = SkillHealMode | 'none';
@@ -118,13 +106,6 @@ function effectUsesStunConfig(effectType: SkillEffectType | undefined): boolean 
 
 function effectUsesFlinchConfig(effectType: SkillEffectType | undefined): boolean {
   return effectType === 'flinch_chance';
-}
-
-function formatSkillValue(skill: Pick<SkillDefinition, 'type' | 'damage'>): string | null {
-  if (skill.type === 'damage' && skill.damage != null) {
-    return String(skill.damage);
-  }
-  return null;
 }
 
 function formatImmediateHealTooltip(skill: Pick<SkillDefinition, 'healMode' | 'healValue'>): string | null {
@@ -189,128 +170,6 @@ function formatAttachmentDescription(
     .replace(/<stun_fail>/g, String(stunFail))
     .replace(/<stun_slow>/g, String(stunSlow))
     .replace(/<stun_slowdown>/g, String(stunSlow));
-}
-
-function buildSkillTooltip(skill: SkillDefinition, effectList: EffectOption[]): string {
-  const lines = [
-    skill.skill_name,
-    `${skill.type === 'damage' ? 'Damage' : 'Support'} • ${skill.element} • Priority ${Math.max(1, Math.floor(skill.priority ?? 1))}`,
-  ];
-  if (skill.type === 'damage' && skill.damage != null) {
-    lines.push(`Power: ${skill.damage}`);
-  }
-  const immediateHealLine = formatImmediateHealTooltip(skill);
-  if (immediateHealLine) {
-    lines.push(immediateHealLine);
-  }
-  const effectById = new Map(effectList.map((effect) => [effect.id, effect]));
-  const effectAttachments =
-    Array.isArray(skill.effectAttachments) && skill.effectAttachments.length > 0
-      ? skill.effectAttachments
-      : (skill.effectIds ?? []).map((effectId) => {
-          const effect = effectById.get(effectId);
-          if (effect?.effectType === 'recoil') {
-            return {
-              effectId,
-              procChance: 1,
-              recoilMode: 'percent_max_hp' as const,
-              recoilPercent: 0.1,
-            };
-          }
-          if (effect?.effectType === 'persistent_heal') {
-            return {
-              effectId,
-              procChance: 1,
-              persistentHealMode: 'percent_max_hp' as const,
-              persistentHealValue: 0.05,
-              persistentHealDurationTurns: 1,
-            };
-          }
-          if (effect?.effectType === 'inflict_toxic') {
-            return {
-              effectId,
-              procChance: 1,
-              toxicPotencyBase: 0.05,
-              toxicPotencyPerTurn: 0.05,
-            };
-          }
-          if (effect?.effectType === 'inflict_stun') {
-            return {
-              effectId,
-              procChance: 1,
-              stunFailChance: 0.25,
-              stunSlowdown: 0.5,
-            };
-          }
-          if (effect?.effectType === 'flinch_chance') {
-            return {
-              effectId,
-              procChance: 1,
-              flinchFirstUseOnly: false,
-              flinchFirstOverallOnly: false,
-            };
-          }
-          return {
-            effectId,
-            buffPercent: effectById.get(effectId)?.buffPercent ?? 0.1,
-            procChance: 1,
-          };
-        });
-  const effectLines = effectAttachments
-    .map((attachment) => {
-      const effect = effectById.get(attachment.effectId);
-      const procLabel = Math.round((attachment.procChance ?? 1) * 100);
-      if (!effect) {
-        return `${attachment.effectId} (${procLabel}% chance)`;
-      }
-      const usesPersistent = effectUsesPersistentHealConfig(effect.effectType);
-      if (usesPersistent) {
-        const formatted = formatAttachmentDescription(effect, attachment);
-        const text = formatted === effect.name ? formatPersistentHealAttachmentTooltip(attachment) : formatted;
-        return `${text} (${procLabel}% chance)`;
-      }
-      return `${formatAttachmentDescription(effect, attachment)} (${procLabel}% chance)`;
-    });
-  for (const effectLine of effectLines) {
-    if (effectLine.trim()) {
-      lines.push(`Effect: ${effectLine.trim()}`);
-    }
-  }
-  return lines.join('\n');
-}
-
-function AdminSkillCellContent({ skill, effectList, iconsBucketRoot }: AdminSkillCellContentProps) {
-  const elementLogoUrl = buildElementLogoUrlFromIconsBucket(skill.element, iconsBucketRoot);
-  const typeLabel = skill.type === 'damage' ? 'D' : 'S';
-  const value = getSkillValueDisplayNumber(skill);
-  const effectAttachments =
-    Array.isArray(skill.effectAttachments) && skill.effectAttachments.length > 0
-      ? skill.effectAttachments
-      : (skill.effectIds ?? []).map((effectId) => ({ effectId, procChance: 1, buffPercent: 0.1 }));
-  const effectIconUrls = effectAttachments
-    .map((attachment) => {
-      const effect = effectList.find((e) => e.id === attachment.effectId);
-      return effect?.iconUrl;
-    })
-    .filter((url): url is string => typeof url === 'string' && url.length > 0);
-  return (
-    <>
-      {elementLogoUrl && (
-        <img src={elementLogoUrl} alt={skill.element} className="skill-cell__element-logo" />
-      )}
-      <span className="skill-cell__name">{skill.skill_name}</span>
-      <span className="skill-cell__spacer"> </span>
-      <span className="skill-cell__type">{typeLabel}</span>
-      {value != null && <span className="skill-cell__value">{value}</span>}
-      {effectIconUrls.length > 0 && (
-        <>
-          {effectIconUrls.map((url, i) => (
-            <img key={`${url}-${i}`} src={url} alt="" className="skill-cell__effect-icon" />
-          ))}
-        </>
-      )}
-    </>
-  );
 }
 
 interface SkillsListResponse {
@@ -656,19 +515,11 @@ function buildAttachmentDraftFromEffectOption(effect: EffectOption): SkillEffect
   };
 }
 
-interface EffectOption {
-  id: string;
-  name: string;
-  effectType: SkillEffectType;
-  description?: string;
-  buffPercent?: number;
-  iconUrl?: string;
-}
-
 export function MoveTool() {
   const [skills, setSkills] = useState<SkillDefinition[]>([]);
   const [effectList, setEffectList] = useState<EffectOption[]>([]);
   const [gameElements, setGameElements] = useState<string[]>(() => [...CRITTER_ELEMENTS]);
+  const [elementColorById, setElementColorById] = useState<Record<string, string>>({});
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
   const [draft, setDraft] = useState<SkillDraft>(emptyDraft);
   const [status, setStatus] = useState('');
@@ -797,6 +648,13 @@ export function MoveTool() {
       const allowedElementIds = elements.length > 0 ? elements.map((e) => e.element_id) : undefined;
       if (elements.length > 0) {
         setGameElements(elements.map((e) => e.element_id));
+        setElementColorById(
+          Object.fromEntries(
+            elements
+              .filter((entry) => entry.color_hex.trim().length > 0)
+              .map((entry) => [entry.element_id, entry.color_hex.trim()] as const),
+          ),
+        );
       }
       const loaded = sanitizeSkillLibrary(rawSkills, knownEffectIds, legacyEffectBuffPercentById, effectTypeById, allowedElementIds);
       setSkills(loaded);
@@ -820,12 +678,6 @@ export function MoveTool() {
 
   useEffect(() => {
     void loadAll();
-    void (async () => {
-      const loaded = await loadAdminGameElements();
-      if (loaded.length > 0) {
-        setGameElements(loaded.map((e) => e.element_id));
-      }
-    })();
   }, []);
 
   const applyDraft = () => {
@@ -977,17 +829,15 @@ export function MoveTool() {
           {error && <p className="admin-note" style={{ color: '#f7b9b9' }}>{error}</p>}
           <div className="admin-item-grid">
             {filteredSkills.map((skill) => {
-              const elementColor = ELEMENT_SKILL_COLORS[skill.element] ?? '#9e9e9e';
-              const style = elementColor
-                ? { ['--admin-skill-bg' as string]: elementColor }
-                : undefined;
+              const elementColor = getSkillElementColor(skill.element, elementColorById[skill.element]);
+              const style = { ['--admin-skill-bg' as string]: elementColor };
               return (
                 <button
                   key={skill.skill_id}
                   type="button"
                   className={`secondary admin-skill-list-item ${elementColor ? 'admin-skill-list-item--colored' : ''} ${selectedSkillId === skill.skill_id ? 'is-selected' : ''}`}
                   style={style}
-                  title={buildSkillTooltip(skill, effectList)}
+                  title={buildAdminSkillTooltip(skill, effectList)}
                   onClick={() => {
                     setSelectedSkillId(skill.skill_id);
                     setDraft(skillToDraft(skill, effectList));

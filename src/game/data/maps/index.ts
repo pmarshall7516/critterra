@@ -14,8 +14,9 @@ import { germaniaFishingLodgeMap } from '@/game/data/maps/germaniaFishingLodge';
 import { germaniaHospitalMap } from '@/game/data/maps/germaniaHospital';
 import { germaniaShopMap } from '@/game/data/maps/germaniaShop';
 import { donBramDenMap } from '@/game/data/maps/donBramDen';
+import { critterwayRouteMap } from '@/game/data/maps/critterwayRoute';
 
-export const WORLD_MAPS: WorldMap[] = [playerHouseMap, starterTownMap, rivalHouseMap, portlockPondMap, spawnMap, portlockMap, userHouseMap, uncleSHouseMap, portlockTrailMap, darkForestMap, germaniaMap, germaniaFishingLodgeMap, germaniaHospitalMap, germaniaShopMap, donBramDenMap];
+export const WORLD_MAPS: WorldMap[] = [playerHouseMap, starterTownMap, rivalHouseMap, portlockPondMap, spawnMap, portlockMap, userHouseMap, uncleSHouseMap, portlockTrailMap, darkForestMap, germaniaMap, germaniaFishingLodgeMap, germaniaHospitalMap, germaniaShopMap, donBramDenMap, critterwayRouteMap];
 
 export const WORLD_MAP_REGISTRY = WORLD_MAPS.reduce<Record<string, WorldMap>>(
   (registry, map) => {

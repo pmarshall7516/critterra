@@ -21,6 +21,11 @@ import {
   resolveToxicTickDamage,
   sanitizeStatusSource,
 } from '@/game/battle/statusConditions';
+import {
+  applyPendingCritChanceBuff,
+  consumePendingCritChanceBonus,
+  recordActiveEffect,
+} from '@/game/battle/effectState';
 import { rollGuard } from '@/game/battle/guard';
 import { resolveEffectiveSpeed as resolveEffectiveSpeedShared, resolveSkillPriority as resolveSkillPriorityShared } from '@/game/battle/ordering';
 import { buildDuelCatalogIndexes } from '@/duel/squadSchema';
@@ -463,9 +468,23 @@ function validateSubmission(
       const actorSide: DuelSideId = state.player === sideState ? 'player' : 'opponent';
       const viable = getViableTargetsForSkill(state, actorSide, action.actorMemberIndex, action.skillSlotIndex, context);
       const targetIndices = (action.targetMemberIndices?.length ? action.targetMemberIndices : [action.targetMemberIndex]) as number[];
-      const expectedCount = getSkillTargetCount(skill, state.format);
-      if (targetIndices.length !== expectedCount) {
-        return { ok: false, error: `Skill requires ${expectedCount} target(s).` };
+      const selectionRange = getSkillTargetSelectionRange(skill, state.format, viable.length);
+      if (new Set(targetIndices).size !== targetIndices.length) {
+        return { ok: false, error: 'Skill targets cannot contain duplicates.' };
+      }
+      if (targetIndices.length < selectionRange.min || targetIndices.length > selectionRange.max) {
+        if (selectionRange.min === selectionRange.max) {
+          return {
+            ok: false,
+            error: selectionRange.min === 1
+              ? 'Skill requires 1 target.'
+              : `Skill requires ${selectionRange.min} targets.`,
+          };
+        }
+        return {
+          ok: false,
+          error: `Skill requires between ${selectionRange.min} and ${selectionRange.max} targets.`,
+        };
       }
       for (const memberIndex of targetIndices) {
         const isEnemy = skill.type === 'damage';
@@ -509,7 +528,7 @@ function advanceTurnResolution(state: DuelBattleState, context: ResolveContext):
   }
   const resolution = state.turnResolution;
   if (resolution.nextActionIndex >= resolution.queue.length) {
-    finishTurnResolution(state, context);
+    finishTurnResolution(state);
     return { ok: true };
   }
 
@@ -533,7 +552,7 @@ function advanceTurnResolution(state: DuelBattleState, context: ResolveContext):
   }
 
   if (state.phase !== 'resolving-turn') {
-    finishTurnResolution(state, context);
+    finishTurnResolution(state);
     return { ok: true, executedEntry: entry, knockout, swapOccurred };
   }
   // Do not finish the turn here when this was the last action. Let the UI show this
@@ -647,15 +666,14 @@ function executeOrderedAction(
   resolveSkillAction(state, sideState, opponentState, action, context);
 }
 
-function finishTurnResolution(state: DuelBattleState, context: ResolveContext): void {
+function finishTurnResolution(state: DuelBattleState): void {
   state.player.pendingActions = null;
   state.opponent.pendingActions = null;
   state.turnResolution = null;
   clearGuardFlags(state.player);
   clearGuardFlags(state.opponent);
   if (state.phase !== 'finished') {
-    applyEndTurnStatusConditions(state);
-    applyEndTurnPersistentHealing(state, context);
+    applyEndTurnEffects(state);
   }
   cleanupFaintedActiveSlots(state.player);
   cleanupFaintedActiveSlots(state.opponent);
@@ -860,10 +878,6 @@ function resolveExecutionTargetMemberIndices(
   skill: SkillDefinition,
   context: ResolveContext,
 ): number[] {
-  const expectedCount = getSkillTargetCount(skill, state.format);
-  if (expectedCount <= 0) {
-    return [];
-  }
   const viable = getViableTargetsForSkill(state, side, action.actorMemberIndex, action.skillSlotIndex, context);
   if (viable.length <= 0) {
     return [];
@@ -881,8 +895,12 @@ function resolveExecutionTargetMemberIndices(
 
   const requestedIndices = action.targetMemberIndices?.length ? action.targetMemberIndices : [action.targetMemberIndex];
   const selected: number[] = [];
+  const selectionRange = getSkillTargetSelectionRange(skill, state.format, viableIndices.length);
+  if (selectionRange.max <= 0) {
+    return [];
+  }
   requestedIndices.forEach((memberIndex) => {
-    if (selected.length >= expectedCount) {
+    if (selected.length >= selectionRange.max) {
       return;
     }
     if (!viableIndices.includes(memberIndex)) {
@@ -895,7 +913,7 @@ function resolveExecutionTargetMemberIndices(
   });
 
   const candidatePool = viableIndices.filter((memberIndex) => !selected.includes(memberIndex));
-  while (selected.length < expectedCount && candidatePool.length > 0) {
+  while (selected.length < selectionRange.min && candidatePool.length > 0) {
     const picked =
       state.format === 'doubles' && candidatePool.length === 1
         ? candidatePool[0] ?? null
@@ -922,11 +940,11 @@ function applySkillDamage(
 ): number {
   const consumedCritBonus = Math.max(
     0,
-    Math.min(1, (attacker.pendingCritChanceBonus ?? 0) + getEquipmentCritChanceBonus(attacker)),
+    Math.min(
+      1,
+      consumePendingCritChanceBonus(attacker, context.indexes.skillEffectById) + getEquipmentCritChanceBonus(attacker),
+    ),
   );
-  if ((attacker.pendingCritChanceBonus ?? 0) > 0) {
-    attacker.pendingCritChanceBonus = 0;
-  }
   const result = computeBattleDamage({
     attacker: {
       level: attacker.level,
@@ -949,8 +967,20 @@ function applySkillDamage(
     defenderGuarded: defender.guardActive,
     guardSucceeded: defender.guardSucceeded,
   });
-  const { damage, damageDealt, typeMult } = result;
+  const { damage, damageDealt, isCrit, typeMult } = result;
   defender.currentHp = Math.max(0, defender.currentHp - damage);
+  pushLog(state, {
+    turn: state.turnNumber,
+    kind: 'damage',
+    text: `${defender.name} took ${damage} damage.`,
+  });
+  if (isCrit) {
+    pushLog(state, {
+      turn: state.turnNumber,
+      kind: 'status',
+      text: 'It was a crit!',
+    });
+  }
   if (typeMult >= 2) {
     pushLog(state, { turn: state.turnNumber, kind: 'status', text: "It's super effective!" });
   } else if (typeMult >= 1.1) {
@@ -960,11 +990,6 @@ function applySkillDamage(
   } else if (typeMult === 0) {
     pushLog(state, { turn: state.turnNumber, kind: 'status', text: "It had no effect." });
   }
-  pushLog(state, {
-    turn: state.turnNumber,
-    kind: 'damage',
-    text: `${defender.name} took ${damage} damage.`,
-  });
   if (defender.currentHp <= 0 && !defender.fainted) {
     defender.fainted = true;
     defender.flinch = null;
@@ -1018,6 +1043,7 @@ function applySkillEffectsFromResolution(
     defenderEffectAttachments: SkillEffectAttachment[];
     recoilAttachments: SkillEffectAttachment[];
     persistentHealAttachments: SkillEffectAttachment[];
+    attackerCritChanceBuffAttachments: SkillEffectAttachment[];
     attackerCritChanceBuffPercent: number;
   },
   dealtDamage: number,
@@ -1078,10 +1104,19 @@ function applySkillEffectsFromResolution(
   }
 
   if (resolution.attackerCritChanceBuffPercent > 0) {
-    actor.pendingCritChanceBonus = Math.min(
-      1,
-      (actor.pendingCritChanceBonus ?? 0) + resolution.attackerCritChanceBuffPercent,
-    );
+    for (const attachment of resolution.attackerCritChanceBuffAttachments) {
+      const effect = skillEffectLookup[attachment.effectId];
+      if (!effect || effect.effect_type !== 'crit_buff') {
+        continue;
+      }
+      const buffPercent =
+        typeof attachment.buffPercent === 'number' && Number.isFinite(attachment.buffPercent)
+          ? attachment.buffPercent
+          : typeof effect.buffPercent === 'number'
+            ? effect.buffPercent
+            : 0.1;
+      applyPendingCritChanceBuff(actor, attachment.effectId, skill.skill_name, buffPercent);
+    }
   }
 
   for (const attachment of resolution.defenderEffectAttachments) {
@@ -1173,7 +1208,7 @@ function applyOnHitStatusEffects(
   }
   const skillEffectLookup = Object.fromEntries(context.indexes.skillEffectById.entries());
 
-  const applyToxic = (sourceName: string, potencyBase: number, potencyPerTurn: number): void => {
+  const applyToxic = (sourceName: string, potencyBase: number, potencyPerTurn: number, statusEffectId?: string): void => {
     if (target.persistentStatus) {
       return;
     }
@@ -1183,6 +1218,7 @@ function applyOnHitStatusEffects(
       potencyPerTurn: clampUnitInterval(potencyPerTurn, 0.05),
       turnCount: 0,
       source: sanitizeStatusSource(sourceName, skill.skill_name),
+      ...(typeof statusEffectId === 'string' && statusEffectId.trim().length > 0 ? { effectId: statusEffectId.trim() } : {}),
     };
     pushLog(state, {
       turn: state.turnNumber,
@@ -1191,7 +1227,7 @@ function applyOnHitStatusEffects(
     });
   };
 
-  const applyStun = (sourceName: string, stunFailChance: number, stunSlowdown: number): void => {
+  const applyStun = (sourceName: string, stunFailChance: number, stunSlowdown: number, statusEffectId?: string): void => {
     if (target.persistentStatus) {
       return;
     }
@@ -1200,6 +1236,7 @@ function applyOnHitStatusEffects(
       stunFailChance: clampUnitInterval(stunFailChance, 0.25),
       stunSlowdown: clampUnitInterval(stunSlowdown, 0.5),
       source: sanitizeStatusSource(sourceName, skill.skill_name),
+      ...(typeof statusEffectId === 'string' && statusEffectId.trim().length > 0 ? { effectId: statusEffectId.trim() } : {}),
     };
     pushLog(state, {
       turn: state.turnNumber,
@@ -1208,13 +1245,14 @@ function applyOnHitStatusEffects(
     });
   };
 
-  const applyFlinch = (sourceName: string): void => {
+  const applyFlinch = (sourceName: string, statusEffectId?: string): void => {
     if (target.actedThisTurn) {
       return;
     }
     target.flinch = {
       turnNumber: state.turnNumber,
       source: sanitizeStatusSource(sourceName, skill.skill_name),
+      ...(typeof statusEffectId === 'string' && statusEffectId.trim().length > 0 ? { effectId: statusEffectId.trim() } : {}),
     };
   };
 
@@ -1242,15 +1280,25 @@ function applyOnHitStatusEffects(
       continue;
     }
     if (effect.effect_type === 'inflict_toxic') {
-      applyToxic(skill.skill_name, attachment.toxicPotencyBase ?? 0.05, attachment.toxicPotencyPerTurn ?? 0.05);
+      applyToxic(
+        skill.skill_name,
+        attachment.toxicPotencyBase ?? 0.05,
+        attachment.toxicPotencyPerTurn ?? 0.05,
+        attachment.effectId,
+      );
     } else if (effect.effect_type === 'inflict_stun') {
-      applyStun(skill.skill_name, attachment.stunFailChance ?? 0.25, attachment.stunSlowdown ?? 0.5);
+      applyStun(
+        skill.skill_name,
+        attachment.stunFailChance ?? 0.25,
+        attachment.stunSlowdown ?? 0.5,
+        attachment.effectId,
+      );
     } else if (effect.effect_type === 'flinch_chance') {
       const skillUseCount = actor.skillUseCountBySkillId[skill.skill_id] ?? 0;
       if (!canApplyFirstUseFlinch(attachment.flinchFirstUseOnly, attachment.flinchFirstOverallOnly, skillUseCount)) {
         continue;
       }
-      applyFlinch(skill.skill_name);
+      applyFlinch(skill.skill_name, attachment.effectId);
     }
   }
 
@@ -1278,11 +1326,11 @@ function applyOnHitStatusEffects(
     }
     const sourceName = sanitizeStatusSource(actor.equipmentEffectSourceById[effect.effectId], effect.effectId);
     if (effect.effectType === 'apply_toxic') {
-      applyToxic(sourceName, effect.toxicPotencyBase ?? 0.05, effect.toxicPotencyPerTurn ?? 0.05);
+      applyToxic(sourceName, effect.toxicPotencyBase ?? 0.05, effect.toxicPotencyPerTurn ?? 0.05, effect.effectId);
     } else if (effect.effectType === 'apply_stun') {
-      applyStun(sourceName, effect.stunFailChance ?? 0.25, effect.stunSlowdown ?? 0.5);
+      applyStun(sourceName, effect.stunFailChance ?? 0.25, effect.stunSlowdown ?? 0.5, effect.effectId);
     } else {
-      applyFlinch(sourceName);
+      applyFlinch(sourceName, effect.effectId);
     }
   }
 }
@@ -1336,8 +1384,8 @@ function clearPersistentHealState(critter: DuelBattleCritterState): void {
 
 function getEquipmentPersistentHealConfigs(
   critter: DuelBattleCritterState,
-): Array<{ mode: 'flat' | 'percent_max_hp'; value: number }> {
-  const configs: Array<{ mode: 'flat' | 'percent_max_hp'; value: number }> = [];
+): Array<{ mode: 'flat' | 'percent_max_hp'; value: number; sourceName: string }> {
+  const configs: Array<{ mode: 'flat' | 'percent_max_hp'; value: number; sourceName: string }> = [];
   for (const effect of critter.equipmentEffectInstances ?? []) {
     if (effect.effectType !== 'persistent_heal') {
       continue;
@@ -1349,7 +1397,11 @@ function getEquipmentPersistentHealConfigs(
     if (value <= 0) {
       continue;
     }
-    configs.push({ mode, value });
+    configs.push({
+      mode,
+      value,
+      sourceName: (critter.equipmentEffectSourceById[effect.effectId] ?? effect.effectId).trim(),
+    });
   }
   return configs;
 }
@@ -1375,110 +1427,107 @@ function resolvePersistentHealAmount(
   return Math.max(0, Math.floor(Math.max(1, maxHp) * Math.max(0, Math.min(1, heal.value))));
 }
 
-function applyEndTurnStatusConditions(state: DuelBattleState): void {
+function collectEndTurnCrittersInSpeedOrder(state: DuelBattleState): DuelBattleCritterState[] {
+  const ordered: DuelBattleCritterState[] = [];
+  const sides: DuelBattleSideState[] = [state.player, state.opponent];
+  for (const side of sides) {
+    for (const memberIndex of getAliveActiveIndices(side)) {
+      const critter = side.team[memberIndex];
+      if (!critter || critter.fainted || critter.currentHp <= 0) {
+        continue;
+      }
+      ordered.push(critter);
+    }
+  }
+  ordered.sort((left, right) => {
+    const speedDelta = resolveEffectiveSpeed(right) - resolveEffectiveSpeed(left);
+    if (speedDelta !== 0) {
+      return speedDelta;
+    }
+    if (left.side !== right.side) {
+      return left.side === 'player' ? -1 : 1;
+    }
+    return left.memberIndex - right.memberIndex;
+  });
+  return ordered;
+}
+
+function applyEndTurnEffects(state: DuelBattleState): void {
   const sides: DuelBattleSideState[] = [state.player, state.opponent];
   for (const side of sides) {
     for (const entry of side.team) {
       entry.flinch = null;
     }
   }
-  for (const side of sides) {
-    for (const memberIndex of getAliveActiveIndices(side)) {
-      const critter = side.team[memberIndex];
-      if (!critter || critter.fainted || critter.currentHp <= 0) {
-        continue;
-      }
-      if (critter.persistentStatus?.kind !== 'toxic') {
-        continue;
-      }
+  for (const critter of collectEndTurnCrittersInSpeedOrder(state)) {
+    if (critter.fainted || critter.currentHp <= 0) {
+      continue;
+    }
+    if (critter.persistentStatus?.kind === 'toxic') {
       const toxicDamage = resolveToxicTickDamage(critter.maxHp, critter.persistentStatus).damage;
-      if (toxicDamage <= 0) {
-        critter.persistentStatus.turnCount = Math.max(0, Math.floor(critter.persistentStatus.turnCount) + 1);
-        continue;
-      }
-      const beforeHp = critter.currentHp;
-      critter.currentHp = Math.max(0, critter.currentHp - toxicDamage);
-      const dealtDamage = Math.max(0, beforeHp - critter.currentHp);
-      if (dealtDamage > 0) {
-        pushLog(state, {
-          turn: state.turnNumber,
-          kind: 'damage',
-          text: `${critter.name} took ${dealtDamage} damage from Toxic.`,
-        });
-      }
-      if (critter.currentHp <= 0) {
-        critter.fainted = true;
-        critter.flinch = null;
-        critter.persistentStatus = null;
-        clearPersistentHealState(critter);
-        pushLog(state, {
-          turn: state.turnNumber,
-          kind: 'knockout',
-          text: `${critter.name} was knocked out.`,
-        });
-        continue;
+      if (toxicDamage > 0) {
+        const beforeHp = critter.currentHp;
+        critter.currentHp = Math.max(0, critter.currentHp - toxicDamage);
+        const dealtDamage = Math.max(0, beforeHp - critter.currentHp);
+        if (dealtDamage > 0) {
+          pushLog(state, {
+            turn: state.turnNumber,
+            kind: 'damage',
+            text: `${critter.name} took ${dealtDamage} damage from Toxic.`,
+          });
+        }
+        if (critter.currentHp <= 0) {
+          critter.fainted = true;
+          critter.flinch = null;
+          critter.persistentStatus = null;
+          clearPersistentHealState(critter);
+          pushLog(state, {
+            turn: state.turnNumber,
+            kind: 'knockout',
+            text: `${critter.name} was knocked out.`,
+          });
+          continue;
+        }
       }
       if (critter.persistentStatus?.kind === 'toxic') {
         critter.persistentStatus.turnCount = Math.max(0, Math.floor(critter.persistentStatus.turnCount) + 1);
       }
     }
-  }
-}
-
-function applyEndTurnPersistentHealing(state: DuelBattleState, context: ResolveContext): void {
-  const sides: DuelBattleSideState[] = [state.player, state.opponent];
-  for (const side of sides) {
-    for (const memberIndex of getAliveActiveIndices(side)) {
-      const critter = side.team[memberIndex];
-      if (!critter || critter.fainted || critter.currentHp <= 0) {
-        continue;
+    let requestedHeal = 0;
+    const healSourceNames: string[] = [];
+    if (critter.persistentHeal) {
+      requestedHeal += resolvePersistentHealAmount(critter.maxHp, critter.persistentHeal);
+      if (critter.persistentHeal.sourceName.trim()) {
+        healSourceNames.push(critter.persistentHeal.sourceName.trim());
       }
-      let requestedHeal = 0;
-      if (critter.persistentHeal) {
-        requestedHeal += resolvePersistentHealAmount(critter.maxHp, critter.persistentHeal);
-        critter.persistentHeal.remainingTurns = Math.max(0, critter.persistentHeal.remainingTurns - 1);
-        if (critter.persistentHeal.remainingTurns <= 0) {
-          clearPersistentHealState(critter);
-        }
+      critter.persistentHeal.remainingTurns = Math.max(0, critter.persistentHeal.remainingTurns - 1);
+      if (critter.persistentHeal.remainingTurns <= 0) {
+        clearPersistentHealState(critter);
       }
-      const equipmentPersistentHeals = getEquipmentPersistentHealConfigs(critter);
-      for (const healConfig of equipmentPersistentHeals) {
-        requestedHeal += resolvePersistentHealAmount(critter.maxHp, healConfig);
-      }
-      if (requestedHeal <= 0) {
-        continue;
-      }
-      const beforeHp = critter.currentHp;
-      critter.currentHp = Math.min(critter.maxHp, critter.currentHp + requestedHeal);
-      const actualHeal = Math.max(0, critter.currentHp - beforeHp);
-      if (actualHeal <= 0) {
-        continue;
-      }
-      pushLog(state, {
-        turn: state.turnNumber,
-        kind: 'heal',
-        text: `${critter.name} restored ${actualHeal} HP at end of turn.`,
-      });
     }
+    const equipmentPersistentHeals = getEquipmentPersistentHealConfigs(critter);
+    for (const healConfig of equipmentPersistentHeals) {
+      requestedHeal += resolvePersistentHealAmount(critter.maxHp, healConfig);
+      if (healConfig.sourceName.trim()) {
+        healSourceNames.push(healConfig.sourceName.trim());
+      }
+    }
+    if (requestedHeal <= 0) {
+      continue;
+    }
+    const beforeHp = critter.currentHp;
+    critter.currentHp = Math.min(critter.maxHp, critter.currentHp + requestedHeal);
+    const actualHeal = Math.max(0, critter.currentHp - beforeHp);
+    if (actualHeal <= 0) {
+      continue;
+    }
+    const sourceLabel = healSourceNames.filter((entry, index, values) => values.indexOf(entry) === index).join(', ') || 'end-of-turn effects';
+    pushLog(state, {
+      turn: state.turnNumber,
+      kind: 'heal',
+      text: `${critter.name} was healed +${actualHeal} HP by ${sourceLabel}.`,
+    });
   }
-}
-
-function recordActiveEffect(
-  critter: DuelBattleCritterState,
-  effectId: string,
-  sourceName: string,
-  value: number,
-): void {
-  if (!critter.activeEffectIds) {
-    critter.activeEffectIds = [];
-    critter.activeEffectSourceById = {};
-    critter.activeEffectValueById = {};
-  }
-  if (!critter.activeEffectIds.includes(effectId)) {
-    critter.activeEffectIds.push(effectId);
-  }
-  critter.activeEffectSourceById[effectId] = sourceName;
-  critter.activeEffectValueById[effectId] = (critter.activeEffectValueById[effectId] ?? 0) + value;
 }
 
 function resolveTargetCritter(
@@ -1714,12 +1763,12 @@ function listLegalActionsForActor(
       continue;
     }
     const viable = getViableTargetsForSkill(state, side, actorMemberIndex, slotIndex, context);
-    const expectedCount = getSkillTargetCount(skill, state.format);
     const targetKindD = (skill.targetKind ?? 'select_enemies') as SkillTargetKindDamage;
     const targetKindS = (skill.targetKind ?? 'select_allies') as SkillTargetKindSupport;
 
     if (skill.type === 'damage') {
       const enemyViable = viable.filter((v) => v.side !== side).map((v) => v.memberIndex);
+      const selectionRange = getSkillTargetSelectionRange(skill, state.format, enemyViable.length);
       if (targetKindD === 'target_all_enemies' || targetKindD === 'target_all') {
         if (enemyViable.length > 0 || targetKindD === 'target_all') {
           const allIndices = viable.map((v) => v.memberIndex);
@@ -1733,17 +1782,19 @@ function listLegalActionsForActor(
         }
         continue;
       }
-      if (expectedCount === 1) {
-        enemyViable.forEach((targetMemberIndex) => {
-          actions.push({
-            kind: 'skill',
-            actorMemberIndex,
-            skillSlotIndex: slotIndex,
-            targetMemberIndex,
+      for (let targetCount = selectionRange.min; targetCount <= selectionRange.max; targetCount += 1) {
+        if (targetCount === 1) {
+          enemyViable.forEach((targetMemberIndex) => {
+            actions.push({
+              kind: 'skill',
+              actorMemberIndex,
+              skillSlotIndex: slotIndex,
+              targetMemberIndex,
+            });
           });
-        });
-      } else {
-        combinations(enemyViable, expectedCount).forEach((indices) => {
+          continue;
+        }
+        combinations(enemyViable, targetCount).forEach((indices) => {
           actions.push({
             kind: 'skill',
             actorMemberIndex,
@@ -1756,6 +1807,7 @@ function listLegalActionsForActor(
       continue;
     }
     const allyViable = viable.filter((v) => v.side === side).map((v) => v.memberIndex);
+    const selectionRange = getSkillTargetSelectionRange(skill, state.format, allyViable.length);
     if (targetKindS === 'target_self' || targetKindS === 'target_team') {
       if (allyViable.length > 0) {
         actions.push({
@@ -1768,17 +1820,19 @@ function listLegalActionsForActor(
       }
       continue;
     }
-    if (expectedCount === 1) {
-      allyViable.forEach((targetMemberIndex) => {
-        actions.push({
-          kind: 'skill',
-          actorMemberIndex,
-          skillSlotIndex: slotIndex,
-          targetMemberIndex,
+    for (let targetCount = selectionRange.min; targetCount <= selectionRange.max; targetCount += 1) {
+      if (targetCount === 1) {
+        allyViable.forEach((targetMemberIndex) => {
+          actions.push({
+            kind: 'skill',
+            actorMemberIndex,
+            skillSlotIndex: slotIndex,
+            targetMemberIndex,
+          });
         });
-      });
-    } else {
-      combinations(allyViable, expectedCount).forEach((indices) => {
+        continue;
+      }
+      combinations(allyViable, targetCount).forEach((indices) => {
         actions.push({
           kind: 'skill',
           actorMemberIndex,
@@ -2005,6 +2059,11 @@ export interface ViableTargetSlot {
   memberIndex: number;
 }
 
+export interface SkillTargetSelectionRange {
+  min: number;
+  max: number;
+}
+
 /**
  * Returns the list of board slots that are valid targets for a skill when used by the given actor.
  * Used for UI highlighting and validation.
@@ -2061,23 +2120,59 @@ export function getSkillTargetCount(
   skill: SkillDefinition,
   format: DuelBattleFormat,
 ): number {
+  return getSkillTargetSelectionRange(skill, format).max;
+}
+
+export function getSkillTargetSelectionRange(
+  skill: SkillDefinition,
+  format: DuelBattleFormat,
+  viableTargetCount?: number,
+): SkillTargetSelectionRange {
+  let min = 0;
+  let max = 0;
   if (skill.type === 'damage') {
     const kind = (skill.targetKind ?? 'select_enemies') as SkillTargetKindDamage;
     if (kind === 'target_all' || kind === 'target_all_enemies') {
-      return getRequiredLeadCount(format);
+      const required = getRequiredLeadCount(format);
+      min = required;
+      max = required;
+    } else {
+      min = 1;
+      max = skill.targetSelectCount ?? 1;
     }
-    return skill.targetSelectCount ?? 1;
+  } else {
+    const kind = (skill.targetKind ?? 'select_allies') as SkillTargetKindSupport;
+    if (kind === 'target_self') {
+      min = 1;
+      max = 1;
+    } else if (kind === 'target_team') {
+      const opt = skill.targetTeamOption ?? 'user_only';
+      const required = getRequiredLeadCount(format);
+      if (opt === 'user_only') {
+        min = 1;
+        max = 1;
+      } else if (opt === 'partner_only') {
+        min = Math.max(0, required - 1);
+        max = Math.max(0, required - 1);
+      } else {
+        min = required;
+        max = required;
+      }
+    } else {
+      min = 1;
+      max = skill.targetSelectCount ?? 1;
+    }
   }
-  const kind = (skill.targetKind ?? 'select_allies') as SkillTargetKindSupport;
-  if (kind === 'target_self') return 1;
-  if (kind === 'target_team') {
-    const opt = skill.targetTeamOption ?? 'user_only';
-    const required = getRequiredLeadCount(format);
-    if (opt === 'user_only') return 1;
-    if (opt === 'partner_only') return Math.max(0, required - 1);
-    return required;
+  const normalizedMax = Math.max(0, Math.floor(max));
+  const normalizedMin = Math.max(0, Math.floor(min));
+  if (typeof viableTargetCount === 'number' && Number.isFinite(viableTargetCount)) {
+    const cappedMax = Math.max(0, Math.min(normalizedMax, Math.floor(viableTargetCount)));
+    return {
+      min: cappedMax <= 0 ? 0 : Math.min(normalizedMin, cappedMax),
+      max: cappedMax,
+    };
   }
-  return skill.targetSelectCount ?? 1;
+  return { min: normalizedMin, max: normalizedMax };
 }
 
 function getSide(state: DuelBattleState, side: DuelSideId): DuelBattleSideState {

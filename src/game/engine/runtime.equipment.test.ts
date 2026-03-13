@@ -53,6 +53,7 @@ function createProgressEntry(
   return {
     critterId: critter.id,
     unlocked: input?.unlocked ?? true,
+    seen: input?.seen ?? input?.unlocked ?? true,
     unlockedAt: input?.unlockedAt ?? null,
     unlockSource: input?.unlockSource ?? null,
     level: input?.level ?? 1,
@@ -729,7 +730,7 @@ describe('GameRuntime equipment integration', () => {
     const benchBefore = playerTeam[1].currentHp;
     const firstEvents = (runtime as any).buildEndTurnHealingNarrationEvents(battle);
     expect(firstEvents).toHaveLength(1);
-    expect(firstEvents[0]?.message).toContain('restored 3 HP at the end of the turn');
+    expect(firstEvents[0]?.message).toContain('was healed +3 HP by');
     (runtime as any).applyBattlePostDamageResolution(battle, firstEvents[0].postDamageResolution);
     expect(playerTeam[0].currentHp).toBe(activeBefore + 3);
     expect(playerTeam[1].currentHp).toBe(benchBefore);
@@ -856,6 +857,74 @@ describe('GameRuntime equipment integration', () => {
     ).toBe(true);
   });
 
+  it('uses originating status-effect icons in battle snapshots', () => {
+    const critter = createCritter({ id: 1, name: 'Buddo', level: 1 });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [createProgressEntry(critter, { level: 1 })],
+      squad: [1, null, null, null, null, null, null, null],
+      items: [],
+      itemInventory: inventory([]),
+    });
+    (runtime as any).skillEffectLookupById = {
+      'status-inflict-stun': {
+        effect_id: 'status-inflict-stun',
+        effect_name: 'Inflict Stun',
+        effect_type: 'inflict_stun',
+        description: 'Inflict stun',
+        iconUrl: 'https://example.com/stun-status.png',
+      },
+    };
+
+    const snapshotEntry = (runtime as any).mapBattleTeamEntryToSnapshot({
+      slotIndex: 0,
+      critterId: 1,
+      name: 'Buddo',
+      element: 'bloom',
+      spriteUrl: '',
+      level: 1,
+      maxHp: 20,
+      currentHp: 20,
+      attack: 10,
+      defense: 8,
+      speed: 7,
+      fainted: false,
+      knockoutProgressCounted: false,
+      attackModifier: 1,
+      defenseModifier: 1,
+      speedModifier: 1,
+      pendingCritChanceBonus: 0,
+      activeEffectIds: [],
+      activeEffectSourceById: {},
+      activeEffectValueById: {},
+      equipmentEffectIds: [],
+      equipmentEffectInstances: [],
+      equipmentEffectSourceById: {},
+      persistentStatus: {
+        kind: 'stun',
+        stunFailChance: 0.34,
+        stunSlowdown: 0.5,
+        source: 'Small Shocks',
+        effectId: 'status-inflict-stun',
+      },
+      flinch: null,
+      persistentHeal: null,
+      consecutiveSuccessfulGuardCount: 0,
+      actedThisTurn: false,
+      firstActionableTurnNumber: 1,
+      damageSkillUseCountSinceSwitchIn: 0,
+      skillUseCountBySkillId: {},
+      equippedSkillIds: [null, null, null, null],
+    });
+
+    expect(snapshotEntry.activeEffectIconUrls).toContain('https://example.com/stun-status.png');
+    expect(
+      snapshotEntry.activeEffectDescriptions.some(
+        (entry: string) => entry.includes('Small Shocks') && entry.includes('Stun'),
+      ),
+    ).toBe(true);
+  });
+
   it('uses modifier-adjusted battle stats in snapshot cards', () => {
     const critter = createCritter({ id: 1, name: 'Buddo', level: 1 });
     const runtime = createRuntimeHarness({
@@ -895,5 +964,53 @@ describe('GameRuntime equipment integration', () => {
     expect(snapshotEntry.attack).toBe(30);
     expect(snapshotEntry.defense).toBe(6);
     expect(snapshotEntry.speed).toBe(8);
+  });
+
+  it('reflects stun slowdown in displayed battle speed and rounds to whole numbers', () => {
+    const critter = createCritter({ id: 1, name: 'Buddo', level: 1 });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [createProgressEntry(critter, { level: 1 })],
+      squad: [1, null, null, null, null, null, null, null],
+      items: [],
+      itemInventory: inventory([]),
+    });
+
+    const snapshotEntry = (runtime as any).mapBattleTeamEntryToSnapshot({
+      slotIndex: 0,
+      critterId: 1,
+      name: 'Buddo',
+      element: 'bloom',
+      spriteUrl: '',
+      level: 1,
+      maxHp: 20,
+      currentHp: 20,
+      attack: 20,
+      defense: 12,
+      speed: 10,
+      fainted: false,
+      knockoutProgressCounted: false,
+      attackModifier: 1.25,
+      defenseModifier: 0.5,
+      speedModifier: 0.9,
+      persistentStatus: {
+        kind: 'stun',
+        stunFailChance: 0.25,
+        stunSlowdown: 0.5,
+        source: 'Shock',
+        effectId: 'status-inflict-stun',
+      },
+      activeEffectIds: [],
+      activeEffectSourceById: {},
+      equipmentEffectIds: [],
+      equipmentEffectSourceById: {},
+      persistentHeal: null,
+      consecutiveSuccessfulGuardCount: 0,
+      equippedSkillIds: [null, null, null, null],
+    });
+
+    expect(snapshotEntry.attack).toBe(25);
+    expect(snapshotEntry.defense).toBe(6);
+    expect(snapshotEntry.speed).toBe(5);
   });
 });

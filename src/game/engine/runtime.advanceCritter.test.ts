@@ -49,6 +49,7 @@ function createProgressEntry(
   return {
     critterId: 1,
     unlocked: true,
+    seen: true,
     unlockedAt: null,
     unlockSource: 'missions',
     level: 1,

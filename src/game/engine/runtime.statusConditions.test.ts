@@ -92,12 +92,14 @@ describe('GameRuntime status-condition persistence', () => {
       potencyPerTurn: 0.05,
       turnCount: 2,
       source: 'Toxic Strike',
+      effectId: 'status-inflict-toxic',
     };
     const stunStatus: PersistentStatusCondition = {
       kind: 'stun',
       stunFailChance: 0.35,
       stunSlowdown: 0.5,
       source: 'Stun Burst',
+      effectId: 'status-inflict-stun',
     };
 
     const firstUpdate = (runtime as any).syncPlayerBattleHealthToProgress({
@@ -121,15 +123,35 @@ describe('GameRuntime status-condition persistence', () => {
     const collection: PlayerCritterCollectionEntry[] = [
       createProgressEntry(critterA, {
         currentHp: 14,
-        persistentStatus: { kind: 'toxic', potencyBase: 0.05, potencyPerTurn: 0.05, turnCount: 1, source: 'Spore' },
+        persistentStatus: {
+          kind: 'toxic',
+          potencyBase: 0.05,
+          potencyPerTurn: 0.05,
+          turnCount: 1,
+          source: 'Spore',
+          effectId: 'status-inflict-toxic',
+        },
       }),
       createProgressEntry(critterB, {
         currentHp: 8,
-        persistentStatus: { kind: 'stun', stunFailChance: 0.4, stunSlowdown: 0.5, source: 'Shock' },
+        persistentStatus: {
+          kind: 'stun',
+          stunFailChance: 0.4,
+          stunSlowdown: 0.5,
+          source: 'Shock',
+          effectId: 'status-inflict-stun',
+        },
       }),
       createProgressEntry(critterC, {
         currentHp: 11,
-        persistentStatus: { kind: 'toxic', potencyBase: 0.1, potencyPerTurn: 0.1, turnCount: 3, source: 'Venom' },
+        persistentStatus: {
+          kind: 'toxic',
+          potencyBase: 0.1,
+          potencyPerTurn: 0.1,
+          turnCount: 3,
+          source: 'Venom',
+          effectId: 'status-inflict-toxic',
+        },
       }),
     ];
     const runtime = createRuntimeHarness(

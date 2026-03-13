@@ -131,6 +131,7 @@ export interface ResolveAppliedSkillAttachmentsResult {
   defenderEffectAttachments: SkillEffectAttachment[];
   recoilAttachments: SkillEffectAttachment[];
   persistentHealAttachments: SkillEffectAttachment[];
+  attackerCritChanceBuffAttachments: SkillEffectAttachment[];
   attackerCritChanceBuffPercent: number;
 }
 
@@ -142,6 +143,7 @@ export function resolveAppliedSkillAttachments(
   const defenderEffectAttachments: SkillEffectAttachment[] = [];
   const recoilAttachments: SkillEffectAttachment[] = [];
   const persistentHealAttachments: SkillEffectAttachment[] = [];
+  const attackerCritChanceBuffAttachments: SkillEffectAttachment[] = [];
   let attackerCritChanceBuffPercent = 0;
 
   for (const attachment of attachments) {
@@ -170,6 +172,7 @@ export function resolveAppliedSkillAttachments(
     }
     if (effect.effect_type === 'crit_buff') {
       const defaultBuff = typeof effect.buffPercent === 'number' ? effect.buffPercent : 0.1;
+      attackerCritChanceBuffAttachments.push(attachment);
       attackerCritChanceBuffPercent += clamp(attachment.buffPercent ?? defaultBuff, 0, 1);
       continue;
     }
@@ -187,6 +190,7 @@ export function resolveAppliedSkillAttachments(
     defenderEffectAttachments,
     recoilAttachments,
     persistentHealAttachments,
+    attackerCritChanceBuffAttachments,
     attackerCritChanceBuffPercent,
   };
 }

@@ -251,12 +251,14 @@ export function sanitizePlayerCritterProgress(
       ? clampInt(existing.level, 1, maxKnownLevel, 1)
       : clampInt(existing.level, 0, maxKnownLevel, 0);
     const unlocked = safeUnlocked && level > 0;
+    const seen = existing.seen === true || unlocked;
     const derived = computeCritterDerivedProgress(critter, level);
     const maxHp = Math.max(1, derived.effectiveStats.hp);
     const currentHp = unlocked ? clampInt(existing.currentHp, 0, maxHp, maxHp) : 0;
     return {
       critterId: critter.id,
       unlocked,
+      seen,
       unlockedAt: existing.unlockedAt,
       unlockSource: existing.unlockSource,
       level,
@@ -324,6 +326,7 @@ function createDefaultCollectionEntry(critter: CritterDefinition): PlayerCritter
   return {
     critterId: critter.id,
     unlocked: false,
+    seen: false,
     unlockedAt: null,
     unlockSource: null,
     level: 0,
@@ -361,6 +364,14 @@ function sanitizeCollectionEntry(
   if (critterId === null || !critterById[critterId]) {
     return null;
   }
+  const unlocked = Boolean(record.unlocked);
+  const seenRaw = (record as Record<string, unknown>).seen;
+  const seen =
+    typeof seenRaw === 'boolean'
+      ? seenRaw
+      : unlocked
+        ? true
+        : false;
 
   const missionProgressRecord =
     record.missionProgress && typeof record.missionProgress === 'object' && !Array.isArray(record.missionProgress)
@@ -385,7 +396,8 @@ function sanitizeCollectionEntry(
 
   return {
     critterId,
-    unlocked: Boolean(record.unlocked),
+    unlocked,
+    seen,
     unlockedAt: sanitizeIsoTimestamp(record.unlockedAt),
     unlockSource:
       typeof record.unlockSource === 'string' && record.unlockSource.trim() ? record.unlockSource.trim() : null,

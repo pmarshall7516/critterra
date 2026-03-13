@@ -57,6 +57,7 @@ function createCollectionEntry(
   return {
     critterId: critter.id,
     unlocked: input.unlocked,
+    seen: input.unlocked,
     unlockedAt: input.unlocked ? new Date().toISOString() : null,
     unlockSource: input.unlocked ? 'missions' : null,
     level: input.level,

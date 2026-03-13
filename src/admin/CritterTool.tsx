@@ -13,10 +13,11 @@ import {
   type CritterMissionType,
 } from '@/game/critters/types';
 import type { GameItemDefinition } from '@/game/items/types';
-import { getSkillValueDisplayNumber, type SkillHealMode } from '@/game/skills/types';
+import { getSkillElementColor, getSkillValueDisplayNumber, type SkillDefinition } from '@/game/skills/types';
 import { apiFetchJson } from '@/shared/apiClient';
 import { loadAdminFlags, type AdminFlagEntry } from '@/admin/flagsApi';
 import { loadAdminGameElements } from '@/admin/elementsApi';
+import { AdminSkillCellContent, buildAdminSkillTooltip, type AdminSkillEffectOption } from '@/admin/adminSkillPresentation';
 
 interface CritterListResponse {
   ok: boolean;
@@ -63,97 +64,16 @@ interface EquipmentEffectsListResponse {
   error?: string;
 }
 
-interface SkillOption {
-  id: string;
-  name: string;
-  type: 'damage' | 'support';
-  damage?: number;
-  healMode?: SkillHealMode;
-  healValue?: number;
-  effectDescriptions?: string[];
-}
-
 interface EffectTemplateOption {
   id: string;
   name: string;
   source: 'skill' | 'equipment';
 }
 
-function formatImmediateSkillHealTooltip(opt: SkillOption): string | null {
-  if (!opt.healMode || opt.healValue == null) {
-    return null;
-  }
-  if (opt.healMode === 'flat') {
-    return `Heals: ${Math.max(1, Math.floor(opt.healValue))} HP after use`;
-  }
-  if (opt.healMode === 'percent_damage') {
-    return `Heals: ${Math.round(opt.healValue * 100)}% of damage dealt`;
-  }
-  return `Heals: ${Math.round(opt.healValue * 100)}% HP after use`;
-}
-
-function formatSkillOptionLabel(opt: SkillOption): string {
-  const letter = opt.type === 'damage' ? 'D' : 'S';
-  const value = getSkillValueDisplayNumber(opt);
-  return value != null ? `${opt.name} - ${letter} - ${value}` : `${opt.name} - ${letter}`;
-}
-
-function buildSkillOptionTooltip(opt: SkillOption): string {
-  const lines = [opt.name, opt.type === 'damage' ? 'Damage' : 'Support'];
-  if (opt.type === 'damage' && opt.damage != null) {
-    lines.push(`Power: ${opt.damage}`);
-  }
-  const immediateHealLine = formatImmediateSkillHealTooltip(opt);
-  if (immediateHealLine) {
-    lines.push(immediateHealLine);
-  }
-  for (const description of opt.effectDescriptions ?? []) {
-    const trimmed = description.trim();
-    if (!trimmed) {
-      continue;
-    }
-    lines.push(`Effect: ${trimmed}`);
-  }
-  return lines.join('\n');
-}
-
-function formatSkillAttachmentDescription(
-  effect: {
-    effect_type: string;
-    description?: string;
-    effect_name: string;
-    buffPercent?: number;
-  },
-  attachment: {
-    buffPercent?: number;
-    recoilPercent?: number;
-    recoilMode?: string;
-    persistentHealMode?: 'flat' | 'percent_max_hp';
-    persistentHealValue?: number;
-    persistentHealDurationTurns?: number;
-  },
-): string {
-  const description = typeof effect.description === 'string' ? effect.description.trim() : '';
-  if (!description) {
-    return effect.effect_name;
-  }
-  const buffValue = Math.round(((attachment.buffPercent ?? effect.buffPercent ?? 0.1) ?? 0) * 100);
-  const recoilValue = Math.round(((attachment.recoilPercent ?? 0.1) ?? 0) * 100);
-  const recoilMode = attachment.recoilMode === 'percent_damage_dealt' ? 'damage dealt' : 'max HP';
-  const persistentMode = attachment.persistentHealMode === 'flat' ? 'HP' : 'max HP';
-  const persistentValue = attachment.persistentHealMode === 'flat'
-    ? Math.max(1, Math.floor(attachment.persistentHealValue ?? 1))
-    : Math.round((attachment.persistentHealValue ?? 0.05) * 100);
-  const turns = Math.max(1, Math.floor(attachment.persistentHealDurationTurns ?? 1));
-  return description
-    .replace(/<buff>/g, String(buffValue))
-    .replace(/<recoil>/g, String(recoilValue))
-    .replace(/<mode>/g, recoilMode)
-    .replace(/<heal>/g, String(persistentValue))
-    .replace(/<heal_value>/g, String(persistentValue))
-    .replace(/<heal_mode>/g, persistentMode)
-    .replace(/<turns>/g, String(turns))
-    .replace(/<duration>/g, String(turns));
+function formatSkillOptionLabel(skill: SkillDefinition): string {
+  const letter = skill.type === 'damage' ? 'D' : 'S';
+  const value = getSkillValueDisplayNumber(skill);
+  return value != null ? `${skill.skill_name} - ${letter} - ${value}` : `${skill.skill_name} - ${letter}`;
 }
 
 interface MissionDraft {
@@ -221,6 +141,28 @@ interface CritterDraft {
 
 const DEFAULT_CRITTER_SPRITE_BUCKET = 'critter-sprites';
 
+const SUPABASE_PUBLIC_MARKER = '/storage/v1/object/public/';
+
+function buildIconsBucketRootFromSupabaseUrl(supabaseAssetUrl: string): string | null {
+  if (!supabaseAssetUrl) return null;
+  try {
+    const url = new URL(supabaseAssetUrl);
+    const markerIndex = url.pathname.indexOf(SUPABASE_PUBLIC_MARKER);
+    if (markerIndex < 0) return null;
+    url.pathname = url.pathname.substring(0, markerIndex) + SUPABASE_PUBLIC_MARKER + 'icons';
+    url.search = '';
+    url.hash = '';
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return null;
+  }
+}
+
+function buildElementLogoUrlFromIconsBucket(element: string, iconsBucketRoot: string | null): string | null {
+  if (!iconsBucketRoot) return null;
+  return `${iconsBucketRoot}/${encodeURIComponent(`${element}-element.png`)}`;
+}
+
 export function CritterTool() {
   const [critters, setCritters] = useState<CritterDefinition[]>([]);
   const [gameElements, setGameElements] = useState<string[]>(() => [...CRITTER_ELEMENTS]);
@@ -243,12 +185,14 @@ export function CritterTool() {
   const [isLoadingSpriteEntries, setIsLoadingSpriteEntries] = useState(false);
   const [selectedSpritePath, setSelectedSpritePath] = useState('');
   const [pendingRemovalIds, setPendingRemovalIds] = useState<Set<number>>(new Set());
-  const [skillList, setSkillList] = useState<SkillOption[]>([]);
+  const [skillList, setSkillList] = useState<SkillDefinition[]>([]);
+  const [skillEffectList, setSkillEffectList] = useState<AdminSkillEffectOption[]>([]);
   const [skillSearchInputs, setSkillSearchInputs] = useState<Record<string, string>>({});
   const [skillDropdownOpen, setSkillDropdownOpen] = useState<Record<string, boolean>>({});
   const skillSearchInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const [effectTemplates, setEffectTemplates] = useState<EffectTemplateOption[]>([]);
   const [missionEffectTemplateSearchInput, setMissionEffectTemplateSearchInput] = useState('');
+  const [elementColorById, setElementColorById] = useState<Record<string, string>>({});
 
   const sortedCritters = useMemo(() => [...critters].sort((left, right) => left.id - right.id), [critters]);
   const filteredCritters = useMemo(() => {
@@ -285,6 +229,36 @@ export function CritterTool() {
       (entry) => entry.name.toLowerCase().includes(query) || entry.path.toLowerCase().includes(query),
     );
   }, [spriteEntries, spriteSearchInput]);
+
+  const iconsBucketRoot = useMemo(() => {
+    for (const c of critters) {
+      if (c.spriteUrl) {
+        const root = buildIconsBucketRootFromSupabaseUrl(c.spriteUrl);
+        if (root) return root;
+      }
+    }
+    for (const effect of skillEffectList) {
+      if (effect.iconUrl) {
+        const root = buildIconsBucketRootFromSupabaseUrl(effect.iconUrl);
+        if (root) return root;
+      }
+    }
+    if (draft.spriteUrl) {
+      const root = buildIconsBucketRootFromSupabaseUrl(draft.spriteUrl);
+      if (root) return root;
+    }
+    try {
+      const envUrl = (typeof import.meta !== 'undefined' && (import.meta as { env?: { VITE_SUPABASE_URL?: string } }).env?.VITE_SUPABASE_URL) as string | undefined;
+      const base = typeof envUrl === 'string' && envUrl.trim() ? envUrl.trim().replace(/\/+$/, '') : null;
+      if (base && base.startsWith('http')) {
+        return `${base}/storage/v1/object/public/icons`;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  }, [critters, draft.spriteUrl, skillEffectList]);
+
   const knownFlagIds = useMemo(
     () =>
       [...new Set(flagEntries.map((entry) => entry.flagId.trim()).filter((entry) => entry.length > 0))].sort((left, right) =>
@@ -417,13 +391,38 @@ export function CritterTool() {
 
   const loadSkills = async () => {
     try {
-      const result = await apiFetchJson<SkillsListResponse>('/api/admin/skills/list');
+      const [result, loadedElements] = await Promise.all([
+        apiFetchJson<SkillsListResponse>('/api/admin/skills/list'),
+        loadAdminGameElements(),
+      ]);
       if (!result.ok) {
         throw new Error(result.error ?? result.data?.error ?? 'Unable to load skills.');
+      }
+      const allowedElementIds = loadedElements.length > 0
+        ? loadedElements.map((entry) => entry.element_id)
+        : gameElements;
+      if (loadedElements.length > 0) {
+        setGameElements(allowedElementIds);
+        setElementColorById(
+          Object.fromEntries(
+            loadedElements
+              .filter((entry) => entry.color_hex.trim().length > 0)
+              .map((entry) => [entry.element_id, entry.color_hex.trim()] as const),
+          ),
+        );
       }
       const rawSkills = result.data?.critterSkills;
       const rawEffects = result.data?.skillEffects;
       const skillEffects = sanitizeSkillEffectLibrary(rawEffects);
+      const skillEffectOptions: AdminSkillEffectOption[] = skillEffects.map((effect) => ({
+        id: effect.effect_id,
+        name: effect.effect_name ?? effect.effect_id,
+        effectType: effect.effect_type,
+        description: effect.description,
+        buffPercent: effect.buffPercent,
+        iconUrl: effect.iconUrl,
+      }));
+      setSkillEffectList(skillEffectOptions);
       const knownEffectIds = new Set(skillEffects.map((e) => e.effect_id));
       const effectTypeById = new Map(skillEffects.map((e) => [e.effect_id, e.effect_type] as const));
       const legacyEffectBuffPercentById = new Map(
@@ -431,45 +430,27 @@ export function CritterTool() {
           .filter((e) => typeof e.buffPercent === 'number' && Number.isFinite(e.buffPercent))
           .map((e) => [e.effect_id, e.buffPercent as number]),
       );
-      const list: SkillOption[] = sanitizeSkillLibrary(
+      const list = sanitizeSkillLibrary(
         rawSkills,
         knownEffectIds,
         legacyEffectBuffPercentById,
         effectTypeById,
+        allowedElementIds,
       )
-        .map((skill) => {
-          const effectDescriptions = (skill.effectAttachments ?? [])
-            .map((attachment) => {
-              const effect = skillEffects.find((entry) => entry.effect_id === attachment.effectId);
-              if (!effect) {
-                return attachment.effectId;
-              }
-              return formatSkillAttachmentDescription(effect, attachment);
-            })
-            .filter((entry) => entry.trim().length > 0);
-          return {
-            id: skill.skill_id,
-            name: skill.skill_name,
-            type: skill.type,
-            damage: skill.damage,
-            healMode: skill.healMode,
-            healValue: skill.healValue,
-            effectDescriptions,
-          };
-        })
-        .filter((x) => x.id.length > 0);
+        .filter((skill) => skill.skill_id.length > 0);
       setSkillList(list);
-      const skillEffectOptions: EffectTemplateOption[] = skillEffects.map((effect) => ({
+      const skillEffectTemplateOptions: EffectTemplateOption[] = skillEffects.map((effect) => ({
         id: effect.effect_id,
         name: effect.effect_name ?? effect.effect_id,
         source: 'skill',
       }));
       setEffectTemplates((prev) => {
         const withoutSkill = prev.filter((entry) => entry.source !== 'skill');
-        return [...withoutSkill, ...skillEffectOptions];
+        return [...withoutSkill, ...skillEffectTemplateOptions];
       });
     } catch (err) {
       setSkillList([]);
+      setSkillEffectList([]);
       setStatus(
         err instanceof Error ? err.message : 'Skills could not be loaded. Check database connection and try Reload.',
       );
@@ -508,6 +489,13 @@ export function CritterTool() {
       const loaded = await loadAdminGameElements();
       if (loaded.length > 0) {
         setGameElements(loaded.map((e) => e.element_id));
+        setElementColorById(
+          Object.fromEntries(
+            loaded
+              .filter((entry) => entry.color_hex.trim().length > 0)
+              .map((entry) => [entry.element_id, entry.color_hex.trim()] as const),
+          ),
+        );
       }
     })();
     // Run once on mount with default critter bucket.
@@ -739,25 +727,52 @@ export function CritterTool() {
           {filteredCritters.map((critter) => {
             const isSelected = selectedCritterId === critter.id;
             const isPendingRemoval = pendingRemovalIds.has(critter.id);
+            const elementLogoUrl = buildElementLogoUrlFromIconsBucket(critter.element, iconsBucketRoot);
             return (
               <article
                 key={`critter-${critter.id}`}
                 className={`critter-db-card ${isSelected ? 'is-selected' : ''} ${isPendingRemoval ? 'is-pending-remove' : ''}`}
               >
                 <button type="button" className="critter-db-card__select" onClick={() => selectCritter(critter)}>
-                  <div className="critter-db-card__header">
-                    <span className="critter-db-card__id">#{critter.id}</span>
-                    <span className="critter-db-card__name">{critter.name}</span>
-                  </div>
-                  <p className="critter-db-card__meta">
-                    {critter.element}
-                    {isPendingRemoval ? ' | pending remove' : ''}
-                  </p>
-                  <div className="critter-db-card__stats">
-                    <span>HP {critter.baseStats.hp}</span>
-                    <span>ATK {critter.baseStats.attack}</span>
-                    <span>DEF {critter.baseStats.defense}</span>
-                    <span>SPD {critter.baseStats.speed}</span>
+                  {critter.spriteUrl ? (
+                    <img
+                      src={critter.spriteUrl}
+                      alt=""
+                      className="critter-db-card__sprite"
+                      loading="lazy"
+                      decoding="async"
+                    />
+                  ) : (
+                    <span className="critter-db-card__sprite critter-db-card__sprite--empty" aria-hidden />
+                  )}
+                  <div className="critter-db-card__body">
+                    <div className="critter-db-card__header">
+                      <span className="critter-db-card__id">#{critter.id}</span>
+                      <span className="critter-db-card__name">{critter.name}</span>
+                      {elementLogoUrl ? (
+                        <img
+                          src={elementLogoUrl}
+                          alt={critter.element}
+                          className="critter-db-card__element-logo"
+                          loading="lazy"
+                          decoding="async"
+                        />
+                      ) : (
+                        <span className="critter-db-card__element-logo critter-db-card__element-logo--fallback" title={critter.element}>
+                          {critter.element.slice(0, 1)}
+                        </span>
+                      )}
+                    </div>
+                    <p className="critter-db-card__meta">
+                      {critter.element}
+                      {isPendingRemoval ? ' | pending remove' : ''}
+                    </p>
+                    <div className="critter-db-card__stats">
+                      <span>HP {critter.baseStats.hp}</span>
+                      <span>ATK {critter.baseStats.attack}</span>
+                      <span>DEF {critter.baseStats.defense}</span>
+                      <span>SPD {critter.baseStats.speed}</span>
+                    </div>
                   </div>
                 </button>
                 <button
@@ -876,6 +891,15 @@ export function CritterTool() {
 
         <section className="critter-editor-group">
           <h4>Collection Sprite</h4>
+          {draft.spriteUrl ? (
+            <div className="collection-sprite-preview" title="Current sprite">
+              <img src={draft.spriteUrl} alt="" className="collection-sprite-preview__img" loading="lazy" decoding="async" />
+            </div>
+          ) : (
+            <div className="collection-sprite-preview collection-sprite-preview--empty" aria-hidden>
+              <span className="collection-sprite-preview__placeholder">No sprite</span>
+            </div>
+          )}
           <div className="admin-grid-2">
             <label>
               Sprite URL
@@ -1160,27 +1184,26 @@ export function CritterTool() {
                     const isOpen = skillDropdownOpen[levelKey] ?? false;
                     const selectedIds = levelRow.skillUnlockIdsInput.split(',').map((x) => x.trim()).filter(Boolean);
                     const filteredOptions = skillList
-                      .filter((s) => !selectedIds.includes(s.id))
+                      .filter((s) => !selectedIds.includes(s.skill_id))
                       .filter(
                         (s) =>
                           !searchInput.trim() ||
-                          s.id.toLowerCase().includes(searchInput.trim().toLowerCase()) ||
-                          s.name.toLowerCase().includes(searchInput.trim().toLowerCase()),
+                          s.skill_id.toLowerCase().includes(searchInput.trim().toLowerCase()) ||
+                          s.skill_name.toLowerCase().includes(searchInput.trim().toLowerCase()),
                       )
-                      .sort((a, b) => a.id.localeCompare(b.id))
-                      .slice(0, 12);
+                      .sort((a, b) => a.skill_id.localeCompare(b.skill_id));
                     return (
                       <div
                         className="admin-effect-picker"
                         onClick={() => skillSearchInputRefs.current[levelKey]?.focus()}
                       >
                         {selectedIds.map((id) => {
-                          const opt = skillList.find((s) => s.id === id);
+                          const opt = skillList.find((s) => s.skill_id === id);
                           return (
                             <span
                               key={id}
                               className="admin-effect-picker__chip"
-                              title={opt ? buildSkillOptionTooltip(opt) : undefined}
+                              title={opt ? buildAdminSkillTooltip(opt, skillEffectList) : undefined}
                             >
                               {opt ? formatSkillOptionLabel(opt) : id}
                               <button
@@ -1216,10 +1239,10 @@ export function CritterTool() {
                               const q = searchInput.trim().toLowerCase();
                               if (q) {
                                 const exact = skillList.find(
-                                  (x) => x.id.toLowerCase() === q || x.name.toLowerCase() === q,
+                                  (x) => x.skill_id.toLowerCase() === q || x.skill_name.toLowerCase() === q,
                                 );
-                                if (exact && !selectedIds.includes(exact.id)) {
-                                  const next = [...selectedIds, exact.id].join(', ');
+                                if (exact && !selectedIds.includes(exact.skill_id)) {
+                                  const next = [...selectedIds, exact.skill_id].join(', ');
                                   updateLevelRow(levelIndex, (entry) => ({ ...entry, skillUnlockIdsInput: next }));
                                 }
                                 setSkillSearchInputs((prev) => ({ ...prev, [levelKey]: '' }));
@@ -1247,18 +1270,19 @@ export function CritterTool() {
                             ) : (
                               filteredOptions.map((opt) => (
                                 <button
-                                  key={opt.id}
+                                  key={opt.skill_id}
                                   type="button"
-                                  className="admin-effect-picker__dropdown-item"
-                                  title={buildSkillOptionTooltip(opt)}
+                                  className="admin-effect-picker__dropdown-item admin-effect-picker__dropdown-item--skill admin-skill-list-item admin-skill-list-item--colored"
+                                  style={{ ['--admin-skill-bg' as string]: getSkillElementColor(opt.element, elementColorById[opt.element]) }}
+                                  title={buildAdminSkillTooltip(opt, skillEffectList)}
                                   onMouseDown={() => {
-                                    const next = [...selectedIds, opt.id].join(', ');
+                                    const next = [...selectedIds, opt.skill_id].join(', ');
                                     updateLevelRow(levelIndex, (entry) => ({ ...entry, skillUnlockIdsInput: next }));
                                     setSkillSearchInputs((prev) => ({ ...prev, [levelKey]: '' }));
                                     setSkillDropdownOpen((prev) => ({ ...prev, [levelKey]: false }));
                                   }}
                                 >
-                                  {formatSkillOptionLabel(opt)}
+                                  <AdminSkillCellContent skill={opt} effectList={skillEffectList} iconsBucketRoot={iconsBucketRoot} />
                                 </button>
                               ))
                             )}
@@ -1456,7 +1480,7 @@ export function CritterTool() {
                           {(mission.useSkillMode ?? 'any') === 'specific' && (() => {
                             const pool = getUseSkillPoolForLevel(draft.levels, levelIndex);
                             const poolSet = new Set(pool);
-                            const skillOptions = skillList.filter((s) => poolSet.has(s.id));
+                            const skillOptions = skillList.filter((s) => poolSet.has(s.skill_id));
                             return (
                               <div className="critter-mission-row__wide critter-mission-filter-panel">
                                 <p>Skill(s) (unlocked below this level)</p>
@@ -1465,10 +1489,10 @@ export function CritterTool() {
                                 ) : (
                                   <div className="critter-mission-item-list">
                                     {skillOptions.map((skill) => {
-                                      const isSelected = (mission.useSkillIds ?? []).includes(skill.id);
+                                      const isSelected = (mission.useSkillIds ?? []).includes(skill.skill_id);
                                       return (
                                         <label
-                                          key={`use-skill-${skill.id}`}
+                                          key={`use-skill-${skill.skill_id}`}
                                           className="critter-mission-item-option"
                                         >
                                           <input
@@ -1477,12 +1501,12 @@ export function CritterTool() {
                                             onChange={() =>
                                               updateMissionRow(levelIndex, missionIndex, (entry) => ({
                                                 ...entry,
-                                                useSkillIds: toggleTokenInList(entry.useSkillIds ?? [], skill.id),
+                                                useSkillIds: toggleTokenInList(entry.useSkillIds ?? [], skill.skill_id),
                                               }))
                                             }
                                           />
-                                          <span>{skill.name}</span>
-                                          <span className="critter-mission-item-meta">({skill.id})</span>
+                                          <span>{skill.skill_name}</span>
+                                          <span className="critter-mission-item-meta">({skill.skill_id})</span>
                                         </label>
                                       );
                                     })}

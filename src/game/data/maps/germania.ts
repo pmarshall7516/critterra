@@ -27,8 +27,8 @@ export const germaniaMap = createMap({
         '',
         '',
         '',
-        '',
-        ''
+        '',
+        ''
       ],
       rotations: [
         '3202000012301230123012301',
@@ -51,7 +51,7 @@ export const germaniaMap = createMap({
         '0000100000000000000123012',
         '0021212133112220030230123',
         '0000000000000000000301230',
-        '3210321012301230123012301'
+        '3210321010000230123012301'
       ],
       collisionEdges: [
         '000ffffffffffffffffffffff',
@@ -74,7 +74,7 @@ export const germaniaMap = createMap({
         '00000000000000000000000ff',
         '00000000000000000000000ff',
         '00000000000000000000000ff',
-        'fffffffffffffffffffffffff'
+        'fffffffff0000ffffffffffff'
       ]
     },
     {
@@ -101,7 +101,7 @@ export const germaniaMap = createMap({
         '.......................',
         '.......................',
         '.......................',
-        ''
+        '....'
       ],
       collision: false
     },
@@ -156,8 +156,8 @@ export const germaniaMap = createMap({
         '.....................',
         '.......................',
         '.......................',
-        '',
-        ''
+        '....',
+        '....'
       ]
     },
     {
@@ -350,29 +350,17 @@ export const germaniaMap = createMap({
     },
     {
       id: 'germania_warp_5',
-      from: {
-        x: 24,
-        y: 4
-      },
-      fromPositions: [
-        {
-          x: 24,
-          y: 4
-        },
-        {
-          x: 24,
-          y: 5
-        },
-        {
-          x: 24,
-          y: 6
-        }
-      ],
-      toMapId: 'don-bram-den',
       to: {
         x: 1,
         y: 3
       },
+      from: {
+        x: 24,
+        y: 4
+      },
+      label: 'To Don Bram\'s Den',
+      toMapId: 'don-bram-den',
+      toFacing: 'right',
       toPositions: [
         {
           x: 1,
@@ -387,10 +375,74 @@ export const germaniaMap = createMap({
           y: 5
         }
       ],
-      requireInteract: false,
+      fromPositions: [
+        {
+          x: 24,
+          y: 4
+        },
+        {
+          x: 24,
+          y: 5
+        },
+        {
+          x: 24,
+          y: 6
+        }
+      ],
       requiredFacing: 'right',
-      label: 'To Don Bram\'s Den',
-      toFacing: 'right'
+      requireInteract: false
+    },
+    {
+      id: 'germania_warp_6',
+      to: {
+        x: 3,
+        y: 1
+      },
+      from: {
+        x: 9,
+        y: 20
+      },
+      label: 'To Critterway Route',
+      toMapId: 'critterway-route',
+      toFacing: 'down',
+      toPositions: [
+        {
+          x: 3,
+          y: 1
+        },
+        {
+          x: 4,
+          y: 1
+        },
+        {
+          x: 5,
+          y: 1
+        },
+        {
+          x: 6,
+          y: 1
+        }
+      ],
+      fromPositions: [
+        {
+          x: 9,
+          y: 20
+        },
+        {
+          x: 10,
+          y: 20
+        },
+        {
+          x: 11,
+          y: 20
+        },
+        {
+          x: 12,
+          y: 20
+        }
+      ],
+      requiredFacing: 'down',
+      requireInteract: false
     }
   ],
   encounterGroups: [

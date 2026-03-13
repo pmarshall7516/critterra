@@ -7,6 +7,7 @@ export interface ToxicPersistentStatusCondition {
   potencyPerTurn: number;
   turnCount: number;
   source?: string;
+  effectId?: string;
 }
 
 export interface StunPersistentStatusCondition {
@@ -15,6 +16,7 @@ export interface StunPersistentStatusCondition {
   /** Portion of speed removed while stunned (0.5 = speed halved). */
   stunSlowdown: number;
   source?: string;
+  effectId?: string;
 }
 
 export type PersistentStatusCondition =
@@ -24,6 +26,7 @@ export type PersistentStatusCondition =
 export interface FlinchStatusCondition {
   turnNumber: number;
   source: string;
+  effectId?: string;
 }
 
 export interface StatusConditionPresentation {
@@ -65,6 +68,7 @@ export function sanitizePersistentStatusCondition(raw: unknown): PersistentStatu
   const record = raw as Record<string, unknown>;
   const kindRaw = typeof record.kind === 'string' ? record.kind.trim().toLowerCase() : '';
   const source = sanitizeStatusSource(record.source);
+  const effectId = sanitizeStatusEffectId(record.effectId ?? record.effect_id);
   if (kindRaw === 'toxic') {
     return {
       kind: 'toxic',
@@ -72,6 +76,7 @@ export function sanitizePersistentStatusCondition(raw: unknown): PersistentStatu
       potencyPerTurn: clampUnitInterval(record.potencyPerTurn ?? record.potency_per_turn, 0.05),
       turnCount: clampNonNegativeInt(record.turnCount ?? record.turn_count, 0, 999999),
       ...(source && { source }),
+      ...(effectId && { effectId }),
     };
   }
   if (kindRaw === 'stun') {
@@ -80,9 +85,15 @@ export function sanitizePersistentStatusCondition(raw: unknown): PersistentStatu
       stunFailChance: clampUnitInterval(record.stunFailChance ?? record.stun_fail_chance, 0.25),
       stunSlowdown: clampUnitInterval(record.stunSlowdown ?? record.stun_slowdown, 0.5),
       ...(source && { source }),
+      ...(effectId && { effectId }),
     };
   }
   return null;
+}
+
+function sanitizeStatusEffectId(raw: unknown): string | undefined {
+  const effectId = typeof raw === 'string' ? raw.trim() : '';
+  return effectId.length > 0 ? effectId.slice(0, 120) : undefined;
 }
 
 export function sanitizeStatusSource(raw: unknown, fallback = ''): string {
@@ -106,6 +117,7 @@ export function clonePersistentStatusCondition(
       potencyPerTurn: clampUnitInterval(status.potencyPerTurn, 0.05),
       turnCount: clampNonNegativeInt(status.turnCount, 0, 999999),
       ...(status.source ? { source: sanitizeStatusSource(status.source) } : {}),
+      ...(status.effectId ? { effectId: sanitizeStatusEffectId(status.effectId) } : {}),
     };
   }
   return {
@@ -113,6 +125,7 @@ export function clonePersistentStatusCondition(
     stunFailChance: clampUnitInterval(status.stunFailChance, 0.25),
     stunSlowdown: clampUnitInterval(status.stunSlowdown, 0.5),
     ...(status.source ? { source: sanitizeStatusSource(status.source) } : {}),
+    ...(status.effectId ? { effectId: sanitizeStatusEffectId(status.effectId) } : {}),
   };
 }
 

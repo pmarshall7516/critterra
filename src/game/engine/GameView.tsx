@@ -1906,11 +1906,13 @@ function CritterCard({
   const elementLogoUrl = buildElementLogoUrlFromIconsBucket(entry.element, iconsBucketRoot) ?? buildElementLogoUrl(entry.element, entry.spriteUrl, elementLogoBucketRoot);
   const safeMaxLevel = Math.max(1, entry.maxLevel);
   const safeLevel = Math.max(0, Math.min(entry.level, safeMaxLevel));
-  const levelProgressPercent = entry.unlocked
+  const isUnlocked = entry.unlocked;
+  const isSeen = entry.seen;
+  const levelProgressPercent = isUnlocked
     ? Math.max(0, Math.min(100, Math.round((safeLevel / safeMaxLevel) * 100)))
     : 0;
-  const isMaxLevel = safeLevel >= safeMaxLevel && entry.unlocked;
-  const progressLabel = entry.unlocked ? `Level ${safeLevel}/${safeMaxLevel}` : 'LOCKED';
+  const isMaxLevel = safeLevel >= safeMaxLevel && isUnlocked;
+  const progressLabel = isUnlocked ? `Level ${safeLevel}/${safeMaxLevel}` : 'LOCKED';
   const levelFillStart = !entry.unlocked
     ? '#5a2620'
     : isMaxLevel
@@ -1986,9 +1988,13 @@ function CritterCard({
     event.stopPropagation();
     onSelectCritter(entry.critterId);
   };
+  const spriteBucketRoot =
+    entry.spriteUrl && !isSeen ? extractSupabasePublicBucketRoot(entry.spriteUrl) : null;
+  const unseenSpriteUrl = !isSeen && spriteBucketRoot ? `${spriteBucketRoot}/unknown.png` : null;
+  const spriteUrlToShow = isSeen ? entry.spriteUrl : unseenSpriteUrl;
   return (
     <article
-      className={`collection-card ${entry.unlocked ? 'is-unlocked' : 'is-locked'} ${
+      className={`collection-card ${isUnlocked ? 'is-unlocked' : 'is-locked'} ${!isSeen ? 'is-unseen' : ''} ${
         canSelectCritter && !selectOnSpriteOnly ? 'collection-card--selectable' : ''
       } ${
         canSelectCritter && selectOnSpriteOnly ? 'collection-card--sprite-select-only' : ''
@@ -2010,8 +2016,9 @@ function CritterCard({
         ) : (
           <span className="collection-card__element-logo collection-card__element-logo--empty">-</span>
         )}
-        <span className="collection-card__id">#{entry.critterId}</span>
-        <span className="collection-card__name">{entry.name}</span>
+        <span className="collection-card__id-name">
+          {String(entry.critterId).padStart(3, '0')}   |   {isSeen ? entry.name : '???'}
+        </span>
         <button
           type="button"
           className={`collection-card__info-toggle ${showStatBreakdown ? 'is-active' : ''}`}
@@ -2024,15 +2031,24 @@ function CritterCard({
           i
         </button>
       </header>
-      {entry.spriteUrl ? (
-        <img
-          src={entry.spriteUrl}
-          alt={entry.name}
-          className={`collection-card__sprite ${canSelectCritter && selectOnSpriteOnly ? 'collection-card__sprite--clickable' : ''}`}
-          loading="lazy"
-          decoding="async"
-          onClick={canSelectCritter && selectOnSpriteOnly ? handleSpriteSelect : undefined}
-        />
+      {spriteUrlToShow ? (
+        <div className="collection-card__sprite-wrapper">
+          <img
+            src={spriteUrlToShow}
+            alt={entry.name}
+            className={`collection-card__sprite ${
+              canSelectCritter && selectOnSpriteOnly ? 'collection-card__sprite--clickable' : ''
+            }`}
+            loading="lazy"
+            decoding="async"
+            onClick={canSelectCritter && selectOnSpriteOnly ? handleSpriteSelect : undefined}
+          />
+          {!isSeen && (
+            <span className="collection-card__sprite-pill">
+              Unknown
+            </span>
+          )}
+        </div>
       ) : (
         <div
           className={`collection-card__sprite collection-card__sprite--missing ${
@@ -2040,19 +2056,19 @@ function CritterCard({
           }`}
           onClick={canSelectCritter && selectOnSpriteOnly ? handleSpriteSelect : undefined}
         >
-          No Sprite
+          {isSeen ? 'No Sprite' : 'Unknown'}
         </div>
       )}
       <div
         className={`collection-card__level-progress ${
-          entry.unlocked ? (isMaxLevel ? 'is-max' : 'is-growing') : 'is-locked'
+          isUnlocked ? (isMaxLevel ? 'is-max' : 'is-growing') : 'is-locked'
         }`}
         style={progressStyle}
       >
         <span className="collection-card__level-progress-fill" />
         <span className="collection-card__level-progress-label">{progressLabel}</span>
       </div>
-      {healthProgress && (
+      {healthProgress && isUnlocked && (
         <div className={`collection-card__health-progress is-${healthTier}`} style={healthStyle}>
           <span className="collection-card__health-progress-fill" />
           <span className="collection-card__health-progress-label">
@@ -2063,16 +2079,52 @@ function CritterCard({
       <section className="collection-card__stats">
         <h3>Stats</h3>
         <dl>
-          <div><dt>HP</dt><dd>{statOverride ? String(statOverride.hp) : formatStatValue(entry.baseStats.hp, entry.statBonus.hp, showStatBreakdown)}</dd></div>
-          <div><dt>ATK</dt><dd>{statOverride ? String(statOverride.attack) : formatStatValue(entry.baseStats.attack, entry.statBonus.attack, showStatBreakdown)}</dd></div>
-          <div><dt>DEF</dt><dd>{statOverride ? String(statOverride.defense) : formatStatValue(entry.baseStats.defense, entry.statBonus.defense, showStatBreakdown)}</dd></div>
-          <div><dt>SPD</dt><dd>{statOverride ? String(statOverride.speed) : formatStatValue(entry.baseStats.speed, entry.statBonus.speed, showStatBreakdown)}</dd></div>
+          <div>
+            <dt>HP</dt>
+            <dd>
+              {!isSeen
+                ? '???'
+                : statOverride
+                  ? String(statOverride.hp)
+                  : formatStatValue(entry.baseStats.hp, entry.statBonus.hp, showStatBreakdown)}
+            </dd>
+          </div>
+          <div>
+            <dt>ATK</dt>
+            <dd>
+              {!isSeen
+                ? '???'
+                : statOverride
+                  ? String(statOverride.attack)
+                  : formatStatValue(entry.baseStats.attack, entry.statBonus.attack, showStatBreakdown)}
+            </dd>
+          </div>
+          <div>
+            <dt>DEF</dt>
+            <dd>
+              {!isSeen
+                ? '???'
+                : statOverride
+                  ? String(statOverride.defense)
+                  : formatStatValue(entry.baseStats.defense, entry.statBonus.defense, showStatBreakdown)}
+            </dd>
+          </div>
+          <div>
+            <dt>SPD</dt>
+            <dd>
+              {!isSeen
+                ? '???'
+                : statOverride
+                  ? String(statOverride.speed)
+                  : formatStatValue(entry.baseStats.speed, entry.statBonus.speed, showStatBreakdown)}
+            </dd>
+          </div>
         </dl>
       </section>
       <section className="collection-card__skills">
         <h3>Skills</h3>
         <div className="collection-card__skill-grid">
-          {entry.unlocked
+          {isUnlocked
             ? equippedSlots.map((slot, index) => {
                 const color = slot ? (ELEMENT_SKILL_COLORS[slot.element] ?? undefined) : undefined;
                 const tooltip = slot ? buildSkillSlotTooltip(slot) : undefined;
@@ -2287,9 +2339,9 @@ function CritterCard({
           </ul>
         </section>
       )}
-      <section className="collection-card__missions">
+      <section className={`collection-card__missions ${!isSeen ? 'collection-card__missions--hidden' : ''}`}>
         <h3>Missions</h3>
-        {entry.activeRequirement ? (
+        {isSeen && entry.activeRequirement ? (
           <>
             <p className="collection-card__mission-summary">
               {entry.activeRequirement.completedMissionCount}/{entry.activeRequirement.requiredMissionCount} complete
@@ -2309,11 +2361,14 @@ function CritterCard({
               ))}
             </ul>
           </>
-        ) : (
+        ) : isSeen ? (
           <p className="collection-card__mission-summary">{isMaxLevel ? 'MAX LEVEL' : 'No mission requirements configured.'}</p>
+        ) : (
+          <p className="collection-card__mission-summary">See this critter in the world to reveal missions.</p>
         )}
       </section>
-      {((actionablePayMissions.length > 0 && onPayMission) ||
+      {isSeen &&
+        ((actionablePayMissions.length > 0 && onPayMission) ||
         (showLockedKnockoutTargetButton && onSetLockedKnockoutTarget) ||
         (showLockedKnockoutClearButton && onSetLockedKnockoutTarget) ||
         (showLockedDamageTargetButton && onSetLockedDamageTarget) ||
@@ -2870,11 +2925,7 @@ function formatBattleStatDisplay(value: number): string {
   if (!Number.isFinite(value)) {
     return '1';
   }
-  const rounded = Math.round(Math.max(1, value) * 100) / 100;
-  if (Math.abs(rounded - Math.round(rounded)) < 0.000_01) {
-    return String(Math.round(rounded));
-  }
-  return String(rounded);
+  return String(Math.max(1, Math.round(value)));
 }
 
 function BattleActivePanel({

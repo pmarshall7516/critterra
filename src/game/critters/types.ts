@@ -157,6 +157,8 @@ export interface PlayerCritterCollectionEntry {
   unlocked: boolean;
   unlockedAt: string | null;
   unlockSource: string | null;
+  /** Whether the player has seen this critter at least once in this save. */
+  seen?: boolean;
   level: number;
   currentHp: number;
   missionProgress: Record<string, number>;

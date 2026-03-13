@@ -749,6 +749,58 @@ describe('duel battle core - doubles and replacements', () => {
     expect(controller.state.opponent.team[1].currentHp).toBeLessThan(controller.state.opponent.team[1].maxHp);
   });
 
+  it('allows select-enemies skills to target up to the configured maximum', () => {
+    const volley: SkillDefinition = {
+      ...createSkill({ id: 'volley', name: 'Volley', damage: 22 }),
+      targetKind: 'select_enemies',
+      targetSelectCount: 2,
+    };
+    const chip = createSkill({ id: 'chip', name: 'Chip', damage: 10 });
+    const catalogs = createCatalogs({
+      critters: [
+        createCritter({ id: 101, name: 'P1', speed: 50, unlockedSkillIds: ['volley'] }),
+        createCritter({ id: 102, name: 'P2', speed: 40, unlockedSkillIds: ['chip'] }),
+        createCritter({ id: 103, name: 'O1', speed: 30, unlockedSkillIds: ['chip'] }),
+        createCritter({ id: 104, name: 'O2', speed: 20, unlockedSkillIds: ['chip'] }),
+      ],
+      skills: [volley, chip],
+    });
+    const controller = startBattle({
+      format: 'doubles',
+      playerSquad: createSquad('p', 'Player', [
+        createMember(101, ['volley', null, null, null]),
+        createMember(102, ['chip', null, null, null]),
+      ]),
+      opponentSquad: createSquad('o', 'Opponent', [
+        createMember(103, ['chip', null, null, null]),
+        createMember(104, ['chip', null, null, null]),
+      ]),
+      catalogs,
+      rngValues: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+    });
+
+    const legalVolleyTargets = controller
+      .listLegalActionsForActor('player', 0)
+      .filter((action): action is Extract<DuelAction, { kind: 'skill' }> => action.kind === 'skill' && action.skillSlotIndex === 0)
+      .map((action) => JSON.stringify(action.targetMemberIndices?.length ? action.targetMemberIndices : [action.targetMemberIndex]));
+    expect(legalVolleyTargets).toEqual(expect.arrayContaining(['[0]', '[1]', '[0,1]']));
+
+    submitTurn(
+      controller,
+      [
+        { kind: 'skill', actorMemberIndex: 0, skillSlotIndex: 0, targetMemberIndex: 0 },
+        { kind: 'guard', actorMemberIndex: 1 },
+      ],
+      [
+        { kind: 'guard', actorMemberIndex: 0 },
+        { kind: 'guard', actorMemberIndex: 1 },
+      ],
+    );
+
+    expect(controller.state.opponent.team[0].currentHp).toBeLessThan(controller.state.opponent.team[0].maxHp);
+    expect(controller.state.opponent.team[1].currentHp).toBe(controller.state.opponent.team[1].maxHp);
+  });
+
   it('auto-retargets doubles skills when the selected target faints earlier in turn order', () => {
     const burst = createSkill({ id: 'burst', name: 'Burst', priority: 1, damage: 450 });
     const chip = createSkill({ id: 'chip', name: 'Chip', priority: 1, damage: 30 });
@@ -951,8 +1003,8 @@ describe('duel battle core - doubles and replacements', () => {
         (entry) =>
           entry.turn === 1 &&
           entry.kind === 'heal' &&
-          entry.text.includes('Target restored') &&
-          entry.text.includes('end of turn.'),
+          entry.text.includes('Target was healed +') &&
+          entry.text.includes('Soak Mark.'),
       ),
     ).toBe(true);
 
@@ -1022,7 +1074,7 @@ describe('duel battle core - doubles and replacements', () => {
     expect(hero.persistentHeal).toBeNull();
     expect(
       controller.state.logs.some(
-        (entry) => entry.turn === 1 && entry.kind === 'heal' && entry.text.includes('Hero restored 3 HP at end of turn.'),
+        (entry) => entry.turn === 1 && entry.kind === 'heal' && entry.text.includes('Hero was healed +3 HP by Regen Charm.'),
       ),
     ).toBe(true);
 
@@ -1034,9 +1086,64 @@ describe('duel battle core - doubles and replacements', () => {
     expect(hero.currentHp).toBeGreaterThan(hpAfterTurnOne);
     expect(
       controller.state.logs.some(
-        (entry) => entry.turn === 2 && entry.kind === 'heal' && entry.text.includes('Hero restored'),
+        (entry) =>
+          entry.turn === 2 &&
+          entry.kind === 'heal' &&
+          entry.text.includes('Hero was healed +') &&
+          entry.text.includes('Regen Charm.'),
       ),
     ).toBe(true);
+  });
+
+  it('orders end-of-turn toxic and healing logs by effective speed', () => {
+    const guard = createSkill({ id: 'guard-skill', name: 'Guard Skill', damage: 1 });
+    const catalogs = createCatalogs({
+      critters: [
+        createCritter({ id: 201, name: 'Healer', hp: 40, speed: 20, unlockedSkillIds: ['guard-skill'] }),
+        createCritter({ id: 202, name: 'ToxicFast', hp: 40, speed: 60, unlockedSkillIds: ['guard-skill'] }),
+      ],
+      skills: [guard],
+    });
+    const controller = startBattle({
+      format: 'singles',
+      playerSquad: createSquad('p', 'Player', [createMember(201, ['guard-skill', null, null, null])]),
+      opponentSquad: createSquad('o', 'Opponent', [createMember(202, ['guard-skill', null, null, null])]),
+      catalogs,
+      rngValues: [0.5, 0.5, 0.5, 0.5],
+    });
+
+    controller.state.player.team[0].currentHp = 20;
+    controller.state.player.team[0].persistentHeal = {
+      effectId: 'persistent-heal',
+      sourceName: 'Aqua Ring',
+      mode: 'flat',
+      value: 3,
+      remainingTurns: 2,
+    };
+    controller.state.opponent.team[0].persistentStatus = {
+      kind: 'toxic',
+      potencyBase: 0.1,
+      potencyPerTurn: 0,
+      turnCount: 0,
+      source: 'Venom',
+      effectId: 'status-inflict-toxic',
+    };
+
+    submitTurn(
+      controller,
+      [{ kind: 'guard', actorMemberIndex: 0 }],
+      [{ kind: 'guard', actorMemberIndex: 0 }],
+    );
+
+    const toxicIndex = controller.state.logs.findIndex(
+      (entry) => entry.turn === 1 && entry.text.includes('ToxicFast took') && entry.text.includes('damage from Toxic'),
+    );
+    const healIndex = controller.state.logs.findIndex(
+      (entry) => entry.turn === 1 && entry.text === 'Healer was healed +3 HP by Aqua Ring.',
+    );
+    expect(toxicIndex).toBeGreaterThan(-1);
+    expect(healIndex).toBeGreaterThan(-1);
+    expect(toxicIndex).toBeLessThan(healIndex);
   });
 
   it('applies attachment-based equipment stat buffs and stacks same template IDs across equipped items', () => {
@@ -1163,6 +1270,65 @@ describe('duel battle core - doubles and replacements', () => {
     expect(baselineDamages).toHaveLength(2);
     expect(boostedDamages[0]).toBeGreaterThan(baselineDamages[0]);
     expect(boostedDamages[1]).toBeGreaterThan(baselineDamages[1]);
+  });
+
+  it('tracks support crit buffs until the next damaging action', () => {
+    const critBuffEffect: SkillEffectDefinition = {
+      effect_id: 'crit-buff',
+      effect_name: 'Crit Buff',
+      effect_type: 'crit_buff',
+      description: 'Raise crit chance',
+      iconUrl: 'https://example.com/crit-icon.png',
+    };
+    const decompress: SkillDefinition = {
+      skill_id: 'decompress',
+      skill_name: 'Decompress',
+      element: 'forge',
+      type: 'support',
+      priority: 1,
+      targetKind: 'target_self',
+      effectIds: ['crit-buff'],
+      effectAttachments: [{ effectId: 'crit-buff', procChance: 1, buffPercent: 0.7 }],
+    };
+    const strike = createSkill({ id: 'strike', name: 'Strike', damage: 40 });
+    const controller = startBattle({
+      format: 'singles',
+      playerSquad: createSquad('p', 'Player', [createMember(71, ['decompress', 'strike', null, null])]),
+      opponentSquad: createSquad('o', 'Opponent', [createMember(72, ['strike', null, null, null])]),
+      catalogs: createCatalogs({
+        critters: [
+          createCritter({ id: 71, name: 'Hero', attack: 50, speed: 70, unlockedSkillIds: ['decompress', 'strike'] }),
+          createCritter({ id: 72, name: 'Dummy', hp: 300, defense: 10, speed: 10, unlockedSkillIds: ['strike'] }),
+        ],
+        skills: [decompress, strike],
+        skillEffects: [critBuffEffect],
+      }),
+      rngValues: [0.5, 0.1, 0.5, 0.5, 0.5],
+    });
+
+    submitTurn(
+      controller,
+      [{ kind: 'skill', actorMemberIndex: 0, skillSlotIndex: 0, targetMemberIndex: 0 }],
+      [{ kind: 'skill', actorMemberIndex: 0, skillSlotIndex: 0, targetMemberIndex: 0 }],
+    );
+
+    const hero = controller.state.player.team[0];
+    expect(hero.pendingCritChanceBonus).toBeCloseTo(0.7);
+    expect(hero.activeEffectIds).toContain('crit-buff');
+    expect(hero.activeEffectSourceById['crit-buff']).toBe('Decompress');
+    expect(hero.activeEffectValueById['crit-buff']).toBeCloseTo(0.7);
+
+    submitTurn(
+      controller,
+      [{ kind: 'skill', actorMemberIndex: 0, skillSlotIndex: 1, targetMemberIndex: 0 }],
+      [{ kind: 'skill', actorMemberIndex: 0, skillSlotIndex: 0, targetMemberIndex: 0 }],
+    );
+
+    expect(hero.pendingCritChanceBonus).toBe(0);
+    expect(hero.activeEffectIds).not.toContain('crit-buff');
+    expect(
+      controller.state.logs.some((entry) => entry.turn === 2 && entry.text === 'It was a crit!'),
+    ).toBe(true);
   });
 
   it('requires replacement selection before next turn and supports draw on simultaneous all-faint via recoil', () => {

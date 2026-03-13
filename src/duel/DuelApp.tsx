@@ -1,6 +1,14 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { fetchDuelCatalogContent, fetchDuelSquads, createDuelSquad, updateDuelSquad, deleteDuelSquad } from '@/duel/api';
-import { createDuelBattleController, getRequiredLeadCount, getViableTargetsForSkill, getSkillTargetCount, buildElementMultiplierIndex, type DuelBattleController } from '@/duel/battleCore';
+import {
+  createDuelBattleController,
+  getRequiredLeadCount,
+  getViableTargetsForSkill,
+  getSkillTargetCount,
+  getSkillTargetSelectionRange,
+  buildElementMultiplierIndex,
+  type DuelBattleController,
+} from '@/duel/battleCore';
 import {
   buildDuelCatalogIndexes,
   toDuelDraftFromSavedSquad,
@@ -22,7 +30,7 @@ import {
 import type { SkillDefinition, SkillEffectDefinition } from '@/game/skills/types';
 import { ELEMENT_SKILL_COLORS, getSkillValueDisplayNumber } from '@/game/skills/types';
 import { MIN_BATTLE_STAT_MODIFIER } from '@/game/battle/damageAndEffects';
-import { STATUS_CONDITION_PRESENTATION } from '@/game/battle/statusConditions';
+import { STATUS_CONDITION_PRESENTATION, resolveStunSpeedMultiplier } from '@/game/battle/statusConditions';
 import { apiFetchJson } from '@/shared/apiClient';
 import { setAuthToken } from '@/shared/authStorage';
 
@@ -366,11 +374,7 @@ function formatBattleStatDisplay(value: number): string {
   if (!Number.isFinite(value)) {
     return '1';
   }
-  const rounded = Math.round(Math.max(1, value) * 100) / 100;
-  if (Math.abs(rounded - Math.round(rounded)) < 0.000_01) {
-    return String(Math.round(rounded));
-  }
-  return String(rounded);
+  return String(Math.max(1, Math.round(value)));
 }
 
 function summarizeStackedSkillEffectTotal(
@@ -416,15 +420,13 @@ function getDuelCritterEffectIconsAndTooltips(
   const skillEffectById = new Map(catalogs.skillEffects.map((e) => [e.effect_id, e] as const));
   const equipmentEffectById = new Map(catalogs.equipmentEffects.map((e) => [e.effect_id, e] as const));
   const equipmentInstancesById = groupEquipmentEffectInstancesById(critter.equipmentEffectInstances ?? []);
-  const equipmentIds = critter.equipmentEffectIds ?? [];
-  const activeIds = critter.activeEffectIds ?? [];
-  const seen = new Set<string>();
+  const equipmentIds = (critter.equipmentEffectIds ?? []).filter((id, index, values) => values.indexOf(id) === index);
+  const activeIds = (critter.activeEffectIds ?? []).filter((id, index, values) => values.indexOf(id) === index);
   const sourceById = { ...(critter.equipmentEffectSourceById ?? {}), ...(critter.activeEffectSourceById ?? {}) };
   const valueById = critter.activeEffectValueById ?? {};
-  for (const id of [...equipmentIds, ...activeIds]) {
+  for (const id of activeIds) {
     const normalized = id?.trim?.();
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
+    if (!normalized) continue;
     const sourceName = sourceById[normalized] ?? 'Unknown';
     const skillEffect = skillEffectById.get(normalized);
     if (skillEffect) {
@@ -448,8 +450,12 @@ function getDuelCritterEffectIconsAndTooltips(
         const resolvedSourceName = persistentState?.sourceName?.trim() || sourceName;
         tooltips.push(stackSummary ? `${label} (${resolvedSourceName})\n${stackSummary}` : `${label} (${resolvedSourceName})`);
       }
-      continue;
     }
+  }
+  for (const id of equipmentIds) {
+    const normalized = id?.trim?.();
+    if (!normalized) continue;
+    const sourceName = sourceById[normalized] ?? 'Unknown';
     const equipmentEffect = equipmentEffectById.get(normalized);
     if (equipmentEffect) {
       const url = equipmentEffect.iconUrl?.trim();
@@ -467,18 +473,28 @@ function getDuelCritterEffectIconsAndTooltips(
     const presentation = STATUS_CONDITION_PRESENTATION[critter.persistentStatus.kind];
     if (presentation) {
       const source = (critter.persistentStatus.source ?? '').trim();
+      const statusEffectId = critter.persistentStatus.effectId?.trim() ?? '';
+      const statusIconUrl =
+        skillEffectById.get(statusEffectId)?.iconUrl?.trim() ||
+        equipmentEffectById.get(statusEffectId)?.iconUrl?.trim() ||
+        presentation.iconUrl;
       const detail =
         critter.persistentStatus.kind === 'toxic'
           ? `${presentation.description} (Turn ${Math.max(0, critter.persistentStatus.turnCount) + 1})`
           : presentation.description;
-      iconUrls.push(presentation.iconUrl);
+      iconUrls.push(statusIconUrl);
       tooltips.push(source ? `${detail} (${source})` : detail);
     }
   }
   if (critter.flinch) {
     const presentation = STATUS_CONDITION_PRESENTATION.flinch;
     const source = (critter.flinch.source ?? '').trim();
-    iconUrls.push(presentation.iconUrl);
+    const flinchEffectId = critter.flinch.effectId?.trim() ?? '';
+    const flinchIconUrl =
+      skillEffectById.get(flinchEffectId)?.iconUrl?.trim() ||
+      equipmentEffectById.get(flinchEffectId)?.iconUrl?.trim() ||
+      presentation.iconUrl;
+    iconUrls.push(flinchIconUrl);
     tooltips.push(source ? `${presentation.description} (${source})` : presentation.description);
   }
   return { iconUrls, tooltips };
@@ -2786,9 +2802,17 @@ function BattleBoardCard({
   }
 
   const critterDef = critterById.get(critter.critterId);
-  const effectiveAttack = Math.max(1, critter.attack * Math.max(MIN_BATTLE_STAT_MODIFIER, critter.attackModifier));
-  const effectiveDefense = Math.max(1, critter.defense * Math.max(MIN_BATTLE_STAT_MODIFIER, critter.defenseModifier));
-  const effectiveSpeed = Math.max(1, critter.speed * Math.max(MIN_BATTLE_STAT_MODIFIER, critter.speedModifier));
+  const effectiveAttack = Math.max(1, Math.round(critter.attack * Math.max(MIN_BATTLE_STAT_MODIFIER, critter.attackModifier)));
+  const effectiveDefense = Math.max(1, Math.round(critter.defense * Math.max(MIN_BATTLE_STAT_MODIFIER, critter.defenseModifier)));
+  const effectiveSpeedBase = critter.speed * Math.max(MIN_BATTLE_STAT_MODIFIER, critter.speedModifier);
+  const effectiveSpeed = Math.max(
+    1,
+    Math.round(
+      critter.persistentStatus?.kind === 'stun'
+        ? effectiveSpeedBase * resolveStunSpeedMultiplier(critter.persistentStatus)
+        : effectiveSpeedBase,
+    ),
+  );
   const hpFillStyle: CSSProperties = {
     width: `${displayedHpPercent}%`,
     transitionProperty: 'width',
@@ -2932,9 +2956,14 @@ function BattleActionPanel({
     const skill = skillId ? skillById.get(skillId) : null;
     if (!skill) return false;
     if (format === 'singles') return true;
-    const expectedCount = getSkillTargetCount(skill, format);
     const targets = draft.targetMemberIndices ?? (draft.targetMemberIndex !== undefined ? [draft.targetMemberIndex] : []);
-    if (targets.length !== expectedCount) return false;
+    const selectionRange = getSkillTargetSelectionRange(
+      skill,
+      format,
+      skill.type === 'damage' ? aliveOpponents.length : aliveAllies.length,
+    );
+    if (targets.length < selectionRange.min || targets.length > selectionRange.max) return false;
+    if (new Set(targets).size !== targets.length) return false;
     if (skill.type === 'damage') return targets.every((t) => aliveOpponents.includes(t));
     return targets.every((t) => aliveAllies.includes(t));
   }
