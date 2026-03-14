@@ -3,6 +3,18 @@ import { AUTOSAVE_INTERVAL_MS, MOVE_DURATION_MS, TILE_SIZE, WARP_COOLDOWN_MS } f
 import type { Direction, Vector2 } from '@/shared/types';
 import { SAVE_VERSION, createNewSave, loadSave, persistSave } from '@/game/saves/saveManager';
 import type { SaveProfile } from '@/game/saves/types';
+import type { AbilityDefinition, AbilityEffectTriggerFamily } from '@/game/abilities/types';
+import { sanitizeAbilityLibrary } from '@/game/abilities/schema';
+import {
+  didDamagedBuffCrossThreshold,
+  didDamagedBuffGainConfiguredFamily,
+  getAbilityBattleStateDefaults,
+  getDamagedBuffTemplateAttachment,
+  hasAnyConfiguredEffectTriggerFamily,
+  isDamagedBuffThresholdSatisfied,
+  resolveEffectTriggerFamiliesForTarget,
+  resolveGuardBuffRecoilDamage,
+} from '@/game/abilities/runtimeHelpers';
 import { BASE_CRITTER_DATABASE } from '@/game/critters/baseDatabase';
 import {
   buildCritterLookup,
@@ -116,7 +128,13 @@ import {
   sanitizePlayerItemInventory,
   setItemInventoryQuantity,
 } from '@/game/items/schema';
-import type { GameItemDefinition, ItemEffectType, PlayerItemInventory } from '@/game/items/types';
+import {
+  HEALING_ITEM_STATUS_CONDITION_KINDS,
+  type GameItemDefinition,
+  type HealingItemStatusConditionKind,
+  type ItemEffectType,
+  type PlayerItemInventory,
+} from '@/game/items/types';
 import { sanitizeShopCatalog } from '@/game/shops/schema';
 import type { ShopDefinition, ShopEntryDefinition } from '@/game/shops/types';
 import type { EquipmentEffectDefinition, EquipmentEffectModifier, EquipmentEffectStat } from '@/game/equipmentEffects/types';
@@ -184,6 +202,17 @@ interface RuntimeImageState {
   status: 'idle' | 'loading' | 'ready' | 'error';
   url: string | null;
   image: HTMLImageElement | null;
+}
+
+interface RuntimeAbilitySlotSnapshot {
+  abilityId: string;
+  name: string;
+  element: string;
+  description: string;
+  templateLabels: string[];
+  templateDescriptions?: string[];
+  effectDescriptions?: string;
+  effectIconUrls?: string[];
 }
 
 interface NpcRuntimeState {
@@ -329,6 +358,8 @@ interface BattleCritterState {
   } | null;
   /** Tracks whether this critter already attempted an action this turn. */
   actedThisTurn: boolean;
+  guardActive: boolean;
+  guardSucceeded: boolean;
   /** First turn number this critter can act after entering the field. */
   firstActionableTurnNumber: number;
   /** Damage-skill uses since this critter last entered the field. */
@@ -338,6 +369,10 @@ interface BattleCritterState {
   consecutiveSuccessfulGuardCount: number;
   /** Player team only: skill ids for 4 slots. */
   equippedSkillIds?: BattleEquippedSkillSlots;
+  equippedAbilityId: string | null;
+  equippedAbility: AbilityDefinition | null;
+  damagedBuffDamageTriggerReady: boolean;
+  damagedBuffEffectTriggerReady: boolean;
 }
 
 interface BattleSourceState {
@@ -790,6 +825,8 @@ export interface RuntimeSnapshot {
         unlocked: boolean;
       }>;
       unlockedAbilityIds: string[];
+      equippedAbility: RuntimeAbilitySlotSnapshot | null;
+      unlockedAbilityOptions: RuntimeAbilitySlotSnapshot[];
       equippedSkillSlots: Array<{
         skillId: string;
         name: string;
@@ -1004,6 +1041,8 @@ export class GameRuntime {
   private skillLookupById: Record<string, SkillDefinition> = {};
   private skillEffectLibrary: SkillEffectDefinition[] = [];
   private skillEffectLookupById: Record<string, SkillEffectDefinition> = {};
+  private abilityDatabase: AbilityDefinition[] = [];
+  private abilityLookupById: Record<string, AbilityDefinition> = {};
   private equipmentEffectLibrary: EquipmentEffectDefinition[] = [];
   private equipmentEffectLookupById: Record<string, EquipmentEffectDefinition> = {};
   private elementChart: ElementChart = buildDefaultElementChart();
@@ -1156,6 +1195,20 @@ export class GameRuntime {
           return acc;
         },
         {} as Record<string, SkillDefinition>,
+      );
+      this.abilityDatabase = sanitizeAbilityLibrary(
+        storedWorldContent.abilities,
+        knownEffectIds,
+        legacyEffectBuffPercentById,
+        effectTypeById,
+        storedWorldContent.gameElements.map((entry) => entry.id),
+      );
+      this.abilityLookupById = this.abilityDatabase.reduce(
+        (acc, ability) => {
+          acc[ability.id] = ability;
+          return acc;
+        },
+        {} as Record<string, AbilityDefinition>,
       );
       this.elementChart = sanitizeElementChart(storedWorldContent.elementChart) ?? buildDefaultElementChart();
       this.itemDatabase = sanitizeItemCatalog(storedWorldContent.items);
@@ -2473,6 +2526,31 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     return true;
   }
 
+  public setEquippedAbility(critterId: number, abilityId: string | null): boolean {
+    const progress = this.playerCritterProgress.collection.find((entry) => entry.critterId === critterId);
+    if (!progress?.unlocked) {
+      return false;
+    }
+    const critter = this.critterLookup[critterId];
+    if (!critter) {
+      return false;
+    }
+    const derived = computeCritterDerivedProgress(critter, progress.level);
+    const nextAbilityId = abilityId ? sanitizeRuntimeIdentifier(abilityId) : null;
+    if (nextAbilityId && !derived.unlockedAbilityIds.includes(nextAbilityId)) {
+      return false;
+    }
+    if (nextAbilityId && !this.abilityLookupById[nextAbilityId]) {
+      return false;
+    }
+    if ((progress.equippedAbilityId ?? null) === nextAbilityId) {
+      return false;
+    }
+    progress.equippedAbilityId = nextAbilityId;
+    this.markProgressDirty();
+    return true;
+  }
+
   public equipEquipmentItem(critterId: number, slotIndex: number, itemId: string): boolean {
     const safeSlotIndex = Number.isFinite(slotIndex) ? Math.floor(slotIndex) : -1;
     const normalizedItemId = sanitizeRuntimeIdentifier(itemId);
@@ -2719,6 +2797,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       prev.skillUseCountBySkillId = {};
       prev.firstActionableTurnNumber = 1;
       this.clearPersistentHealStateForCritter(prev);
+      this.refreshDamagedBuffTriggerReadiness(prev);
     }
     battle.playerActiveIndex = teamIndex;
 
@@ -5199,12 +5278,24 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       this.showItemMisuse(item, 'Cannot heal a knocked out critter this way. Please use a healer.');
       return false;
     }
-    if (currentHp >= maxHp) {
+    const effect = item.effectConfig as {
+      healAmount?: number;
+      healPercent?: number;
+      curesStatus?: boolean;
+      curesStatusKinds?: HealingItemStatusConditionKind[];
+    };
+    const curedStatusKinds = resolveHealingItemCureKinds(effect);
+    const persistentStatus = progress.persistentStatus;
+    const persistentStatusKind = persistentStatus?.kind;
+    const statusCanBeCured =
+      Boolean(persistentStatusKind) &&
+      curedStatusKinds.has(persistentStatusKind as HealingItemStatusConditionKind);
+
+    if (currentHp >= maxHp && !statusCanBeCured) {
       this.showItemMisuse(item, `${critter.name} is already at full HP.`);
       return false;
     }
 
-    const effect = item.effectConfig as { healAmount?: number; healPercent?: number; curesStatus?: boolean };
     const value = typeof item.value === 'number' && Number.isFinite(item.value) ? item.value : undefined;
     const healAmountFromFlat =
       item.effectType === 'heal_flat'
@@ -5238,24 +5329,34 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         : 0;
     const requestedHeal = Math.max(healAmountFromFlat, healAmountFromPercent, 1);
     const appliedHeal = Math.min(requestedHeal, Math.max(0, maxHp - currentHp));
-    if (appliedHeal <= 0) {
+    const curedStatusLabel =
+      statusCanBeCured && persistentStatusKind
+        ? describeHealingStatusKind(persistentStatusKind as HealingItemStatusConditionKind)
+        : null;
+    if (appliedHeal <= 0 && !statusCanBeCured) {
       this.showItemMisuse(item, `${critter.name} cannot be healed right now.`);
       return false;
     }
 
     progress.currentHp = currentHp + appliedHeal;
+    if (statusCanBeCured) {
+      progress.persistentStatus = null;
+    }
     this.incrementSimpleCritterMissionProgress(
       critterId,
       (mission) => mission.type === 'heal_critter' && this.matchesHealCritterMissionItem(mission, item.id),
     );
     this.markProgressDirty();
-    const fallbackText = effect.curesStatus
-      ? `${critter.name} recovered ${appliedHeal} HP and feels refreshed.`
-      : `${critter.name} recovered ${appliedHeal} HP.`;
+    const fallbackText =
+      appliedHeal > 0 && curedStatusLabel
+        ? `${critter.name} recovered ${appliedHeal} HP and was cured of ${curedStatusLabel}.`
+        : appliedHeal > 0
+          ? `${critter.name} recovered ${appliedHeal} HP.`
+          : `${critter.name} was cured of ${curedStatusLabel ?? 'status effects'}.`;
     this.showMessage(
       this.resolveItemSuccessText(item, fallbackText, {
         critterName: critter.name,
-        value: appliedHeal,
+        value: appliedHeal > 0 ? appliedHeal : undefined,
       }),
       2200,
     );
@@ -5707,6 +5808,15 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         .filter((id, idx, arr) => arr.indexOf(id) === idx);
       const maxHp = Math.max(1, equipmentAdjustedStats.hp);
       const currentHp = clamp(progress.currentHp, 0, maxHp);
+      const equippedAbilityId =
+        typeof progress.equippedAbilityId === 'string' &&
+        progress.equippedAbilityId.trim().length > 0 &&
+        derived.unlockedAbilityIds.includes(progress.equippedAbilityId.trim()) &&
+        this.abilityLookupById[progress.equippedAbilityId.trim()]
+          ? progress.equippedAbilityId.trim()
+          : null;
+      const equippedAbility = equippedAbilityId ? this.abilityLookupById[equippedAbilityId] ?? null : null;
+      const abilityStateDefaults = getAbilityBattleStateDefaults(equippedAbility, currentHp, maxHp);
       const baseDefense = Math.max(1, effectiveStats.defense);
       const adjustedDefense = Math.max(1, equipmentAdjustedStats.defense);
       team.push({
@@ -5738,11 +5848,17 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         flinch: null,
         persistentHeal: null,
         actedThisTurn: false,
+        guardActive: false,
+        guardSucceeded: false,
         firstActionableTurnNumber: 1,
         damageSkillUseCountSinceSwitchIn: 0,
         skillUseCountBySkillId: {},
         consecutiveSuccessfulGuardCount: 0,
         equippedSkillIds: progress.equippedSkillIds,
+        equippedAbilityId,
+        equippedAbility,
+        damagedBuffDamageTriggerReady: abilityStateDefaults.damageTriggerReady,
+        damagedBuffEffectTriggerReady: abilityStateDefaults.effectTriggerReady,
       });
     }
 
@@ -5832,11 +5948,17 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       flinch: null,
       persistentHeal: null,
       actedThisTurn: false,
+      guardActive: false,
+      guardSucceeded: false,
       firstActionableTurnNumber: 1,
       damageSkillUseCountSinceSwitchIn: 0,
       skillUseCountBySkillId: {},
       consecutiveSuccessfulGuardCount: 0,
       equippedSkillIds,
+      equippedAbilityId: null,
+      equippedAbility: null,
+      damagedBuffDamageTriggerReady: false,
+      damagedBuffEffectTriggerReady: false,
     };
   }
 
@@ -5860,6 +5982,10 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     battle.pendingEndTurnResolution = false;
     player.actedThisTurn = false;
     opponent.actedThisTurn = false;
+    player.guardActive = false;
+    player.guardSucceeded = false;
+    opponent.guardActive = false;
+    opponent.guardSucceeded = false;
 
     const narration: BattleNarrationEvent[] = [];
 
@@ -5867,6 +5993,8 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       const guardCancellation = this.consumePreActionStatusCancellation(battle, 'player', 'guard');
       let guardSucceeded = false;
       if (guardCancellation.blocked) {
+        player.guardActive = false;
+        player.guardSucceeded = false;
         if (guardCancellation.message) {
           narration.push({
             message: guardCancellation.message,
@@ -5877,6 +6005,8 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         const guardResult = rollGuard(player.consecutiveSuccessfulGuardCount, this.getRng());
         guardSucceeded = guardResult.succeeded;
         player.consecutiveSuccessfulGuardCount = guardResult.nextConsecutiveSuccessfulCount;
+        player.guardActive = true;
+        player.guardSucceeded = guardSucceeded;
         if (guardSucceeded) {
           if (this.incrementSimpleCritterMissionProgress(player.critterId, (mission) => mission.type === 'use_guard')) {
             this.markProgressDirty();
@@ -6051,9 +6181,13 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     const opponent = this.getActiveBattleCritter(battle, 'opponent');
     if (player) {
       player.actedThisTurn = true;
+      player.guardActive = false;
+      player.guardSucceeded = false;
     }
     if (opponent) {
       opponent.actedThisTurn = false;
+      opponent.guardActive = false;
+      opponent.guardSucceeded = false;
     }
     const opponentCancellation = this.consumePreActionStatusCancellation(battle, 'opponent', 'use a skill');
     if (opponentCancellation.blocked) {
@@ -6196,10 +6330,12 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
 
   private clearPersistentStatusForCritter(target: BattleCritterState): void {
     target.persistentStatus = null;
+    this.refreshDamagedBuffTriggerReadiness(target);
   }
 
   private clearFlinchForCritter(target: BattleCritterState): void {
     target.flinch = null;
+    this.refreshDamagedBuffTriggerReadiness(target);
   }
 
   private resetSwitchInUsageTracking(target: BattleCritterState, firstActionableTurnNumber: number): void {
@@ -6208,6 +6344,272 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     target.damageSkillUseCountSinceSwitchIn = 0;
     target.skillUseCountBySkillId = {};
     target.firstActionableTurnNumber = Math.max(1, Math.floor(firstActionableTurnNumber));
+    this.refreshDamagedBuffTriggerReadiness(target);
+  }
+
+  private getCritterEffectTriggerFamilies(target: BattleCritterState): Set<AbilityEffectTriggerFamily> {
+    return resolveEffectTriggerFamiliesForTarget(target, this.skillEffectLookupById);
+  }
+
+  private refreshDamagedBuffTriggerReadiness(target: BattleCritterState): void {
+    const damagedAttachment = getDamagedBuffTemplateAttachment(target.equippedAbility);
+    if (!damagedAttachment) {
+      target.damagedBuffDamageTriggerReady = false;
+      target.damagedBuffEffectTriggerReady = false;
+      return;
+    }
+    if (damagedAttachment.triggerType === 'damage') {
+      if (!isDamagedBuffThresholdSatisfied(target.currentHp, target.maxHp, damagedAttachment.belowPercent ?? 0.5)) {
+        target.damagedBuffDamageTriggerReady = true;
+      }
+      target.damagedBuffEffectTriggerReady = false;
+      return;
+    }
+    if (!hasAnyConfiguredEffectTriggerFamily(this.getCritterEffectTriggerFamilies(target), damagedAttachment.triggerFamilies ?? [])) {
+      target.damagedBuffEffectTriggerReady = true;
+    }
+    target.damagedBuffDamageTriggerReady = false;
+  }
+
+  private applyPassiveEffectAttachmentToCritter(
+    target: BattleCritterState,
+    attachment: SkillEffectAttachment | null | undefined,
+    sourceName: string,
+  ): BattleNarrationEvent[] {
+    if (!attachment?.effectId || target.fainted || target.currentHp <= 0) {
+      return [];
+    }
+    const effect = this.skillEffectLookupById[attachment.effectId];
+    if (!effect) {
+      return [];
+    }
+    const normalizedSourceName = sourceName.trim() || effect.effect_name || effect.effect_id;
+    const events: BattleNarrationEvent[] = [];
+    const buffPercent = clamp(
+      typeof attachment.buffPercent === 'number'
+        ? attachment.buffPercent
+        : typeof effect.buffPercent === 'number'
+          ? effect.buffPercent
+          : 0.1,
+      0,
+      1,
+    );
+
+    if (effect.effect_type === 'atk_buff') {
+      target.attackModifier = Math.max(MIN_BATTLE_STAT_MODIFIER, target.attackModifier + buffPercent);
+      recordActiveEffect(target, effect.effect_id, normalizedSourceName, buffPercent);
+      events.push({ message: `${target.name}'s attack rose.`, attacker: null });
+    } else if (effect.effect_type === 'def_buff') {
+      target.defenseModifier = Math.max(MIN_BATTLE_STAT_MODIFIER, target.defenseModifier + buffPercent);
+      recordActiveEffect(target, effect.effect_id, normalizedSourceName, buffPercent);
+      events.push({ message: `${target.name}'s defense rose.`, attacker: null });
+    } else if (effect.effect_type === 'speed_buff') {
+      target.speedModifier = Math.max(MIN_BATTLE_STAT_MODIFIER, target.speedModifier + buffPercent);
+      recordActiveEffect(target, effect.effect_id, normalizedSourceName, buffPercent);
+      events.push({ message: `${target.name}'s speed rose.`, attacker: null });
+    } else if (effect.effect_type === 'self_atk_debuff' || effect.effect_type === 'target_atk_debuff') {
+      target.attackModifier = Math.max(MIN_BATTLE_STAT_MODIFIER, target.attackModifier - buffPercent);
+      recordActiveEffect(target, effect.effect_id, normalizedSourceName, buffPercent);
+      events.push({ message: `${target.name}'s attack fell.`, attacker: null });
+    } else if (effect.effect_type === 'self_def_debuff' || effect.effect_type === 'target_def_debuff') {
+      target.defenseModifier = Math.max(MIN_BATTLE_STAT_MODIFIER, target.defenseModifier - buffPercent);
+      recordActiveEffect(target, effect.effect_id, normalizedSourceName, buffPercent);
+      events.push({ message: `${target.name}'s defense fell.`, attacker: null });
+    } else if (effect.effect_type === 'self_speed_debuff' || effect.effect_type === 'target_speed_debuff') {
+      target.speedModifier = Math.max(MIN_BATTLE_STAT_MODIFIER, target.speedModifier - buffPercent);
+      recordActiveEffect(target, effect.effect_id, normalizedSourceName, buffPercent);
+      events.push({ message: `${target.name}'s speed fell.`, attacker: null });
+    } else if (effect.effect_type === 'crit_buff') {
+      applyPendingCritChanceBuff(target, effect.effect_id, normalizedSourceName, buffPercent);
+      events.push({ message: `${target.name}'s crit chance rose.`, attacker: null });
+    } else if (effect.effect_type === 'persistent_heal') {
+      const mode = attachment.persistentHealMode === 'flat' ? 'flat' : 'percent_max_hp';
+      const value = mode === 'flat'
+        ? Math.max(1, Math.floor(attachment.persistentHealValue ?? 1))
+        : clamp(attachment.persistentHealValue ?? 0.05, 0, 1);
+      if (value > 0) {
+        this.applyPersistentHealStateToCritter(target, {
+          targetTeam: target.slotIndex != null ? 'player' : 'opponent',
+          effectId: effect.effect_id,
+          sourceName: normalizedSourceName,
+          mode,
+          value,
+          remainingTurns: Math.max(1, Math.floor(attachment.persistentHealDurationTurns ?? 1)),
+        });
+        events.push({
+          message: `${target.name} gained end-of-turn healing for ${Math.max(1, Math.floor(attachment.persistentHealDurationTurns ?? 1))} turns.`,
+          attacker: null,
+        });
+      }
+    } else if (effect.effect_type === 'inflict_toxic') {
+      if (!target.persistentStatus) {
+        target.persistentStatus = {
+          kind: 'toxic',
+          potencyBase: clampUnitInterval(attachment.toxicPotencyBase ?? 0.05, 0.05),
+          potencyPerTurn: clampUnitInterval(attachment.toxicPotencyPerTurn ?? 0.05, 0.05),
+          turnCount: 0,
+          source: sanitizeStatusSource(normalizedSourceName, normalizedSourceName),
+          effectId: effect.effect_id,
+        };
+        events.push({ message: `${target.name} was afflicted with Toxic!`, attacker: null });
+      }
+    } else if (effect.effect_type === 'inflict_stun') {
+      if (!target.persistentStatus) {
+        target.persistentStatus = {
+          kind: 'stun',
+          stunFailChance: clampUnitInterval(attachment.stunFailChance ?? 0.25, 0.25),
+          stunSlowdown: clampUnitInterval(attachment.stunSlowdown ?? 0.5, 0.5),
+          source: sanitizeStatusSource(normalizedSourceName, normalizedSourceName),
+          effectId: effect.effect_id,
+        };
+        events.push({ message: `${target.name} was stunned!`, attacker: null });
+      }
+    } else if (effect.effect_type === 'flinch_chance') {
+      if (!target.actedThisTurn) {
+        target.flinch = {
+          turnNumber: this.activeBattle?.turnNumber ?? 1,
+          source: sanitizeStatusSource(normalizedSourceName, normalizedSourceName),
+          effectId: effect.effect_id,
+        };
+        events.push({ message: `${target.name} flinched!`, attacker: null });
+      }
+    }
+
+    if (events.length > 0) {
+      events.unshift({
+        message: `${target.name}'s ${normalizedSourceName} activated.`,
+        attacker: null,
+      });
+    }
+    this.refreshDamagedBuffTriggerReadiness(target);
+    return events;
+  }
+
+  private applyDamagedBuffEffectTriggerIfNeeded(
+    target: BattleCritterState,
+    previousFamilies: Set<AbilityEffectTriggerFamily>,
+  ): BattleNarrationEvent[] {
+    const damagedAttachment = getDamagedBuffTemplateAttachment(target.equippedAbility);
+    if (!damagedAttachment || damagedAttachment.triggerType !== 'effect') {
+      return [];
+    }
+    const nextFamilies = this.getCritterEffectTriggerFamilies(target);
+    if (
+      target.damagedBuffEffectTriggerReady &&
+      didDamagedBuffGainConfiguredFamily(previousFamilies, nextFamilies, damagedAttachment.triggerFamilies ?? [])
+    ) {
+      target.damagedBuffEffectTriggerReady = false;
+      const rewardAttachment = damagedAttachment.rewardEffectAttachment;
+      if (!rewardAttachment) {
+        this.refreshDamagedBuffTriggerReadiness(target);
+        return [];
+      }
+      const procChance = clamp(rewardAttachment.procChance ?? 1, 0, 1);
+      const events = procChance > 0 && this.getRng()() < procChance
+        ? this.applyPassiveEffectAttachmentToCritter(target, rewardAttachment, target.equippedAbility?.name ?? 'Damaged Buff')
+        : [];
+      this.refreshDamagedBuffTriggerReadiness(target);
+      return events;
+    }
+    this.refreshDamagedBuffTriggerReadiness(target);
+    return [];
+  }
+
+  private applyDamagedBuffDamageTriggerIfNeeded(
+    target: BattleCritterState,
+    previousHp: number,
+  ): BattleNarrationEvent[] {
+    const damagedAttachment = getDamagedBuffTemplateAttachment(target.equippedAbility);
+    if (
+      !damagedAttachment ||
+      damagedAttachment.triggerType !== 'damage' ||
+      target.fainted ||
+      target.currentHp <= 0
+    ) {
+      this.refreshDamagedBuffTriggerReadiness(target);
+      return [];
+    }
+    if (
+      target.damagedBuffDamageTriggerReady &&
+      didDamagedBuffCrossThreshold(previousHp, target.currentHp, target.maxHp, damagedAttachment.belowPercent ?? 0.5)
+    ) {
+      target.damagedBuffDamageTriggerReady = false;
+      const rewardAttachment = damagedAttachment.rewardEffectAttachment;
+      if (!rewardAttachment) {
+        this.refreshDamagedBuffTriggerReadiness(target);
+        return [];
+      }
+      const procChance = clamp(rewardAttachment.procChance ?? 1, 0, 1);
+      const events = procChance > 0 && this.getRng()() < procChance
+        ? this.applyPassiveEffectAttachmentToCritter(target, rewardAttachment, target.equippedAbility?.name ?? 'Damaged Buff')
+        : [];
+      this.refreshDamagedBuffTriggerReadiness(target);
+      return events;
+    }
+    this.refreshDamagedBuffTriggerReadiness(target);
+    return [];
+  }
+
+  private applyGuardBuffOnSuccessfulGuardHit(
+    battle: BattleRuntimeState,
+    attacker: BattleCritterState | null,
+    defendingTeam: 'player' | 'opponent',
+    damageDealt: number,
+  ): BattleNarrationEvent[] {
+    const defender = this.getActiveBattleCritter(battle, defendingTeam);
+    const guardAttachment = defender?.equippedAbility?.templateAttachments.find((entry) => entry.templateType === 'guard-buff');
+    if (
+      !defender ||
+      !guardAttachment ||
+      !defender.guardActive ||
+      !defender.guardSucceeded ||
+      damageDealt <= 0
+    ) {
+      return [];
+    }
+    const events: BattleNarrationEvent[] = [];
+    const abilityName = defender.equippedAbility?.name ?? 'Guard Buff';
+    if (guardAttachment.mode === 'recoil') {
+      if (!attacker || attacker.fainted || attacker.currentHp <= 0) {
+        return [];
+      }
+      const recoilDamage = resolveGuardBuffRecoilDamage(
+        guardAttachment.recoilMode,
+        guardAttachment.recoilValue,
+        attacker.maxHp,
+        damageDealt,
+      );
+      const actualRecoil = Math.min(Math.max(0, Math.floor(recoilDamage)), Math.max(0, attacker.currentHp));
+      if (actualRecoil <= 0) {
+        return [];
+      }
+      attacker.currentHp = Math.max(0, attacker.currentHp - actualRecoil);
+      attacker.fainted = attacker.currentHp <= 0;
+      events.push({ message: `${defender.name}'s ${abilityName} struck back for ${actualRecoil} damage.`, attacker: null });
+      if (attacker.fainted) {
+        this.clearPersistentHealStateForCritter(attacker);
+        this.clearPersistentStatusForCritter(attacker);
+        this.clearFlinchForCritter(attacker);
+        const attackerTeam = defendingTeam === 'player' ? 'opponent' : 'player';
+        events.push(...this.buildBattleKnockoutNarrationEvents(battle, attackerTeam, null));
+      }
+      return events;
+    }
+    const procAttachment = guardAttachment.procEffectAttachment;
+    if (!procAttachment) {
+      return [];
+    }
+    const procChance = clamp(procAttachment.procChance ?? 1, 0, 1);
+    if (procChance <= 0 || this.getRng()() >= procChance) {
+      return [];
+    }
+    const procTarget = guardAttachment.procTarget === 'attacker' ? attacker : defender;
+    if (!procTarget || procTarget.fainted || procTarget.currentHp <= 0) {
+      return [];
+    }
+    const familiesBefore = this.getCritterEffectTriggerFamilies(procTarget);
+    const procEvents = this.applyPassiveEffectAttachmentToCritter(procTarget, procAttachment, abilityName);
+    return [...procEvents, ...this.applyDamagedBuffEffectTriggerIfNeeded(procTarget, familiesBefore)];
   }
 
   private getSkillUseCountSinceSwitchIn(target: BattleCritterState, skillId: string): number {
@@ -6288,6 +6690,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     }
 
     const events: BattleNarrationEvent[] = [];
+    const familiesBefore = this.getCritterEffectTriggerFamilies(defender);
     const defenderLabel = this.formatBattleCritterReference(
       battle,
       attackingTeam === 'player' ? 'opponent' : 'player',
@@ -6416,7 +6819,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       }
     }
 
-    return events;
+    return [...events, ...this.applyDamagedBuffEffectTriggerIfNeeded(defender, familiesBefore)];
   }
 
   private executeBattleSkill(
@@ -6668,6 +7071,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     }
     const actualHeal = Math.min(missingHp, safeRequestedHeal);
     target.currentHp += actualHeal;
+    if ('equippedAbilityId' in target) {
+      this.refreshDamagedBuffTriggerReadiness(target as BattleCritterState);
+    }
     return actualHeal;
   }
 
@@ -6742,6 +7148,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       const normalizedSourceName = typeof sourceName === 'string' ? sourceName.trim() : '';
       recordActiveEffect(target, effectId, normalizedSourceName, buffPercent);
     }
+    this.refreshDamagedBuffTriggerReadiness(target);
   }
 
   private applyPersistentHealStateToCritter(
@@ -6779,17 +7186,22 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     if (target.activeEffectValueById) {
       delete target.activeEffectValueById[effectId];
     }
+    this.refreshDamagedBuffTriggerReadiness(target);
   }
 
   private applyBattlePostDamageResolution(
     battle: BattleRuntimeState,
     resolution: BattlePostDamageResolution,
-  ): { actualHeal: number; recoilDamage: number; attackerJustFainted: boolean } {
+  ): { actualHeal: number; recoilDamage: number; attackerJustFainted: boolean; abilityEvents: BattleNarrationEvent[] } {
     const attacker = this.getActiveBattleCritter(battle, resolution.attackingTeam);
     const defender = this.getActiveBattleCritter(battle, resolution.defendingTeam);
     if (!attacker || attacker.fainted || attacker.currentHp <= 0) {
-      return { actualHeal: 0, recoilDamage: 0, attackerJustFainted: false };
+      return { actualHeal: 0, recoilDamage: 0, attackerJustFainted: false, abilityEvents: [] };
     }
+    const attackerFamiliesBefore = this.getCritterEffectTriggerFamilies(attacker);
+    const defenderFamiliesBefore = defender
+      ? this.getCritterEffectTriggerFamilies(defender)
+      : new Set<AbilityEffectTriggerFamily>();
 
     const actualHeal = this.applyBattleHeal(attacker, resolution.healToAttacker);
     if (actualHeal > 0) {
@@ -6865,10 +7277,15 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         this.clearFlinchForCritter(attacker);
       }
     }
+    const abilityEvents = [
+      ...this.applyDamagedBuffEffectTriggerIfNeeded(attacker, attackerFamiliesBefore),
+      ...(defender ? this.applyDamagedBuffEffectTriggerIfNeeded(defender, defenderFamiliesBefore) : []),
+    ];
     return {
       actualHeal,
       recoilDamage,
       attackerJustFainted: priorHp > 0 && attacker.currentHp <= 0,
+      abilityEvents,
     };
   }
 
@@ -7266,6 +7683,7 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     battle.activeNarration = next;
     battle.logLine = next.message;
     this.applyBattleNarrationStateChange(battle, next);
+    const insertedEvents: BattleNarrationEvent[] = [];
 
     if (
       next.applyDamageDefender !== undefined &&
@@ -7275,9 +7693,14 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       const team = next.applyDamageDefender === 'player' ? battle.playerTeam : battle.opponentTeam;
       const activeIndex = next.applyDamageDefender === 'player' ? battle.playerActiveIndex : battle.opponentActiveIndex;
       const defender = activeIndex !== null ? team[activeIndex] : null;
+      const attacker =
+        next.applyDamageDefender === 'player'
+          ? this.getActiveBattleCritter(battle, 'opponent')
+          : this.getActiveBattleCritter(battle, 'player');
       let damageApplied = 0;
+      let hpBefore = 0;
       if (defender) {
-        const hpBefore = Math.max(0, defender.currentHp);
+        hpBefore = Math.max(0, defender.currentHp);
         defender.currentHp = Math.max(0, hpBefore - next.applyDamageAmount);
         damageApplied = hpBefore - defender.currentHp;
         defender.fainted = defender.currentHp <= 0;
@@ -7311,9 +7734,18 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         );
         this.recordEffectBuffedDealDamageProgress(next.playerAttackerCritterId, damageApplied);
       }
+      if (defender && damageApplied > 0) {
+        insertedEvents.push(
+          ...this.applyGuardBuffOnSuccessfulGuardHit(
+            battle,
+            attacker,
+            next.applyDamageDefender,
+            damageApplied,
+          ),
+          ...this.applyDamagedBuffDamageTriggerIfNeeded(defender, hpBefore),
+        );
+      }
     }
-
-    const insertedEvents: BattleNarrationEvent[] = [];
     if (next.followUpEvents && next.followUpEvents.length > 0) {
       insertedEvents.push(...next.followUpEvents.map((event) => cloneBattleNarrationEvent(event)));
     }
@@ -7346,6 +7778,9 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
 
     if (next.postDamageResolution) {
       const resolutionResult = this.applyBattlePostDamageResolution(battle, next.postDamageResolution);
+      if (resolutionResult.abilityEvents.length > 0) {
+        battle.narrationQueue.unshift(...resolutionResult.abilityEvents.map((event) => cloneBattleNarrationEvent(event)));
+      }
       if (next.postDamageResolution.healMessageAttackerName) {
         next.message =
           resolutionResult.actualHeal > 0
@@ -8925,6 +9360,15 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
       const equipmentEffectIds = equipmentEffects
         .map((effect) => effect.effectId)
         .filter((id, idx, all) => all.indexOf(id) === idx);
+      const equippedAbilityId =
+        typeof member.equippedAbilityId === 'string' &&
+        member.equippedAbilityId.trim().length > 0 &&
+        derived.unlockedAbilityIds.includes(member.equippedAbilityId.trim()) &&
+        this.abilityLookupById[member.equippedAbilityId.trim()]
+          ? member.equippedAbilityId.trim()
+          : null;
+      const equippedAbility = equippedAbilityId ? this.abilityLookupById[equippedAbilityId] ?? null : null;
+      const abilityStateDefaults = getAbilityBattleStateDefaults(equippedAbility, maxHp, maxHp);
       team.push({
         slotIndex: null,
         critterId: critter.id,
@@ -8954,11 +9398,17 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
         flinch: null,
         persistentHeal: null,
         actedThisTurn: false,
+        guardActive: false,
+        guardSucceeded: false,
         firstActionableTurnNumber: 1,
         damageSkillUseCountSinceSwitchIn: 0,
         skillUseCountBySkillId: {},
         consecutiveSuccessfulGuardCount: 0,
         equippedSkillIds,
+        equippedAbilityId,
+        equippedAbility,
+        damagedBuffDamageTriggerReady: abilityStateDefaults.damageTriggerReady,
+        damagedBuffEffectTriggerReady: abilityStateDefaults.effectTriggerReady,
       });
     }
     return team;
@@ -10059,6 +10509,99 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
     };
   }
 
+  private describeAbilityTemplateAttachment(
+    attachment: AbilityDefinition['templateAttachments'][number],
+  ): string {
+    if (attachment.templateType === 'guard-buff') {
+      if (attachment.mode === 'recoil') {
+        if (attachment.recoilMode === 'flat') {
+          return `Guard buff: Reflect ${Math.max(0, Math.floor(attachment.recoilValue))} damage on successful guard.`;
+        }
+        const recoilPercent = Math.round(clamp(attachment.recoilValue, 0, 1) * 100);
+        const modeLabel =
+          attachment.recoilMode === 'percent_attacker_max_hp'
+            ? 'attacker max HP'
+            : 'incoming damage';
+        return `Guard buff: Reflect ${recoilPercent}% of ${modeLabel} on successful guard.`;
+      }
+      const procAttachment = attachment.procEffectAttachment;
+      const procTarget = attachment.procTarget === 'attacker' ? 'attacker' : 'self';
+      const procChancePercent = Math.round(clamp(procAttachment?.procChance ?? 1, 0, 1) * 100);
+      if (!procAttachment?.effectId) {
+        return `Guard buff: ${procChancePercent}% proc on ${procTarget} on successful guard.`;
+      }
+      const effect = this.skillEffectLookupById[procAttachment.effectId];
+      const effectDescription = effect ? formatSkillEffectDescription(effect, procAttachment) : procAttachment.effectId;
+      return `Guard buff (${procTarget}, ${procChancePercent}%): ${effectDescription}`;
+    }
+
+    const rewardAttachment = attachment.rewardEffectAttachment;
+    const triggerDescription =
+      attachment.triggerType === 'damage'
+        ? `when HP drops below ${Math.round(clamp(attachment.belowPercent ?? 0.5, 0, 1) * 100)}%`
+        : `on ${attachment.triggerFamilies?.join(', ') || 'configured effects'}`;
+    if (!rewardAttachment?.effectId) {
+      return `Damaged buff: Triggers ${triggerDescription}.`;
+    }
+    const rewardEffect = this.skillEffectLookupById[rewardAttachment.effectId];
+    const rewardDescription = rewardEffect
+      ? formatSkillEffectDescription(rewardEffect, rewardAttachment)
+      : rewardAttachment.effectId;
+    const rewardChancePercent = Math.round(clamp(rewardAttachment.procChance ?? 1, 0, 1) * 100);
+    return `Damaged buff (${rewardChancePercent}%): Triggers ${triggerDescription}; ${rewardDescription}`;
+  }
+
+  private resolveAbilitySlotSnapshot(abilityId: string): RuntimeAbilitySlotSnapshot | null {
+    const normalizedAbilityId = typeof abilityId === 'string' ? abilityId.trim() : '';
+    if (!normalizedAbilityId) {
+      return null;
+    }
+    const ability = this.abilityLookupById[normalizedAbilityId];
+    if (!ability) {
+      return null;
+    }
+    const effectIds = ability.templateAttachments
+      .map((attachment) =>
+        attachment.templateType === 'guard-buff'
+          ? attachment.procEffectAttachment?.effectId
+          : attachment.rewardEffectAttachment?.effectId,
+      )
+      .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
+    const effectDescriptions = ability.templateAttachments
+      .map((attachment) => {
+        const effectAttachment =
+          attachment.templateType === 'guard-buff'
+            ? attachment.procEffectAttachment
+            : attachment.rewardEffectAttachment;
+        if (!effectAttachment?.effectId) {
+          return null;
+        }
+        const effect = this.skillEffectLookupById[effectAttachment.effectId];
+        if (!effect) {
+          return effectAttachment.effectId;
+        }
+        return formatSkillEffectDescription(effect, effectAttachment);
+      })
+      .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      .join(' ');
+    const templateDescriptions = ability.templateAttachments
+      .map((attachment) => this.describeAbilityTemplateAttachment(attachment))
+      .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
+    const effectIconUrls = effectIds
+      .map((effectId) => this.skillEffectLookupById[effectId]?.iconUrl)
+      .filter((url): url is string => typeof url === 'string' && url.length > 0);
+    return {
+      abilityId: ability.id,
+      name: ability.name,
+      element: ability.element,
+      description: ability.description,
+      templateLabels: ability.templateAttachments.map((attachment) => attachment.templateType),
+      ...(templateDescriptions.length > 0 && { templateDescriptions }),
+      ...(effectDescriptions && { effectDescriptions }),
+      ...(effectIconUrls.length > 0 && { effectIconUrls }),
+    };
+  }
+
   private resolveEquippedSkillSlotsForSnapshot(
     equippedSkillIds: EquippedSkillSlots | undefined,
   ): RuntimeSnapshot['critters']['collection'][number]['equippedSkillSlots'] {
@@ -10454,6 +10997,13 @@ private getStaticMapRenderCache(map: WorldMap): StaticMapRenderCache | null {
           unlocked: availableAbilityIds.has(ability.id),
         })),
         unlockedAbilityIds: progress?.unlockedAbilityIds ?? derived.unlockedAbilityIds,
+        equippedAbility:
+          unlocked && progress?.equippedAbilityId
+            ? this.resolveAbilitySlotSnapshot(progress.equippedAbilityId)
+            : null,
+        unlockedAbilityOptions: (progress?.unlockedAbilityIds ?? derived.unlockedAbilityIds)
+          .map((id) => this.resolveAbilitySlotSnapshot(id))
+          .filter((entry): entry is RuntimeAbilitySlotSnapshot => entry !== null),
         equippedSkillSlots: this.resolveEquippedSkillSlotsForSnapshot(progress?.equippedSkillIds),
         unlockedSkillIds: derived.unlockedSkillIds,
         unlockedSkillOptions: derived.unlockedSkillIds
@@ -11569,24 +12119,75 @@ function describeItemEffect(item: GameItemDefinition): string {
       : `Equipment (${equipSize} slot${equipSize === 1 ? '' : 's'})`;
   }
   if (item.effectType === 'heal_flat') {
-    const effect = item.effectConfig as { healAmount?: number };
+    const effect = item.effectConfig as {
+      healAmount?: number;
+      curesStatus?: boolean;
+      curesStatusKinds?: HealingItemStatusConditionKind[];
+    };
     const amount = typeof effect.healAmount === 'number' && Number.isFinite(effect.healAmount)
       ? Math.max(1, Math.floor(effect.healAmount))
       : 20;
-    return `Heals ${amount} HP`;
+    return `Heals ${amount} HP${formatHealingItemCureSummary(effect)}`;
   }
   if (item.effectType === 'heal_percent') {
-    const effect = item.effectConfig as { healPercent?: number };
+    const effect = item.effectConfig as {
+      healPercent?: number;
+      curesStatus?: boolean;
+      curesStatusKinds?: HealingItemStatusConditionKind[];
+    };
     const percent = typeof effect.healPercent === 'number' && Number.isFinite(effect.healPercent)
       ? Math.max(1, Math.round(clamp(effect.healPercent, 0.01, 1) * 100))
       : 25;
-    return `Heals ${percent}% HP`;
+    return `Heals ${percent}% HP${formatHealingItemCureSummary(effect)}`;
   }
   const effect = item.effectConfig as { actionId?: string };
   if (typeof effect.actionId === 'string' && effect.actionId.trim()) {
     return `Special: ${effect.actionId.trim()}`;
   }
   return 'Special item';
+}
+
+function resolveHealingItemCureKinds(effect: {
+  curesStatus?: boolean;
+  curesStatusKinds?: HealingItemStatusConditionKind[];
+}): Set<HealingItemStatusConditionKind> {
+  const curedKinds = Array.isArray(effect.curesStatusKinds)
+    ? effect.curesStatusKinds
+        .map((entry) => entry.trim().toLowerCase())
+        .filter((entry, index, values) => entry.length > 0 && values.indexOf(entry) === index)
+        .filter((entry): entry is HealingItemStatusConditionKind =>
+          HEALING_ITEM_STATUS_CONDITION_KINDS.includes(entry as HealingItemStatusConditionKind),
+        )
+    : [];
+  if (curedKinds.length > 0) {
+    return new Set(HEALING_ITEM_STATUS_CONDITION_KINDS.filter((kind) => curedKinds.includes(kind)));
+  }
+  if (effect.curesStatus) {
+    return new Set(HEALING_ITEM_STATUS_CONDITION_KINDS);
+  }
+  return new Set();
+}
+
+function describeHealingStatusKind(kind: HealingItemStatusConditionKind): string {
+  if (kind === 'toxic') {
+    return 'Toxic';
+  }
+  if (kind === 'stun') {
+    return 'Stun';
+  }
+  return kind;
+}
+
+function formatHealingItemCureSummary(effect: {
+  curesStatus?: boolean;
+  curesStatusKinds?: HealingItemStatusConditionKind[];
+}): string {
+  const cureKinds = resolveHealingItemCureKinds(effect);
+  const curedKinds = HEALING_ITEM_STATUS_CONDITION_KINDS.filter((kind) => cureKinds.has(kind));
+  if (curedKinds.length === 0) {
+    return '';
+  }
+  return ` • Cures ${curedKinds.map(describeHealingStatusKind).join('/')}`;
 }
 
 function sanitizeRuntimeIdentifier(raw: unknown): string {
@@ -11664,6 +12265,7 @@ function cloneRuntimeNpcBattleConfig(config: NpcBattleConfig | undefined): NpcBa
     members: config.members.map((member) => ({
       critterId: member.critterId,
       level: member.level,
+      equippedAbilityId: member.equippedAbilityId ?? null,
       equippedSkillIds: [...member.equippedSkillIds] as [string | null, string | null, string | null, string | null],
       equippedItems: member.equippedItems.map((item) => ({
         itemId: item.itemId,
@@ -11700,6 +12302,10 @@ function sanitizeRuntimeNpcBattleConfig(raw: unknown): NpcBattleConfig | undefin
       if (!Number.isFinite(critterId) || !Number.isFinite(level)) {
         return null;
       }
+      const equippedAbilityId =
+        typeof member.equippedAbilityId === 'string' && member.equippedAbilityId.trim()
+          ? sanitizeRuntimeIdentifier(member.equippedAbilityId)
+          : null;
       const rawSkillSlots = Array.isArray(member.equippedSkillIds) ? member.equippedSkillIds : [];
       const equippedSkillIds: [string | null, string | null, string | null, string | null] = [null, null, null, null];
       for (let slot = 0; slot < 4; slot += 1) {
@@ -11730,6 +12336,7 @@ function sanitizeRuntimeNpcBattleConfig(raw: unknown): NpcBattleConfig | undefin
       return {
         critterId,
         level,
+        equippedAbilityId,
         equippedSkillIds,
         equippedItems,
       };

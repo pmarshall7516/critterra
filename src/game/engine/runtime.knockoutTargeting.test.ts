@@ -67,6 +67,7 @@ function createCollectionEntry(
     statBonus: { ...EMPTY_STAT_DELTA },
     effectiveStats: { ...critter.baseStats },
     unlockedAbilityIds: [],
+    equippedAbilityId: null,
     equippedSkillIds: [null, null, null, null],
     equippedEquipmentAnchors: input.equippedEquipmentAnchors ?? [],
     lastProgressAt: null,

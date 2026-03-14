@@ -165,6 +165,7 @@ export interface PlayerCritterCollectionEntry {
   statBonus: CritterStatDelta;
   effectiveStats: CritterStats;
   unlockedAbilityIds: string[];
+  equippedAbilityId: string | null;
   equippedSkillIds: EquippedSkillSlots;
   equippedEquipmentAnchors: EquippedEquipmentAnchor[];
   /** Persistent battle status that carries across RPG battles until healed. */
@@ -182,6 +183,6 @@ export interface PlayerCritterProgress {
   lockedDamageTargetCritterId: number | null;
 }
 
-export const PLAYER_CRITTER_PROGRESS_VERSION = 9;
+export const PLAYER_CRITTER_PROGRESS_VERSION = 10;
 export const MAX_SQUAD_SLOTS = 8;
 export const STARTING_UNLOCKED_SQUAD_SLOTS = 2;

@@ -5,6 +5,7 @@ import type { CritterDefinition, PlayerCritterCollectionEntry, PlayerCritterProg
 import { PLAYER_CRITTER_PROGRESS_VERSION } from '@/game/critters/types';
 import type { GameItemDefinition } from '@/game/items/types';
 import { PLAYER_ITEM_INVENTORY_VERSION } from '@/game/items/types';
+import type { PersistentStatusCondition } from '@/game/battle/statusConditions';
 
 const EMPTY_STATS = {
   hp: 0,
@@ -62,8 +63,10 @@ function createCollectionEntry(
     statBonus: input?.statBonus ?? { ...EMPTY_STATS },
     effectiveStats: input?.effectiveStats ?? { ...critter.baseStats },
     unlockedAbilityIds: input?.unlockedAbilityIds ?? [],
+    equippedAbilityId: input?.equippedAbilityId ?? null,
     equippedSkillIds: input?.equippedSkillIds ?? [null, null, null, null],
     equippedEquipmentAnchors: input?.equippedEquipmentAnchors ?? [],
+    persistentStatus: input?.persistentStatus ?? null,
     lastProgressAt: input?.lastProgressAt ?? null,
   };
 }
@@ -72,6 +75,8 @@ function createHealingItem(input: {
   id: string;
   name: string;
   healAmount?: number;
+  curesStatus?: boolean;
+  curesStatusKinds?: Array<'toxic' | 'stun'>;
 }): GameItemDefinition {
   return {
     id: input.id,
@@ -84,7 +89,10 @@ function createHealingItem(input: {
     effectType: 'heal_flat',
     effectConfig: {
       healAmount: input.healAmount ?? 5,
-      curesStatus: false,
+      curesStatus: input.curesStatus ?? false,
+      ...(input.curesStatusKinds && input.curesStatusKinds.length > 0
+        ? { curesStatusKinds: [...input.curesStatusKinds] }
+        : {}),
     },
     value: input.healAmount ?? 5,
     consumable: false,
@@ -511,6 +519,148 @@ describe('GameRuntime mission action tracking', () => {
 
     expect(runtime.useBackpackItemOnSquadSlot('field-bandage', 0)).toBe(true);
     expect(readMissionProgress(runtime.playerCritterProgress, 1, 2, 'heal-1')).toBe(0);
+  });
+
+  it('allows healing items to cure configured persistent status at full HP', () => {
+    const toxicStatus: PersistentStatusCondition = {
+      kind: 'toxic',
+      potencyBase: 0.1,
+      potencyPerTurn: 0.05,
+      turnCount: 2,
+      source: 'Toxic Bite',
+      effectId: 'status-inflict-toxic',
+    };
+    const critter = createCritter({
+      id: 1,
+      name: 'Medic',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const collectionEntry = createCollectionEntry(critter, {
+      level: 1,
+      currentHp: critter.baseStats.hp,
+      persistentStatus: toxicStatus,
+    });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [collectionEntry],
+      squad: [1, null, null, null, null, null, null, null],
+      items: [
+        createHealingItem({
+          id: 'cleanse-berry',
+          name: 'Cleanse Berry',
+          healAmount: 5,
+          curesStatusKinds: ['toxic'],
+        }),
+      ],
+    });
+
+    expect(runtime.useBackpackItemOnSquadSlot('cleanse-berry', 0)).toBe(true);
+    expect(collectionEntry.currentHp).toBe(critter.baseStats.hp);
+    expect(collectionEntry.persistentStatus).toBeNull();
+    expect(runtime.markProgressDirty).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not consume healing-item use when full HP and status kind does not match cure list', () => {
+    const stunStatus: PersistentStatusCondition = {
+      kind: 'stun',
+      stunFailChance: 0.35,
+      stunSlowdown: 0.5,
+      source: 'Static Burst',
+      effectId: 'status-inflict-stun',
+    };
+    const critter = createCritter({
+      id: 1,
+      name: 'Medic',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const collectionEntry = createCollectionEntry(critter, {
+      level: 1,
+      currentHp: critter.baseStats.hp,
+      persistentStatus: stunStatus,
+    });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [collectionEntry],
+      squad: [1, null, null, null, null, null, null, null],
+      items: [
+        createHealingItem({
+          id: 'anti-toxic-berry',
+          name: 'Anti-Toxic Berry',
+          healAmount: 5,
+          curesStatusKinds: ['toxic'],
+        }),
+      ],
+    });
+
+    expect(runtime.useBackpackItemOnSquadSlot('anti-toxic-berry', 0)).toBe(false);
+    expect(collectionEntry.persistentStatus?.kind).toBe('stun');
+    expect(runtime.markProgressDirty).not.toHaveBeenCalled();
+  });
+
+  it('supports legacy curesStatus=true by curing any persistent status', () => {
+    const stunStatus: PersistentStatusCondition = {
+      kind: 'stun',
+      stunFailChance: 0.35,
+      stunSlowdown: 0.5,
+      source: 'Static Burst',
+      effectId: 'status-inflict-stun',
+    };
+    const critter = createCritter({
+      id: 1,
+      name: 'Medic',
+      levels: [
+        {
+          level: 1,
+          missions: [],
+          requiredMissionCount: 0,
+          unlockEquipSlots: 1,
+          statDelta: { ...EMPTY_STATS },
+          abilityUnlockIds: [],
+          skillUnlockIds: [],
+        },
+      ],
+    });
+    const collectionEntry = createCollectionEntry(critter, {
+      level: 1,
+      currentHp: critter.baseStats.hp,
+      persistentStatus: stunStatus,
+    });
+    const runtime = createRuntimeHarness({
+      critters: [critter],
+      collection: [collectionEntry],
+      squad: [1, null, null, null, null, null, null, null],
+      items: [
+        createHealingItem({
+          id: 'legacy-cleanse-berry',
+          name: 'Legacy Cleanse Berry',
+          healAmount: 5,
+          curesStatus: true,
+        }),
+      ],
+    });
+
+    expect(runtime.useBackpackItemOnSquadSlot('legacy-cleanse-berry', 0)).toBe(true);
+    expect(collectionEntry.persistentStatus).toBeNull();
   });
 
   it('surfaces the three most recently tracked active missions in the critter summary', () => {

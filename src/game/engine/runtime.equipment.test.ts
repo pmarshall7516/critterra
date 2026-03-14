@@ -62,6 +62,7 @@ function createProgressEntry(
     statBonus: { ...EMPTY_STATS },
     effectiveStats: { ...critter.baseStats },
     unlockedAbilityIds: [],
+    equippedAbilityId: input?.equippedAbilityId ?? null,
     equippedSkillIds: [null, null, null, null],
     equippedEquipmentAnchors: input?.equippedEquipmentAnchors ?? [],
     lastProgressAt: null,

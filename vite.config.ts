@@ -160,6 +160,10 @@ interface SaveSkillsRequestPayload {
   critterSkills?: unknown;
 }
 
+interface SaveAbilitiesRequestPayload {
+  abilities?: unknown;
+}
+
 interface SaveSkillEffectsRequestPayload {
   skillEffects?: unknown;
 }
@@ -179,6 +183,7 @@ interface SaveFlagsRequestPayload {
 interface DuelSquadMemberPayload {
   critterId?: unknown;
   level?: unknown;
+  equippedAbilityId?: unknown;
   equippedSkillIds?: unknown;
   equippedItems?: unknown;
 }
@@ -1164,6 +1169,28 @@ const USE_SKILL_MODE_OPTIONS = new Set(['any', 'element', 'specific']);
 const DEAL_DAMAGE_MODE_OPTIONS = new Set(['any', 'element']);
 const EFFECT_BUFF_MODE_OPTIONS = new Set(['knockouts', 'deal_damage', 'damage_absorbed']);
 const ABSORB_MODE_OPTIONS = new Set(['knockout', 'damage']);
+const ABILITY_TEMPLATE_TYPE_OPTIONS = new Set(['guard-buff', 'damaged-buff']);
+const ABILITY_GUARD_MODE_OPTIONS = new Set(['recoil', 'proc']);
+const ABILITY_GUARD_RECOIL_MODE_OPTIONS = new Set([
+  'flat',
+  'percent_attacker_max_hp',
+  'percent_incoming_damage',
+]);
+const ABILITY_PROC_TARGET_OPTIONS = new Set(['self', 'attacker']);
+const ABILITY_DAMAGED_TRIGGER_TYPE_OPTIONS = new Set(['damage', 'effect']);
+const ABILITY_EFFECT_TRIGGER_FAMILY_OPTIONS = new Set([
+  'atk_buff',
+  'def_buff',
+  'speed_buff',
+  'atk_debuff',
+  'def_debuff',
+  'speed_debuff',
+  'crit_buff',
+  'persistent_heal',
+  'toxic',
+  'stun',
+  'flinch',
+]);
 const BUDDO_NAME = 'buddo';
 const BUDDO_STORY_MISSION_ID = 'select-bloom-partner-critter';
 const BUDDO_STORY_FLAG_ID = 'selected-bloom-starter';
@@ -1171,7 +1198,12 @@ const BUDDO_STORY_LABEL = 'Select Bloom Partner Critter';
 
 function parseCritterLibrary(
   raw: unknown,
-  options?: { strictUnique?: boolean; strictUniqueNames?: boolean; allowedElementIds?: Set<string> },
+  options?: {
+    strictUnique?: boolean;
+    strictUniqueNames?: boolean;
+    allowedElementIds?: Set<string>;
+    allowedAbilityIds?: Set<string>;
+  },
 ): Array<Record<string, unknown>> {
   if (!Array.isArray(raw)) {
     return [];
@@ -1180,12 +1212,13 @@ function parseCritterLibrary(
   const strictUnique = Boolean(options?.strictUnique);
   const strictUniqueNames = Boolean(options?.strictUniqueNames);
   const allowedElementIds = options?.allowedElementIds?.size ? options.allowedElementIds : undefined;
+  const allowedAbilityIds = options?.allowedAbilityIds?.size ? options.allowedAbilityIds : undefined;
   const seen = new Set<number>();
   const seenNames = new Set<string>();
   const parsed: Array<Record<string, unknown>> = [];
   for (let index = 0; index < raw.length; index += 1) {
     const entry = raw[index];
-    const critter = parseCritterDefinition(entry, index, allowedElementIds);
+    const critter = parseCritterDefinition(entry, index, allowedElementIds, allowedAbilityIds);
     if (!critter) {
       continue;
     }
@@ -1216,6 +1249,7 @@ function parseCritterDefinition(
   raw: unknown,
   index: number,
   allowedElementIds?: Set<string>,
+  allowedAbilityIds?: Set<string>,
 ): Record<string, unknown> | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return null;
@@ -1252,7 +1286,7 @@ function parseCritterDefinition(
 
   const abilities = parseCritterAbilities(record.abilities);
   const abilityIdSet = new Set(abilities.map((ability) => String(ability.id)));
-  const levels = parseCritterLevels(record.levels, abilityIdSet);
+  const levels = parseCritterLevels(record.levels, abilityIdSet, allowedAbilityIds);
 
   return {
     id,
@@ -1311,7 +1345,11 @@ function parseCritterAbilities(raw: unknown): Array<Record<string, unknown>> {
   return parsed;
 }
 
-function parseCritterLevels(raw: unknown, abilityIdSet: Set<string>): Array<Record<string, unknown>> {
+function parseCritterLevels(
+  raw: unknown,
+  localAbilityIdSet: Set<string>,
+  allowedAbilityIds?: Set<string>,
+): Array<Record<string, unknown>> {
   if (!Array.isArray(raw)) {
     return [];
   }
@@ -1337,11 +1375,16 @@ function parseCritterLevels(raw: unknown, abilityIdSet: Set<string>): Array<Reco
         : {};
     const requiredMissionCount = critterClampInt(record.requiredMissionCount, 0, missions.length, missions.length);
     const unlockEquipSlots = critterClampInt(record.unlockEquipSlots, 0, 8, level === 1 ? 1 : 0);
+    const abilityIdSet = allowedAbilityIds?.size
+      ? allowedAbilityIds
+      : localAbilityIdSet.size > 0
+        ? localAbilityIdSet
+        : null;
     const abilityUnlockIds = Array.isArray(record.abilityUnlockIds)
       ? record.abilityUnlockIds
           .filter((entry): entry is string => typeof entry === 'string')
           .map((entry) => entry.trim())
-          .filter((entry) => abilityIdSet.has(entry))
+          .filter((entry) => (abilityIdSet ? abilityIdSet.has(entry) : entry.length > 0))
           .slice(0, 20)
       : [];
 
@@ -1371,6 +1414,213 @@ function parseCritterLevels(raw: unknown, abilityIdSet: Set<string>): Array<Reco
 
   parsed.sort((a, b) => Number(a.level) - Number(b.level));
   return parsed;
+}
+
+function parseAbilityCatalog(
+  raw: unknown,
+  options?: { allowedElementIds?: Set<string> },
+): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const allowedElementIds = options?.allowedElementIds?.size ? options.allowedElementIds : undefined;
+  const parsed: Array<Record<string, unknown>> = [];
+  const seenIds = new Set<string>();
+  for (let index = 0; index < raw.length; index += 1) {
+    const entry = parseAbilityDefinition(raw[index], index, allowedElementIds);
+    if (!entry) {
+      continue;
+    }
+    const abilityId = String(entry.id);
+    if (!abilityId || seenIds.has(abilityId)) {
+      continue;
+    }
+    seenIds.add(abilityId);
+    parsed.push(entry);
+  }
+  return parsed;
+}
+
+function parseAbilityDefinition(
+  raw: unknown,
+  index: number,
+  allowedElementIds?: Set<string>,
+): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const id = sanitizeIdentifier(
+    typeof record.id === 'string' ? record.id : typeof record.ability_id === 'string' ? record.ability_id : '',
+    `ability-${index + 1}`,
+  );
+  const name =
+    typeof record.name === 'string' && record.name.trim()
+      ? record.name.trim().slice(0, 80)
+      : typeof record.ability_name === 'string' && record.ability_name.trim()
+        ? record.ability_name.trim().slice(0, 80)
+        : `Ability ${index + 1}`;
+  const elementRaw = typeof record.element === 'string' ? record.element.trim().toLowerCase() : 'normal';
+  const fallbackElement = allowedElementIds ? (allowedElementIds.values().next().value as string | undefined) : undefined;
+  const preferredElement = fallbackElement ?? elementRaw;
+  const element = allowedElementIds?.has(elementRaw) ? elementRaw : preferredElement || 'normal';
+  const description = typeof record.description === 'string' ? record.description.trim().slice(0, 240) : '';
+  return {
+    id,
+    name,
+    element,
+    description,
+    templateAttachments: parseAbilityTemplateAttachments(record.templateAttachments ?? record.template_attachments),
+  };
+}
+
+function parseAbilityTemplateAttachments(raw: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const parsed: Array<Record<string, unknown>> = [];
+  const seenTemplateTypes = new Set<string>();
+  for (const entry of raw) {
+    const parsedEntry = parseAbilityTemplateAttachment(entry);
+    if (!parsedEntry) {
+      continue;
+    }
+    const templateType = String(parsedEntry.templateType);
+    if (seenTemplateTypes.has(templateType)) {
+      continue;
+    }
+    seenTemplateTypes.add(templateType);
+    parsed.push(parsedEntry);
+  }
+  return parsed;
+}
+
+function parseAbilityTemplateAttachment(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const templateTypeRaw =
+    typeof record.templateType === 'string'
+      ? record.templateType.trim().toLowerCase()
+      : typeof record.template_type === 'string'
+        ? record.template_type.trim().toLowerCase()
+        : '';
+  if (!ABILITY_TEMPLATE_TYPE_OPTIONS.has(templateTypeRaw)) {
+    return null;
+  }
+  if (templateTypeRaw === 'guard-buff') {
+    const modeRaw = typeof record.mode === 'string' ? record.mode.trim().toLowerCase() : 'recoil';
+    const mode = ABILITY_GUARD_MODE_OPTIONS.has(modeRaw) ? modeRaw : 'recoil';
+    const recoilModeRaw =
+      typeof record.recoilMode === 'string'
+        ? record.recoilMode.trim().toLowerCase()
+        : typeof record.recoil_mode === 'string'
+          ? record.recoil_mode.trim().toLowerCase()
+          : 'flat';
+    const recoilMode = ABILITY_GUARD_RECOIL_MODE_OPTIONS.has(recoilModeRaw) ? recoilModeRaw : 'flat';
+    const procTargetRaw =
+      typeof record.procTarget === 'string'
+        ? record.procTarget.trim().toLowerCase()
+        : typeof record.proc_target === 'string'
+          ? record.proc_target.trim().toLowerCase()
+          : 'self';
+    return {
+      templateType: 'guard-buff',
+      mode,
+      recoilMode,
+      recoilValue:
+        recoilMode === 'flat'
+          ? critterClampInt(record.recoilValue ?? record.recoil_value, 0, 9999, 0)
+          : clampUnitFloat(record.recoilValue ?? record.recoil_value, 0),
+      ...(mode === 'proc' && {
+        procTarget: ABILITY_PROC_TARGET_OPTIONS.has(procTargetRaw) ? procTargetRaw : 'self',
+      }),
+      ...(mode === 'proc' && {
+        procEffectAttachment: parseSingleAbilitySkillEffectAttachment(
+          record.procEffectAttachment ?? record.proc_effect_attachment,
+        ),
+      }),
+    };
+  }
+
+  const triggerTypeRaw =
+    typeof record.triggerType === 'string'
+      ? record.triggerType.trim().toLowerCase()
+      : typeof record.trigger_type === 'string'
+        ? record.trigger_type.trim().toLowerCase()
+        : 'damage';
+  const triggerType = ABILITY_DAMAGED_TRIGGER_TYPE_OPTIONS.has(triggerTypeRaw) ? triggerTypeRaw : 'damage';
+  const rawTriggerFamilies = record.triggerFamilies ?? record.trigger_families;
+  const triggerFamilies = Array.isArray(rawTriggerFamilies)
+    ? rawTriggerFamilies
+        .filter((entry): entry is string => typeof entry === 'string')
+        .map((entry) => entry.trim().toLowerCase())
+        .filter(
+          (entry, entryIndex, values) =>
+            ABILITY_EFFECT_TRIGGER_FAMILY_OPTIONS.has(entry) && values.indexOf(entry) === entryIndex,
+        )
+        .slice(0, 20)
+    : [];
+  return {
+    templateType: 'damaged-buff',
+    triggerType,
+    ...(triggerType === 'damage' && {
+      belowPercent: clampUnitFloat(record.belowPercent ?? record.below_percent, 0.5),
+    }),
+    ...(triggerType === 'effect' && { triggerFamilies }),
+    rewardEffectAttachment: parseSingleAbilitySkillEffectAttachment(
+      record.rewardEffectAttachment ?? record.reward_effect_attachment,
+    ),
+  };
+}
+
+function parseSingleAbilitySkillEffectAttachment(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const effectId = sanitizeIdentifier(typeof record.effectId === 'string' ? record.effectId : '', '');
+  if (!effectId) {
+    return null;
+  }
+  return {
+    effectId,
+    procChance: clampUnitFloat(record.procChance, 1),
+    ...(record.buffPercent != null && { buffPercent: clampUnitFloat(record.buffPercent, 0.1) }),
+    ...(record.recoilMode != null && { recoilMode: typeof record.recoilMode === 'string' ? record.recoilMode : 'percent_max_hp' }),
+    ...(record.recoilPercent != null && { recoilPercent: clampUnitFloat(record.recoilPercent, 0.1) }),
+    ...(record.persistentHealMode != null && {
+      persistentHealMode: record.persistentHealMode === 'flat' ? 'flat' : 'percent_max_hp',
+    }),
+    ...(record.persistentHealValue != null && {
+      persistentHealValue:
+        record.persistentHealMode === 'flat'
+          ? critterClampInt(record.persistentHealValue, 1, 9999, 1)
+          : clampUnitFloat(record.persistentHealValue, 0.05),
+    }),
+    ...(record.persistentHealDurationTurns != null && {
+      persistentHealDurationTurns: critterClampInt(record.persistentHealDurationTurns, 1, 999, 1),
+    }),
+    ...(record.toxicPotencyBase != null && { toxicPotencyBase: clampUnitFloat(record.toxicPotencyBase, 0.05) }),
+    ...(record.toxicPotencyPerTurn != null && {
+      toxicPotencyPerTurn: clampUnitFloat(record.toxicPotencyPerTurn, 0.05),
+    }),
+    ...(record.stunFailChance != null && { stunFailChance: clampUnitFloat(record.stunFailChance, 0.25) }),
+    ...(record.stunSlowdown != null && { stunSlowdown: clampUnitFloat(record.stunSlowdown, 0.5) }),
+    ...(record.flinchFirstUseOnly === true && { flinchFirstUseOnly: true }),
+    ...(record.flinchFirstUseOnly === true && record.flinchFirstOverallOnly === true && { flinchFirstOverallOnly: true }),
+  };
+}
+
+function clampUnitFloat(value: unknown, fallback: number): number {
+  const parsed =
+    typeof value === 'number' && Number.isFinite(value)
+      ? value
+      : typeof value === 'string' && value.trim().length > 0
+        ? Number.parseFloat(value)
+        : Number.NaN;
+  return Number.isFinite(parsed) ? Math.max(0, Math.min(1, parsed)) : fallback;
 }
 
 function parseCritterLevelMissions(raw: unknown, level: number): Array<Record<string, unknown>> {
@@ -3262,6 +3512,7 @@ type NpcTeamBattleFormat = 'singles' | 'doubles' | 'triples';
 interface NpcTeamMigrationMember {
   critterId: number;
   level: number;
+  equippedAbilityId: string | null;
   equippedSkillIds: [string | null, string | null, string | null, string | null];
   equippedItems: Array<{ itemId: string; slotIndex: number }>;
 }
@@ -3310,6 +3561,10 @@ function normalizeNpcBattleMemberForMigration(raw: unknown): NpcTeamMigrationMem
   if (!Number.isFinite(critterId) || !Number.isFinite(level)) {
     return null;
   }
+  const equippedAbilityId =
+    typeof raw.equippedAbilityId === 'string' && raw.equippedAbilityId.trim()
+      ? sanitizeIdentifier(raw.equippedAbilityId, '')
+      : null;
   const rawSkillSlots = Array.isArray(raw.equippedSkillIds) ? raw.equippedSkillIds : [];
   const equippedSkillIds: [string | null, string | null, string | null, string | null] = [null, null, null, null];
   for (let slot = 0; slot < 4; slot += 1) {
@@ -3339,6 +3594,7 @@ function normalizeNpcBattleMemberForMigration(raw: unknown): NpcTeamMigrationMem
   return {
     critterId,
     level,
+    equippedAbilityId,
     equippedSkillIds,
     equippedItems,
   };
@@ -3452,6 +3708,7 @@ function buildNpcBattleConfigFromLegacyTeamIdsForMigration(
     members.push({
       critterId: resolvedCritter.id,
       level,
+      equippedAbilityId: null,
       equippedSkillIds: [null, null, null, null],
       equippedItems: [],
     });
@@ -3480,6 +3737,7 @@ function registerNpcTeamConfigForMigration(
     members: normalized.members.map((member) => ({
       critterId: member.critterId,
       level: member.level,
+      equippedAbilityId: member.equippedAbilityId ?? null,
       equippedSkillIds: [...member.equippedSkillIds],
       equippedItems: member.equippedItems.map((item) => ({
         itemId: item.itemId,
@@ -4041,6 +4299,7 @@ function createSpawnMapPayload(): EditableMapPayload {
 interface DuelCatalogCritterLevelRow {
   level: number;
   unlockEquipSlots: number;
+  unlockedAbilityIds: Set<string>;
   unlockedSkillIds: Set<string>;
 }
 
@@ -4059,12 +4318,14 @@ interface DuelCatalogEquipmentItem {
 interface DuelValidationCatalogs {
   critterById: Map<number, DuelCatalogCritter>;
   equipmentById: Map<string, DuelCatalogEquipmentItem>;
+  abilityIds: Set<string>;
   skillIds: Set<string>;
 }
 
 interface NormalizedDuelSquadMember {
   critterId: number;
   level: number;
+  equippedAbilityId: string | null;
   equippedSkillIds: [string | null, string | null, string | null, string | null];
   equippedItems: Array<{
     itemId: string;
@@ -4137,6 +4398,13 @@ function parseDuelLevelRows(rawLevels: unknown): DuelCatalogCritterLevelRow[] {
     if (level < 1) {
       continue;
     }
+    const rawAbilityIds = Array.isArray(entry.abilityUnlockIds) ? entry.abilityUnlockIds : [];
+    const unlockedAbilityIds = new Set(
+      rawAbilityIds
+        .filter((abilityId): abilityId is string => typeof abilityId === 'string')
+        .map((abilityId) => sanitizeDuelCatalogIdentifier(abilityId))
+        .filter((abilityId) => abilityId.length > 0),
+    );
     const rawSkillIds = Array.isArray(entry.skillUnlockIds) ? entry.skillUnlockIds : [];
     const unlockedSkillIds = new Set(
       rawSkillIds
@@ -4147,6 +4415,7 @@ function parseDuelLevelRows(rawLevels: unknown): DuelCatalogCritterLevelRow[] {
     rows.push({
       level,
       unlockEquipSlots: Math.max(0, Math.min(8, unlockEquipSlots)),
+      unlockedAbilityIds,
       unlockedSkillIds,
     });
   }
@@ -4169,6 +4438,20 @@ function computeDuelUnlockedEquipSlots(levelRows: DuelCatalogCritterLevelRow[], 
     unlocked += row.unlockEquipSlots;
   }
   return Math.max(0, Math.min(8, unlocked));
+}
+
+function computeDuelUnlockedAbilityIds(levelRows: DuelCatalogCritterLevelRow[], level: number): Set<string> {
+  const safeLevel = Math.max(1, Math.floor(level));
+  const unlocked = new Set<string>();
+  for (const row of levelRows) {
+    if (row.level > safeLevel) {
+      continue;
+    }
+    row.unlockedAbilityIds.forEach((abilityId) => {
+      unlocked.add(abilityId);
+    });
+  }
+  return unlocked;
 }
 
 function computeDuelUnlockedSkillIds(levelRows: DuelCatalogCritterLevelRow[], level: number): Set<string> {
@@ -4228,6 +4511,31 @@ function parseDuelSkillSlots(
     slots[slotIndex] = skillId;
   }
   return slots;
+}
+
+function parseDuelAbilityId(
+  raw: unknown,
+  unlockedAbilityIds: Set<string>,
+  knownAbilityIds: Set<string>,
+  memberLabel: string,
+): string | null {
+  if (raw == null || raw === '') {
+    return null;
+  }
+  if (typeof raw !== 'string') {
+    throw new Error(`${memberLabel} equippedAbilityId must be a string or null.`);
+  }
+  const abilityId = sanitizeDuelCatalogIdentifier(raw);
+  if (!abilityId) {
+    throw new Error(`${memberLabel} equipped ability is invalid.`);
+  }
+  if (!knownAbilityIds.has(abilityId)) {
+    throw new Error(`${memberLabel} ability "${abilityId}" does not exist.`);
+  }
+  if (!unlockedAbilityIds.has(abilityId)) {
+    throw new Error(`${memberLabel} ability "${abilityId}" is not unlocked at this level.`);
+  }
+  return abilityId;
 }
 
 function parseDuelEquippedItems(
@@ -4357,15 +4665,18 @@ function parseDuelSquadPayload(
       throw new Error(`Critter ${critterId} level must be between 1 and ${critter.maxLevel}.`);
     }
 
+    const unlockedAbilityIds = computeDuelUnlockedAbilityIds(critter.levelRows, level);
     const unlockedSkillIds = computeDuelUnlockedSkillIds(critter.levelRows, level);
     const equipSlotCount = computeDuelUnlockedEquipSlots(critter.levelRows, level);
     const memberLabel = `Critter ${critterId} at level ${level}`;
+    const equippedAbilityId = parseDuelAbilityId(entry.equippedAbilityId, unlockedAbilityIds, catalogs.abilityIds, memberLabel);
     const equippedSkillIds = parseDuelSkillSlots(entry.equippedSkillIds, unlockedSkillIds, catalogs.skillIds, memberLabel);
     const equippedItems = parseDuelEquippedItems(entry.equippedItems, equipSlotCount, catalogs.equipmentById, memberLabel);
 
     return {
       critterId,
       level,
+      equippedAbilityId,
       equippedSkillIds,
       equippedItems,
     };
@@ -4924,6 +5235,14 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       );
     `);
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_ability_catalog (
+        ability_id TEXT PRIMARY KEY,
+        ability_name TEXT NOT NULL,
+        ability_data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS game_skill_effects_catalog (
         effect_id TEXT PRIMARY KEY,
         effect_data JSONB NOT NULL,
@@ -5261,16 +5580,26 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
     if (!pool) {
       return [];
     }
-    const [rowsResult, elementsRows] = await Promise.all([
+    const [rowsResult, elementsRows, abilities] = await Promise.all([
       pool.query('SELECT critter_data FROM game_critter_catalog ORDER BY critter_id ASC, name ASC'),
       readGameElements(),
+      readGlobalAbilityCatalog(),
     ]);
     const allowedElementIds =
       elementsRows.length > 0
         ? new Set<string>(elementsRows.map((e) => String(e.element_id).trim().toLowerCase()))
         : undefined;
+    const allowedAbilityIds =
+      abilities.length > 0
+        ? new Set<string>(
+            abilities
+              .map((entry) => sanitizeIdentifier(typeof entry.id === 'string' ? entry.id : typeof entry.ability_id === 'string' ? entry.ability_id : '', ''))
+              .filter((entry) => entry.length > 0),
+          )
+        : undefined;
     return parseCritterLibrary(rowsResult.rows.map((row) => row.critter_data), {
       allowedElementIds,
+      allowedAbilityIds,
     });
   };
 
@@ -5431,12 +5760,28 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
     return (result.rows.map((row) => row.skill_data) as Array<Record<string, unknown>>).filter(Boolean);
   };
 
+  const readGlobalAbilityCatalog = async (): Promise<Array<Record<string, unknown>>> => {
+    if (!pool) {
+      return [];
+    }
+    const elementsRows = await readGameElements();
+    const allowedElementIds =
+      elementsRows.length > 0
+        ? new Set<string>(elementsRows.map((entry) => String(entry.element_id).trim().toLowerCase()))
+        : undefined;
+    const result = await pool.query('SELECT ability_data FROM game_ability_catalog ORDER BY ability_id ASC, ability_name ASC');
+    return parseAbilityCatalog(result.rows.map((row) => row.ability_data), {
+      allowedElementIds,
+    });
+  };
+
   const loadDuelValidationCatalogs = async (): Promise<DuelValidationCatalogs> => {
     await ensureGlobalCatalogBaseline();
-    const [critters, items, skills] = await Promise.all([
+    const [critters, items, skills, abilities] = await Promise.all([
       readGlobalCritterCatalog(),
       readGlobalItemCatalog(),
       readGlobalSkillCatalog(),
+      readGlobalAbilityCatalog(),
     ]);
 
     const critterById = new Map<number, DuelCatalogCritter>();
@@ -5493,10 +5838,23 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       skillIds.add(skillId);
     }
 
+    const abilityIds = new Set<string>();
+    for (const ability of abilities) {
+      if (!isPlainRecord(ability)) {
+        continue;
+      }
+      const abilityId = sanitizeDuelCatalogIdentifier(ability.id);
+      if (!abilityId) {
+        continue;
+      }
+      abilityIds.add(abilityId);
+    }
+
     return {
       critterById,
       equipmentById,
       skillIds,
+      abilityIds,
     };
   };
 
@@ -5541,6 +5899,45 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
             VALUES ($1, $2::jsonb, NOW())
           `,
           [skillId, JSON.stringify(skill)],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
+  const writeGlobalAbilityCatalog = async (abilities: Array<Record<string, unknown>>): Promise<void> => {
+    if (!pool) {
+      throw new Error('Database unavailable.');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM game_ability_catalog');
+      for (const ability of abilities) {
+        const abilityId = sanitizeIdentifier(
+          typeof ability.id === 'string' ? ability.id : typeof ability.ability_id === 'string' ? ability.ability_id : '',
+          '',
+        );
+        const abilityName =
+          typeof ability.name === 'string'
+            ? ability.name.trim()
+            : typeof ability.ability_name === 'string'
+              ? ability.ability_name.trim()
+              : '';
+        if (!abilityId || !abilityName) {
+          continue;
+        }
+        await client.query(
+          `
+            INSERT INTO game_ability_catalog (ability_id, ability_name, ability_data, updated_at)
+            VALUES ($1, $2, $3::jsonb, NOW())
+          `,
+          [abilityId, abilityName, JSON.stringify(ability)],
         );
       }
       await client.query('COMMIT');
@@ -5845,6 +6242,8 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
       '/api/admin/items/list',
       '/api/admin/shops/save',
       '/api/admin/shops/list',
+      '/api/admin/abilities/list',
+      '/api/admin/abilities/save',
       '/api/admin/skills/list',
       '/api/admin/skills/save',
       '/api/admin/skill-effects/list',
@@ -6089,7 +6488,22 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         } finally {
           client.release();
         }
-        const [mapsResult, tilesRowsResult, playerSpriteResult, npcLibraryResult, crittersResult, encounterResult, skills, effects, equipmentEffects, elementChart, gameElements, items, shops] = await Promise.all([
+        const [
+          mapsResult,
+          tilesRowsResult,
+          playerSpriteResult,
+          npcLibraryResult,
+          crittersResult,
+          encounterResult,
+          skills,
+          abilities,
+          effects,
+          equipmentEffects,
+          elementChart,
+          gameElements,
+          items,
+          shops,
+        ] = await Promise.all([
           pool.query('SELECT map_data FROM game_maps ORDER BY updated_at DESC'),
           pool.query('SELECT id, name, primary_code, width, height, y_sort_with_actors, tileset_url, tile_pixel_width, tile_pixel_height, cells FROM game_tiles ORDER BY updated_at DESC'),
           pool.query('SELECT sprite_config FROM game_player_sprite_configs WHERE catalog_key = $1', [GLOBAL_CATALOG_KEY]),
@@ -6097,6 +6511,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
           pool.query('SELECT critter_data FROM game_critter_catalog ORDER BY critter_id ASC, name ASC'),
           pool.query('SELECT table_data FROM game_encounter_catalog ORDER BY table_id ASC'),
           readGlobalSkillCatalog(),
+          readGlobalAbilityCatalog(),
           readGlobalSkillEffectsCatalog(),
           readGlobalEquipmentEffectsCatalog(),
           readElementChart(),
@@ -6121,8 +6536,17 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
           gameElements.length > 0
             ? new Set<string>(gameElements.map((e) => String(e.element_id).trim().toLowerCase()))
             : undefined;
+        const allowedAbilityIds =
+          abilities.length > 0
+            ? new Set<string>(
+                abilities
+                  .map((entry) => sanitizeIdentifier(typeof entry.id === 'string' ? entry.id : typeof entry.ability_id === 'string' ? entry.ability_id : '', ''))
+                  .filter((entry) => entry.length > 0),
+              )
+            : undefined;
         const critters = parseCritterLibrary(crittersResult.rows.map((row) => row.critter_data), {
           allowedElementIds,
+          allowedAbilityIds,
         });
         const encounterTables = parseEncounterLibrary(encounterResult.rows.map((row) => row.table_data));
         sendJson(res, 200, {
@@ -6138,6 +6562,7 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
             critters,
             encounterTables,
             critterSkills: skills,
+            abilities,
             skillEffects: effects,
             equipmentEffects,
             elementChart,
@@ -6790,15 +7215,24 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         }
         await ensureGlobalCatalogBaseline();
         const body = (await readJsonBody(req)) as { critters?: unknown };
-        const elementsRows = await readGameElements();
+        const [elementsRows, abilities] = await Promise.all([readGameElements(), readGlobalAbilityCatalog()]);
         const allowedElementIds =
           elementsRows.length > 0
             ? new Set<string>(elementsRows.map((e) => String(e.element_id).trim().toLowerCase()))
+            : undefined;
+        const allowedAbilityIds =
+          abilities.length > 0
+            ? new Set<string>(
+                abilities
+                  .map((entry) => sanitizeIdentifier(typeof entry.id === 'string' ? entry.id : typeof entry.ability_id === 'string' ? entry.ability_id : '', ''))
+                  .filter((entry) => entry.length > 0),
+              )
             : undefined;
         const critters = parseCritterLibrary(body.critters, {
           strictUnique: true,
           strictUniqueNames: true,
           allowedElementIds,
+          allowedAbilityIds,
         });
         await writeGlobalCritterCatalog(critters);
         sendJson(res, 200, { ok: true });
@@ -6887,6 +7321,35 @@ function createAdminMapApiPlugin(dbConnectionString: string, supabaseStorageConf
         const shops = parseShopCatalog(body.shops, { strictUnique: true, strictEntryUnique: true });
         await writeGlobalShopCatalog(shops);
         sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (url === '/api/admin/abilities/list' && req.method === 'GET') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const abilities = await readGlobalAbilityCatalog();
+        sendJson(res, 200, { ok: true, abilities });
+        return;
+      }
+
+      if (url === '/api/admin/abilities/save' && req.method === 'POST') {
+        const auth = await requireAdminAuth(req, res);
+        if (!auth || !pool) {
+          return;
+        }
+        await ensureGlobalCatalogBaseline();
+        const body = (await readJsonBody(req)) as SaveAbilitiesRequestPayload;
+        const elementsRows = await readGameElements();
+        const allowedElementIds =
+          elementsRows.length > 0
+            ? new Set<string>(elementsRows.map((entry) => String(entry.element_id).trim().toLowerCase()))
+            : undefined;
+        const abilities = parseAbilityCatalog(body.abilities, { allowedElementIds });
+        await writeGlobalAbilityCatalog(abilities);
+        sendJson(res, 200, { ok: true, abilities });
         return;
       }
 

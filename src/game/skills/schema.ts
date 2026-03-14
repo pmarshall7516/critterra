@@ -275,7 +275,7 @@ function sanitizeSkillEffectIdArray(
   return deduped.size > 0 ? Array.from(deduped) : undefined;
 }
 
-function sanitizeSkillEffectAttachments(
+export function sanitizeSkillEffectAttachments(
   raw: unknown,
   knownEffectIds?: Set<string>,
   legacyEffectBuffPercentById?: ReadonlyMap<string, number>,

@@ -16,6 +16,7 @@ export interface DuelSquadDraft {
   members: Array<{
     critterId: number;
     level: number;
+    equippedAbilityId: string | null;
     equippedSkillIds: Array<string | null>;
     equippedItems: Array<{
       itemId: string;
@@ -38,6 +39,7 @@ export interface DuelSquadValidationResult {
 export function buildDuelCatalogIndexes(catalogs: DuelCatalogContent): DuelCatalogIndexes {
   return {
     critterById: new Map(catalogs.critters.map((entry) => [entry.id, entry] as const)),
+    abilityById: new Map(catalogs.abilities.map((entry) => [entry.id, entry] as const)),
     itemById: new Map(catalogs.items.map((entry) => [entry.id, entry] as const)),
     skillById: new Map(catalogs.skills.map((entry) => [entry.skill_id, entry] as const)),
     skillEffectById: new Map(catalogs.skillEffects.map((entry) => [entry.effect_id, entry] as const)),
@@ -86,7 +88,16 @@ export function toSavedSquadPayload(squad: DuelSquadDraft, indexes: DuelCatalogI
       return;
     }
 
-    const unlockedSkills = new Set(computeCritterDerivedProgress(critter, level).unlockedSkillIds);
+    const derived = computeCritterDerivedProgress(critter, level);
+    const unlockedSkills = new Set(derived.unlockedSkillIds);
+    const unlockedAbilities = new Set(derived.unlockedAbilityIds);
+    const normalizedAbilityId = normalizeAbilityId(
+      member.equippedAbilityId,
+      critterPath,
+      unlockedAbilities,
+      indexes.abilityById,
+      issues,
+    );
     const normalizedSkillSlots = normalizeSkillSlots(member.equippedSkillIds, critterPath, unlockedSkills, indexes.skillById, issues);
 
     const equipSlotCount = computeCritterUnlockedEquipSlots(critter, level);
@@ -105,6 +116,7 @@ export function toSavedSquadPayload(squad: DuelSquadDraft, indexes: DuelCatalogI
     normalizedMembers.push({
       critterId: member.critterId,
       level,
+      equippedAbilityId: normalizedAbilityId,
       equippedSkillIds: normalizedSkillSlots,
       equippedItems: normalizedItems,
     });
@@ -139,6 +151,7 @@ export function toDuelDraftFromSavedSquad(squad: DuelSquad): DuelSquadDraft {
     members: squad.members.map((member) => ({
       critterId: member.critterId,
       level: member.level,
+      equippedAbilityId: member.equippedAbilityId ?? null,
       equippedSkillIds: [...member.equippedSkillIds],
       equippedItems: member.equippedItems.map((item) => ({
         itemId: item.itemId,
@@ -197,6 +210,34 @@ function normalizeSkillSlots(
     normalized[slot] = skillId;
   }
   return normalized;
+}
+
+function normalizeAbilityId(
+  rawAbilityId: string | null | undefined,
+  critterPath: string,
+  unlockedAbilities: Set<string>,
+  abilityById: Map<string, { id: string }>,
+  issues: DuelValidationIssue[],
+): string | null {
+  if (!rawAbilityId) {
+    return null;
+  }
+  const abilityId = normalizeCatalogId(rawAbilityId);
+  if (!abilityId || !abilityById.has(abilityId)) {
+    issues.push({
+      path: `${critterPath}.equippedAbilityId`,
+      message: 'Selected ability does not exist.',
+    });
+    return null;
+  }
+  if (!unlockedAbilities.has(abilityId)) {
+    issues.push({
+      path: `${critterPath}.equippedAbilityId`,
+      message: 'Selected ability is not unlocked at this level.',
+    });
+    return null;
+  }
+  return abilityId;
 }
 
 function normalizeEquippedItems(

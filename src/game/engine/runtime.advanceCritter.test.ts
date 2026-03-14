@@ -58,6 +58,7 @@ function createProgressEntry(
     statBonus: { ...EMPTY_STATS },
     effectiveStats: { hp: 24, attack: 10, defense: 8, speed: 7 },
     unlockedAbilityIds: [],
+    equippedAbilityId: null,
     equippedSkillIds: ['tackle', null, null, null],
     equippedEquipmentAnchors: [],
     lastProgressAt: null,

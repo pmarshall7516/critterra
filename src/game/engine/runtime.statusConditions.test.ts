@@ -50,6 +50,7 @@ function createProgressEntry(
     statBonus: input?.statBonus ?? { ...EMPTY_STATS },
     effectiveStats: input?.effectiveStats ?? { ...critter.baseStats },
     unlockedAbilityIds: input?.unlockedAbilityIds ?? [],
+    equippedAbilityId: input?.equippedAbilityId ?? null,
     equippedSkillIds: input?.equippedSkillIds ?? [null, null, null, null],
     equippedEquipmentAnchors: input?.equippedEquipmentAnchors ?? [],
     persistentStatus: input?.persistentStatus ?? null,

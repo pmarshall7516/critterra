@@ -87,4 +87,50 @@ describe('sanitizeItemDefinition', () => {
       ],
     });
   });
+
+  it('normalizes healing cure status kinds and infers curesStatus from selected kinds', () => {
+    const item = sanitizeItemDefinition(
+      {
+        id: 'status-berry',
+        name: 'Status Berry',
+        category: 'healing',
+        effectType: 'heal_flat',
+        effectConfig: {
+          healAmount: 14,
+          curesStatusKinds: ['stun', 'toxic', 'stun', 'unknown'],
+        },
+      },
+      0,
+    );
+
+    expect(item).not.toBeNull();
+    expect(item?.effectConfig).toMatchObject({
+      healAmount: 14,
+      curesStatus: true,
+      curesStatusKinds: ['toxic', 'stun'],
+    });
+  });
+
+  it('supports legacy curesStatus=true without explicit cure kind list', () => {
+    const item = sanitizeItemDefinition(
+      {
+        id: 'legacy-cleanse-berry',
+        name: 'Legacy Cleanse Berry',
+        category: 'healing',
+        effectType: 'heal_percent',
+        effectConfig: {
+          healPercent: 0.4,
+          curesStatus: true,
+        },
+      },
+      0,
+    );
+
+    expect(item).not.toBeNull();
+    expect(item?.effectConfig).toMatchObject({
+      healPercent: 0.4,
+      curesStatus: true,
+    });
+    expect((item?.effectConfig as any).curesStatusKinds).toBeUndefined();
+  });
 });

@@ -2080,6 +2080,7 @@ button.secondary:hover:not(:disabled) {
 .collection-card__stats h3,
 .collection-card__missions h3,
 .collection-card__abilities h3,
+.collection-card__ability-slot h3,
 .collection-card__skills h3 {
   margin: 0 0 0.24rem;
   font-size: 0.62rem;
@@ -2091,6 +2092,7 @@ button.secondary:hover:not(:disabled) {
 .collection-card__stats,
 .collection-card__missions,
 .collection-card__abilities,
+.collection-card__ability-slot,
 .collection-card__skills {
   background: rgba(10, 23, 42, 0.76);
   border: 1px solid rgba(121, 198, 255, 0.26);
@@ -2104,14 +2106,47 @@ button.secondary:hover:not(:disabled) {
   position: relative;
 }
 
+.collection-card__ability-slot {
+  position: relative;
+}
+
 .collection-grid .collection-card__stats,
 .collection-grid .collection-card__missions,
 .collection-grid .collection-card__abilities,
+.collection-grid .collection-card__ability-slot,
 .collection-grid .collection-card__skills {
-  width: clamp(192px, 96cqw, 320px);
-  justify-self: center;
+  justify-self: stretch;
   padding: clamp(0.08rem, 0.5cqw, 0.16rem) clamp(0.28rem, 1.4cqw, 0.42rem)
     clamp(0.08rem, 0.4cqw, 0.14rem);
+}
+
+.collection-card__stats-ability-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.28rem;
+  min-width: 0;
+}
+
+.collection-grid .collection-card__stats-ability-row {
+  width: 100%;
+  justify-self: stretch;
+}
+
+.collection-card__stats-ability-row > .collection-card__stats,
+.collection-card__stats-ability-row > .collection-card__ability-slot {
+  width: 100%;
+  justify-self: stretch;
+}
+
+.collection-grid .collection-card__skills,
+.collection-grid .collection-card__missions,
+.collection-grid .collection-card__abilities {
+  width: 100%;
+  justify-self: stretch;
+}
+
+.collection-card__ability-slot .collection-card__skill-slot {
+  width: 100%;
 }
 
 .collection-card__skill-grid {
@@ -2293,6 +2328,7 @@ button.secondary:hover:not(:disabled) {
 .collection-grid .collection-card__stats h3,
 .collection-grid .collection-card__missions h3,
 .collection-grid .collection-card__abilities h3,
+.collection-grid .collection-card__ability-slot h3,
 .collection-grid .collection-card__skills h3 {
   margin: 0 0 clamp(0.03rem, 0.35cqw, 0.1rem);
   font-size: clamp(0.68rem, 3.4cqw, 0.9rem);
@@ -3111,6 +3147,13 @@ button.secondary:hover:not(:disabled) {
   padding-right: 0;
 }
 
+.admin-layout--single .admin-layout__right {
+  width: min(1400px, 100%);
+  max-width: 100%;
+  margin: 0 auto;
+  padding-right: 0;
+}
+
 .admin-layout--single .admin-grid-2 {
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
@@ -3131,6 +3174,15 @@ button.secondary:hover:not(:disabled) {
   min-height: auto;
   overflow: visible;
   padding-right: 0;
+}
+
+.admin-layout__right {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  min-height: auto;
+  overflow: visible;
+  min-width: 0;
 }
 
 .admin-map-workspace {
@@ -3213,6 +3265,20 @@ button.secondary:hover:not(:disabled) {
   gap: 0.55rem;
   align-items: center;
   margin-bottom: 0.55rem;
+}
+
+.admin-search-field {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+  margin-bottom: 0.55rem;
+  width: min(100%, 26rem);
+  color: #d9efff;
+}
+
+.admin-search-field input {
+  width: 100%;
 }
 
 .admin-grid-2 {
@@ -3329,6 +3395,10 @@ button.secondary:hover:not(:disabled) {
 }
 
 .admin-effect-picker__dropdown-item--skill:not(:first-child) {
+  border-top: 1px solid rgba(121, 198, 255, 0.18);
+}
+
+.admin-effect-picker__dropdown-item--ability:not(:first-child) {
   border-top: 1px solid rgba(121, 198, 255, 0.18);
 }
 
@@ -3499,6 +3569,118 @@ button.secondary:hover:not(:disabled) {
   font-size: 0.66rem;
   line-height: 1;
   padding: 0.3rem 0.45rem;
+}
+
+/* Item database cards: sprite + multiline content, no id */
+.critter-db-card--item .critter-db-card__name {
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.25;
+}
+
+.critter-db-card--item .critter-db-card__header {
+  flex-wrap: wrap;
+}
+
+.critter-database-list--item {
+  max-height: clamp(16rem, 56vh, 36rem);
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
+
+/* Healing item: cures status list + add buttons */
+.healing-status-cures {
+  border: 1px solid rgba(50, 80, 120, 0.5);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  background: rgba(12, 25, 44, 0.5);
+}
+
+.healing-status-cures__title {
+  margin: 0 0 0.35rem;
+  font-size: 0.9rem;
+  color: #9ec8e8;
+}
+
+.healing-status-cures__intro {
+  margin: 0 0 0.5rem;
+  font-size: 0.78rem;
+  color: #9dbedc;
+}
+
+.healing-status-cures__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.6rem;
+}
+
+.healing-status-cures__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.35rem 0.2rem 0.5rem;
+  font-size: 0.78rem;
+  color: #e6f4ff;
+  background: rgba(80, 140, 200, 0.25);
+  border: 1px solid rgba(101, 192, 255, 0.35);
+  border-radius: 6px;
+}
+
+.healing-status-cures__chip-remove {
+  padding: 0 0.2rem;
+  font-size: 1rem;
+  line-height: 1;
+  color: #9dbedc;
+  background: transparent;
+  border: none;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.healing-status-cures__chip-remove:hover {
+  color: #e6f4ff;
+  background: rgba(200, 80, 80, 0.3);
+}
+
+.healing-status-cures__empty {
+  margin: 0 0 0.6rem;
+  font-size: 0.78rem;
+  color: #7a9bb5;
+  font-style: italic;
+}
+
+.healing-status-cures__add {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.healing-status-cures__add-label {
+  font-size: 0.75rem;
+  color: #8eb9dd;
+}
+
+.healing-status-cures__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.healing-status-cures__status-btn {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.5rem;
+}
+
+.healing-status-cures__status-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.healing-status-cures__cure-all {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.5rem;
+  margin-left: 0.25rem;
 }
 
 .critter-editor-panel {
@@ -5962,6 +6144,32 @@ button.secondary:hover:not(:disabled) {
   margin-top: 0.5rem;
 }
 
+.admin-item-grid--catalog {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  align-content: start;
+  max-height: 34rem;
+  overflow-y: auto;
+  padding-right: 0.3rem;
+}
+
+.move-tool__catalog-scroll {
+  margin-top: 0.5rem;
+  min-height: 19rem;
+  max-height: 36rem;
+  overflow-y: auto;
+  border: 1px solid rgba(121, 198, 255, 0.22);
+  border-radius: 10px;
+  background: rgba(8, 21, 39, 0.35);
+  padding: 0.45rem;
+}
+
+.move-tool__catalog-scroll .admin-item-grid--catalog {
+  max-height: none;
+  overflow-y: visible;
+  padding-right: 0;
+  margin-top: 0;
+}
+
 .admin-item-grid button {
   min-width: 0;
   text-align: left;
@@ -6009,6 +6217,101 @@ button.secondary:hover:not(:disabled) {
   border: 1px solid rgba(101, 192, 255, 0.26);
   border-radius: 8px;
   padding: 0.35rem;
+}
+
+.ability-tool__saved-button {
+  min-height: 2.3rem;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.5rem;
+}
+
+.ability-tool__saved-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.ability-tool__saved-button.admin-skill-list-item--colored .ability-tool__saved-name,
+.ability-tool__saved-button.admin-skill-list-item--colored .ability-tool__saved-meta {
+  color: rgba(16, 22, 31, 0.9);
+}
+
+.ability-tool__saved-meta {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.ability-tool__identity-row {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ability-tool__description-row {
+  margin-bottom: 0.65rem;
+}
+
+.ability-tool__description-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.ability-tool__description-row textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.ability-tool__template-search {
+  width: 100%;
+  max-width: none;
+  margin-bottom: 0.45rem;
+}
+
+.ability-tool__template-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.45rem;
+  margin-bottom: 0.65rem;
+}
+
+.ability-tool__template-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  text-align: left;
+}
+
+.ability-tool__template-button-count {
+  font-size: 0.75rem;
+  opacity: 0.86;
+  white-space: nowrap;
+}
+
+@media (max-width: 1400px) {
+  .admin-item-grid--catalog {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1100px) {
+  .admin-item-grid--catalog {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .admin-item-grid--catalog {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .saved-paint-row.is-selected {

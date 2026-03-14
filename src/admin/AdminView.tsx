@@ -11,6 +11,7 @@ import { ElementChartTool } from '@/admin/ElementChartTool';
 import { FlagsTool } from '@/admin/FlagsTool';
 import { ItemTool } from '@/admin/ItemTool';
 import { ShopTool } from '@/admin/ShopTool';
+import { AbilitiesTool } from '@/admin/AbilitiesTool';
 import { apiFetchJson } from '@/shared/apiClient';
 import { setAuthToken } from '@/shared/authStorage';
 
@@ -24,6 +25,7 @@ type AdminRoute =
   | 'critters'
   | 'encounters'
   | 'items'
+  | 'abilities'
   | 'shops'
   | 'flags'
   | 'moves'
@@ -62,6 +64,7 @@ const ACTIVE_NAV_LINKS: AdminNavLink[] = [
   { id: 'critters', label: 'Critters', type: 'active' },
   { id: 'encounters', label: 'Encounters', type: 'active' },
   { id: 'items', label: 'Items', type: 'active' },
+  { id: 'abilities', label: 'Abilities', type: 'active' },
   { id: 'shops', label: 'Shops', type: 'active' },
   { id: 'moves', label: 'Skills', type: 'active' },
   { id: 'skill-effects', label: 'Skill Effects', type: 'active' },
@@ -99,6 +102,7 @@ function parseAdminRoute(pathname: string): AdminRoute {
     route === 'critters' ||
     route === 'encounters' ||
     route === 'items' ||
+    route === 'abilities' ||
     route === 'shops' ||
     route === 'flags' ||
     route === 'moves' ||
@@ -224,6 +228,9 @@ export function AdminView({ gameHref = '/' }: AdminViewProps) {
     if (activeRoute === 'items') {
       return 'Item Catalog';
     }
+    if (activeRoute === 'abilities') {
+      return 'Ability Catalog';
+    }
     if (activeRoute === 'shops') {
       return 'Shop Catalog';
     }
@@ -347,6 +354,7 @@ export function AdminView({ gameHref = '/' }: AdminViewProps) {
           {activeRoute === 'critters' && <CritterTool />}
           {activeRoute === 'encounters' && <EncounterTool />}
           {activeRoute === 'items' && <ItemTool />}
+          {activeRoute === 'abilities' && <AbilitiesTool />}
           {activeRoute === 'shops' && <ShopTool />}
           {activeRoute === 'moves' && <MoveTool />}
           {activeRoute === 'skill-effects' && <SkillEffectsTool />}

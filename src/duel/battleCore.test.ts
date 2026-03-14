@@ -94,6 +94,7 @@ function createMember(
   return {
     critterId,
     level: 1,
+    equippedAbilityId: null,
     equippedSkillIds,
     equippedItems: [...equippedItems],
   };
@@ -150,6 +151,7 @@ function createCatalogs(input: {
 }): DuelCatalogContent {
   return {
     critters: input.critters,
+    abilities: [],
     skills: input.skills,
     skillEffects: input.skillEffects ?? ([] as SkillEffectDefinition[]),
     equipmentEffects: input.equipmentEffects ?? ([] as EquipmentEffectDefinition[]),

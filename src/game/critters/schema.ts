@@ -140,7 +140,10 @@ export function buildCritterLookup(database: CritterDefinition[]): Record<number
   return lookup;
 }
 
-export function sanitizeCritterDatabase(raw: unknown): CritterDefinition[] {
+export function sanitizeCritterDatabase(
+  raw: unknown,
+  options?: { allowedAbilityIds?: Iterable<string> },
+): CritterDefinition[] {
   if (!Array.isArray(raw)) {
     return ensureBuddoStarterStoryMission([...BASE_CRITTER_DATABASE]);
   }
@@ -148,7 +151,7 @@ export function sanitizeCritterDatabase(raw: unknown): CritterDefinition[] {
   const parsed: CritterDefinition[] = [];
   const seenIds = new Set<number>();
   for (let index = 0; index < raw.length; index += 1) {
-    const critter = sanitizeCritterDefinition(raw[index], index);
+    const critter = sanitizeCritterDefinition(raw[index], index, options);
     if (!critter || seenIds.has(critter.id)) {
       continue;
     }
@@ -159,7 +162,11 @@ export function sanitizeCritterDatabase(raw: unknown): CritterDefinition[] {
   return ensureBuddoStarterStoryMission(parsed.length > 0 ? parsed : [...BASE_CRITTER_DATABASE]);
 }
 
-export function sanitizeCritterDefinition(raw: unknown, index = 0): CritterDefinition | null {
+export function sanitizeCritterDefinition(
+  raw: unknown,
+  index = 0,
+  options?: { allowedAbilityIds?: Iterable<string> },
+): CritterDefinition | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return null;
   }
@@ -179,7 +186,11 @@ export function sanitizeCritterDefinition(raw: unknown, index = 0): CritterDefin
   const spriteUrl = sanitizeCritterSpriteUrl(record.spriteUrl ?? spriteRecord?.url);
   const baseStats = sanitizeCritterStats(record.baseStats);
   const abilities = sanitizeAbilityDefinitions(record.abilities);
-  const levels = sanitizeLevelRequirements(record.levels, abilities);
+  const levels = sanitizeLevelRequirements(
+    record.levels,
+    abilities,
+    options?.allowedAbilityIds ? new Set(options.allowedAbilityIds) : undefined,
+  );
 
   return {
     id,
@@ -267,6 +278,12 @@ export function sanitizePlayerCritterProgress(
       statBonus: derived.statBonus,
       effectiveStats: derived.effectiveStats,
       unlockedAbilityIds: derived.unlockedAbilityIds,
+      equippedAbilityId:
+        unlocked && level > 0 && typeof existing.equippedAbilityId === 'string'
+          ? derived.unlockedAbilityIds.includes(existing.equippedAbilityId)
+            ? existing.equippedAbilityId
+            : null
+          : null,
       equippedSkillIds: existing.equippedSkillIds,
       equippedEquipmentAnchors:
         unlocked && level > 0
@@ -337,6 +354,7 @@ function createDefaultCollectionEntry(critter: CritterDefinition): PlayerCritter
     statBonus: derived.statBonus,
     effectiveStats: derived.effectiveStats,
     unlockedAbilityIds: derived.unlockedAbilityIds,
+    equippedAbilityId: null,
     equippedSkillIds: [null, null, null, null],
     equippedEquipmentAnchors: [],
     persistentStatus: null,
@@ -389,6 +407,12 @@ function sanitizeCollectionEntry(
   }
 
   const equippedSkillIds = sanitizeEquippedSkillSlots(record.equippedSkillIds);
+  const equippedAbilityId =
+    typeof record.equippedAbilityId === 'string' && record.equippedAbilityId.trim()
+      ? record.equippedAbilityId.trim()
+      : typeof record.equipped_ability_id === 'string' && record.equipped_ability_id.trim()
+        ? record.equipped_ability_id.trim()
+        : null;
   const equippedEquipmentAnchors = sanitizeEquippedEquipmentAnchors(
     record.equippedEquipmentAnchors ?? record.equippedEquipmentItems,
   );
@@ -419,6 +443,7 @@ function sanitizeCollectionEntry(
       speed: 1,
     },
     unlockedAbilityIds: [],
+    equippedAbilityId,
     equippedSkillIds,
     equippedEquipmentAnchors,
     persistentStatus,
@@ -505,15 +530,16 @@ function sanitizeAbilityDefinition(raw: unknown, index: number): CritterAbilityD
 function sanitizeLevelRequirements(
   raw: unknown,
   abilities: CritterAbilityDefinition[],
+  allowedAbilityIds?: Set<string>,
 ): CritterLevelRequirement[] {
   if (!Array.isArray(raw)) {
     return [];
   }
-  const abilityIdSet = new Set(abilities.map((ability) => ability.id));
+  const localAbilityIdSet = new Set(abilities.map((ability) => ability.id));
   const parsed: CritterLevelRequirement[] = [];
   const seenLevels = new Set<number>();
   for (let index = 0; index < raw.length; index += 1) {
-    const levelRequirement = sanitizeLevelRequirement(raw[index], index, abilityIdSet);
+    const levelRequirement = sanitizeLevelRequirement(raw[index], index, localAbilityIdSet, allowedAbilityIds);
     if (!levelRequirement || seenLevels.has(levelRequirement.level)) {
       continue;
     }
@@ -527,7 +553,8 @@ function sanitizeLevelRequirements(
 function sanitizeLevelRequirement(
   raw: unknown,
   index: number,
-  abilityIdSet: Set<string>,
+  localAbilityIdSet: Set<string>,
+  allowedAbilityIds?: Set<string>,
 ): CritterLevelRequirement | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return null;
@@ -541,7 +568,15 @@ function sanitizeLevelRequirement(
       : {};
   const requiredMissionCount = clampInt(record.requiredMissionCount, 0, missions.length, missions.length);
   const unlockEquipSlots = clampInt(record.unlockEquipSlots, 0, 8, level === 1 ? 1 : 0);
-  const abilityUnlockIds = sanitizeStringArray(record.abilityUnlockIds, 30).filter((id) => abilityIdSet.has(id));
+  const rawAbilityUnlockIds = sanitizeStringArray(record.abilityUnlockIds, 30);
+  const abilityIdSet = allowedAbilityIds?.size
+    ? allowedAbilityIds
+    : localAbilityIdSet.size > 0
+      ? localAbilityIdSet
+      : null;
+  const abilityUnlockIds = abilityIdSet
+    ? rawAbilityUnlockIds.filter((id) => abilityIdSet.has(id))
+    : rawAbilityUnlockIds;
   const skillUnlockIds = sanitizeStringArray(record.skillUnlockIds, 30).filter((id) => id.length > 0);
 
   return {

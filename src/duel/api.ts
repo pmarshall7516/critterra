@@ -2,6 +2,7 @@ import { sanitizeCritterDatabase } from '@/game/critters/schema';
 import { sanitizeEquipmentEffectLibrary } from '@/game/equipmentEffects/schema';
 import { sanitizeGameElements } from '@/game/elements/schema';
 import { sanitizeItemCatalog } from '@/game/items/schema';
+import { sanitizeAbilityLibrary } from '@/game/abilities/schema';
 import {
   buildDefaultElementChart,
   sanitizeElementChart,
@@ -19,6 +20,7 @@ interface ContentBootstrapResponse {
     critterSkills?: unknown;
     skillEffects?: unknown;
     equipmentEffects?: unknown;
+    abilities?: unknown;
     elementChart?: unknown;
     gameElements?: unknown;
     items?: unknown;
@@ -37,6 +39,7 @@ interface DuelSquadsResponse {
 interface DuelSquadMemberWire {
   critterId?: unknown;
   level?: unknown;
+  equippedAbilityId?: unknown;
   equippedSkillIds?: unknown;
   equippedItems?: unknown;
 }
@@ -66,9 +69,19 @@ export async function fetchDuelCatalogContent(): Promise<DuelCatalogContent> {
       .map((effect) => [effect.effect_id, effect.buffPercent as number]),
   );
   const allowedElementIds = gameElements.length ? gameElements.map((e) => e.id) : undefined;
+  const abilities = sanitizeAbilityLibrary(
+    (content as { abilities?: unknown }).abilities,
+    knownEffectIds,
+    legacyBuffById,
+    effectTypeById,
+    allowedElementIds,
+  );
 
   return {
-    critters: sanitizeCritterDatabase(content.critters),
+    critters: sanitizeCritterDatabase(content.critters, {
+      allowedAbilityIds: abilities.map((ability) => ability.id),
+    }),
+    abilities,
     skills: sanitizeSkillLibrary(content.critterSkills, knownEffectIds, legacyBuffById, effectTypeById, allowedElementIds),
     skillEffects,
     equipmentEffects: sanitizeEquipmentEffectLibrary(content.equipmentEffects),
@@ -227,6 +240,10 @@ function sanitizeDuelMemberWire(raw: unknown): DuelSquad['members'][number] | nu
   return {
     critterId,
     level,
+    equippedAbilityId:
+      typeof record.equippedAbilityId === 'string' && record.equippedAbilityId.trim()
+        ? record.equippedAbilityId.trim()
+        : null,
     equippedSkillIds,
     equippedItems,
   };

@@ -691,6 +691,17 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
     if (changed) setSnapshot(runtime.getSnapshot());
   };
 
+  const handleEquipAbility = (critterId: number, abilityId: string | null) => {
+    const runtime = runtimeRef.current;
+    if (!runtime) {
+      return;
+    }
+    const changed = runtime.setEquippedAbility(critterId, abilityId);
+    if (changed) {
+      setSnapshot(runtime.getSnapshot());
+    }
+  };
+
   const handleUnequipSkill = (critterId: number, slotIndex: number) => {
     const runtime = runtimeRef.current;
     if (!runtime) return;
@@ -1330,6 +1341,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                       }}
                       onEquipSkill={handleEquipSkill}
                       onUnequipSkill={handleUnequipSkill}
+                      onEquipAbility={handleEquipAbility}
                       statOverride={slot.equipmentAdjustedStats ?? undefined}
                       equipmentSlots={slot.equipmentSlots}
                       equipmentOptions={equipmentPickerItems}
@@ -1611,6 +1623,7 @@ export function GameView({ mode, playerName, onReturnToTitle }: GameViewProps) {
                     onPayMission={handlePayCritterMission}
                     onSetLockedKnockoutTarget={handleSetLockedKnockoutTarget}
                     onSetLockedDamageTarget={handleSetLockedDamageTarget}
+                    onEquipAbility={handleEquipAbility}
                     onEquipSkill={handleEquipSkill}
                     onUnequipSkill={handleUnequipSkill}
                     healthProgress={
@@ -1764,6 +1777,7 @@ interface CritterCardProps {
   /** When true, only sprite clicks trigger onSelectCritter (not the full card). */
   selectOnSpriteOnly?: boolean;
   onCardContextMenu?: (event: MouseEvent<HTMLElement>) => void;
+  onEquipAbility?: (critterId: number, abilityId: string | null) => void;
   onEquipSkill?: (critterId: number, slotIndex: number, skillId: string | null) => void;
   onUnequipSkill?: (critterId: number, slotIndex: number) => void;
   onEquipEquipment?: (critterId: number, slotIndex: number, itemId: string) => void;
@@ -1823,6 +1837,33 @@ function buildEquipmentSlotTooltip(slot: {
   return lines.join('\n');
 }
 
+function buildAbilityTooltip(ability: {
+  name: string;
+  element: string;
+  description: string;
+  templateLabels: string[];
+  templateDescriptions?: string[];
+  effectDescriptions?: string;
+}): string {
+  const elementName = ability.element
+    ? `${ability.element.charAt(0).toUpperCase()}${ability.element.slice(1)}`
+    : 'Normal';
+  const lines = [`${ability.name} (${elementName})`];
+  const templateDescriptions = Array.isArray(ability.templateDescriptions)
+    ? ability.templateDescriptions
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0)
+    : [];
+  if (templateDescriptions.length > 0) {
+    lines.push(...templateDescriptions);
+  } else if (ability.effectDescriptions?.trim()) {
+    lines.push(ability.effectDescriptions.trim());
+  } else if (ability.description.trim()) {
+    lines.push(ability.description.trim());
+  }
+  return lines.join('\n');
+}
+
 interface SkillCellContentProps {
   slot: {
     name: string;
@@ -1874,6 +1915,52 @@ function SkillCellContent({ slot, iconsBucketRoot, emptyLabel = '—' }: SkillCe
   );
 }
 
+interface AbilityCellContentProps {
+  ability: {
+    name: string;
+    element: string;
+    templateLabels: string[];
+    templateDescriptions?: string[];
+    effectIconUrls?: string[];
+  } | null;
+  iconsBucketRoot: string | null;
+  emptyLabel?: string;
+  compact?: boolean;
+}
+
+function AbilityCellContent({
+  ability,
+  iconsBucketRoot,
+  emptyLabel = '—',
+  compact = false,
+}: AbilityCellContentProps) {
+  if (!ability) {
+    return <>{emptyLabel}</>;
+  }
+  const elementLogoUrl = buildElementLogoUrlFromIconsBucket(ability.element, iconsBucketRoot);
+  return (
+    <>
+      {elementLogoUrl && (
+        <img src={elementLogoUrl} alt={ability.element} className="skill-cell__element-logo" loading="lazy" decoding="async" />
+      )}
+      <span className="skill-cell__name">{ability.name}</span>
+      {!compact && (
+        <>
+          <span className="skill-cell__spacer"> </span>
+          <span className="skill-cell__type">{ability.templateLabels[0] ?? 'passive'}</span>
+          {ability.effectIconUrls && ability.effectIconUrls.length > 0 && (
+            <>
+              {ability.effectIconUrls.map((url, index) => (
+                <img key={`${url}-${index}`} src={url} alt="" className="skill-cell__effect-icon" loading="lazy" decoding="async" />
+              ))}
+            </>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
 function CritterCard({
   entry,
   elementLogoBucketRoot,
@@ -1887,6 +1974,7 @@ function CritterCard({
   onSelectCritter,
   selectOnSpriteOnly = false,
   onCardContextMenu,
+  onEquipAbility,
   onEquipSkill,
   onUnequipSkill,
   onEquipEquipment,
@@ -1897,9 +1985,13 @@ function CritterCard({
   isSelectionDisabled = false,
   healthProgress,
 }: CritterCardProps) {
+  const [abilityPopupOpen, setAbilityPopupOpen] = useState(false);
+  const [abilityPopupSearch, setAbilityPopupSearch] = useState('');
   const [skillPopup, setSkillPopup] = useState<{ slotIndex: number } | null>(null);
   const [skillPopupSearch, setSkillPopupSearch] = useState('');
   const [equipmentPopupSlotIndex, setEquipmentPopupSlotIndex] = useState<number | null>(null);
+  const equippedAbility = entry.equippedAbility ?? null;
+  const unlockedAbilityOptions = entry.unlockedAbilityOptions ?? [];
   const equippedSlots = entry.equippedSkillSlots ?? [null, null, null, null];
   const unlockedOptions = entry.unlockedSkillOptions ?? [];
   const equippedCount = equippedSlots.filter((s) => s !== null).length;
@@ -1980,7 +2072,27 @@ function CritterCard({
       return searchable.includes(query);
     });
   }, [skillPopupSearch, unlockedOptions]);
+  const filteredAbilityOptions = useMemo(() => {
+    const query = abilityPopupSearch.trim().toLowerCase();
+    if (!query) {
+      return unlockedAbilityOptions;
+    }
+    return unlockedAbilityOptions.filter((option) => {
+      const searchable = [
+        option.abilityId,
+        option.name,
+        option.element,
+        option.description,
+        option.templateLabels.join(' '),
+        option.effectDescriptions ?? '',
+      ]
+        .join(' ')
+        .toLowerCase();
+      return searchable.includes(query);
+    });
+  }, [abilityPopupSearch, unlockedAbilityOptions]);
   const canSelectCritter = Boolean(onSelectCritter && !isSelectionDisabled);
+  const canEquipAbility = Boolean(onEquipAbility && entry.unlocked);
   const handleSpriteSelect = (event: MouseEvent<HTMLElement>): void => {
     if (!canSelectCritter || !selectOnSpriteOnly || !onSelectCritter) {
       return;
@@ -2076,51 +2188,148 @@ function CritterCard({
           </span>
         </div>
       )}
-      <section className="collection-card__stats">
-        <h3>Stats</h3>
-        <dl>
-          <div>
-            <dt>HP</dt>
-            <dd>
-              {!isSeen
-                ? '???'
-                : statOverride
-                  ? String(statOverride.hp)
-                  : formatStatValue(entry.baseStats.hp, entry.statBonus.hp, showStatBreakdown)}
-            </dd>
-          </div>
-          <div>
-            <dt>ATK</dt>
-            <dd>
-              {!isSeen
-                ? '???'
-                : statOverride
-                  ? String(statOverride.attack)
-                  : formatStatValue(entry.baseStats.attack, entry.statBonus.attack, showStatBreakdown)}
-            </dd>
-          </div>
-          <div>
-            <dt>DEF</dt>
-            <dd>
-              {!isSeen
-                ? '???'
-                : statOverride
-                  ? String(statOverride.defense)
-                  : formatStatValue(entry.baseStats.defense, entry.statBonus.defense, showStatBreakdown)}
-            </dd>
-          </div>
-          <div>
-            <dt>SPD</dt>
-            <dd>
-              {!isSeen
-                ? '???'
-                : statOverride
-                  ? String(statOverride.speed)
-                  : formatStatValue(entry.baseStats.speed, entry.statBonus.speed, showStatBreakdown)}
-            </dd>
-          </div>
-        </dl>
-      </section>
+      <div className="collection-card__stats-ability-row">
+        <section className="collection-card__stats">
+          <h3>Stats</h3>
+          <dl>
+            <div>
+              <dt>HP</dt>
+              <dd>
+                {!isSeen
+                  ? '???'
+                  : statOverride
+                    ? String(statOverride.hp)
+                    : formatStatValue(entry.baseStats.hp, entry.statBonus.hp, showStatBreakdown)}
+              </dd>
+            </div>
+            <div>
+              <dt>ATK</dt>
+              <dd>
+                {!isSeen
+                  ? '???'
+                  : statOverride
+                    ? String(statOverride.attack)
+                    : formatStatValue(entry.baseStats.attack, entry.statBonus.attack, showStatBreakdown)}
+              </dd>
+            </div>
+            <div>
+              <dt>DEF</dt>
+              <dd>
+                {!isSeen
+                  ? '???'
+                  : statOverride
+                    ? String(statOverride.defense)
+                    : formatStatValue(entry.baseStats.defense, entry.statBonus.defense, showStatBreakdown)}
+              </dd>
+            </div>
+            <div>
+              <dt>SPD</dt>
+              <dd>
+                {!isSeen
+                  ? '???'
+                  : statOverride
+                    ? String(statOverride.speed)
+                    : formatStatValue(entry.baseStats.speed, entry.statBonus.speed, showStatBreakdown)}
+              </dd>
+            </div>
+          </dl>
+        </section>
+        <section className="collection-card__ability-slot">
+          <h3>Ability</h3>
+          <button
+            type="button"
+            className="collection-card__skill-slot"
+            style={equippedAbility ? { backgroundColor: ELEMENT_SKILL_COLORS[equippedAbility.element] ?? undefined, color: '#1a1a1a' } : undefined}
+            onClick={(event) => {
+              if (!canEquipAbility) {
+                return;
+              }
+              event.stopPropagation();
+              setAbilityPopupSearch('');
+              setAbilityPopupOpen(true);
+            }}
+            onContextMenu={(event) => {
+              if (!canEquipAbility || !equippedAbility || !onEquipAbility) {
+                return;
+              }
+              event.preventDefault();
+              event.stopPropagation();
+              onEquipAbility(entry.critterId, null);
+            }}
+            title={
+              equippedAbility
+                ? buildAbilityTooltip(equippedAbility)
+                : canEquipAbility
+                  ? 'Empty ability slot - click to equip'
+                  : 'Unlock this critter to equip abilities'
+            }
+          >
+            <AbilityCellContent ability={equippedAbility} iconsBucketRoot={iconsBucketRoot} emptyLabel="No ability" compact />
+          </button>
+          {abilityPopupOpen && canEquipAbility && onEquipAbility && (
+            <div
+              className="collection-card__skill-popup"
+              role="dialog"
+              aria-label="Equip ability"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <p className="collection-card__skill-popup-title">Equip or replace ability</p>
+              <input
+                type="search"
+                className="collection-card__skill-popup-search"
+                placeholder="Search abilities"
+                value={abilityPopupSearch}
+                onChange={(event) => setAbilityPopupSearch(event.target.value)}
+              />
+              <div className="collection-card__skill-popup-list">
+                {filteredAbilityOptions.map((option) => (
+                  <button
+                    key={option.abilityId}
+                    type="button"
+                    className="collection-card__skill-slot collection-card__skill-popup-skill-option"
+                    style={{ backgroundColor: ELEMENT_SKILL_COLORS[option.element] ?? undefined, color: '#1a1a1a' }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onEquipAbility(entry.critterId, option.abilityId);
+                      setAbilityPopupOpen(false);
+                      setAbilityPopupSearch('');
+                    }}
+                    title={buildAbilityTooltip(option)}
+                  >
+                    <AbilityCellContent ability={option} iconsBucketRoot={iconsBucketRoot} />
+                  </button>
+                ))}
+                {filteredAbilityOptions.length === 0 && (
+                  <p className="collection-card__mission-summary">No abilities match your search.</p>
+                )}
+                <button
+                  type="button"
+                  className="secondary collection-card__skill-popup-option"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onEquipAbility(entry.critterId, null);
+                    setAbilityPopupOpen(false);
+                    setAbilityPopupSearch('');
+                  }}
+                >
+                  Clear ability
+                </button>
+              </div>
+              <button
+                type="button"
+                className="secondary"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setAbilityPopupOpen(false);
+                  setAbilityPopupSearch('');
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </section>
+      </div>
       <section className="collection-card__skills">
         <h3>Skills</h3>
         <div className="collection-card__skill-grid">

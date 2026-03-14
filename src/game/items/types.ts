@@ -25,6 +25,7 @@ export interface HealingItemEffectConfig {
   healAmount?: number;
   healPercent?: number;
   curesStatus?: boolean;
+  curesStatusKinds?: HealingItemStatusConditionKind[];
 }
 
 export interface OtherItemEffectConfig {
@@ -67,3 +68,6 @@ export interface PlayerItemInventory {
 }
 
 export const PLAYER_ITEM_INVENTORY_VERSION = 1;
+
+export const HEALING_ITEM_STATUS_CONDITION_KINDS = ['toxic', 'stun'] as const;
+export type HealingItemStatusConditionKind = (typeof HEALING_ITEM_STATUS_CONDITION_KINDS)[number];

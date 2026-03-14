@@ -1,4 +1,5 @@
 import { computeCritterDerivedProgress } from '@/game/critters/schema';
+import type { AbilityEffectTriggerFamily } from '@/game/abilities/types';
 import type { EquipmentEffectDefinition } from '@/game/equipmentEffects/types';
 import {
   resolveEquipmentEffectIdsForItem,
@@ -6,7 +7,14 @@ import {
   type EquipmentEffectInstance,
 } from '@/game/equipmentEffects/resolver';
 import type { GameItemDefinition } from '@/game/items/types';
-import type { SkillDefinition, SkillEffectAttachment, SkillEffectType, SkillTargetKindDamage, SkillTargetKindSupport } from '@/game/skills/types';
+import type {
+  SkillDefinition,
+  SkillEffectAttachment,
+  SkillEffectDefinition,
+  SkillEffectType,
+  SkillTargetKindDamage,
+  SkillTargetKindSupport,
+} from '@/game/skills/types';
 import {
   MIN_BATTLE_STAT_MODIFIER,
   computeBattleDamage,
@@ -21,6 +29,16 @@ import {
   resolveToxicTickDamage,
   sanitizeStatusSource,
 } from '@/game/battle/statusConditions';
+import {
+  didDamagedBuffCrossThreshold,
+  didDamagedBuffGainConfiguredFamily,
+  getAbilityBattleStateDefaults,
+  getDamagedBuffTemplateAttachment,
+  hasAnyConfiguredEffectTriggerFamily,
+  isDamagedBuffThresholdSatisfied,
+  resolveEffectTriggerFamiliesForTarget,
+  resolveGuardBuffRecoilDamage,
+} from '@/game/abilities/runtimeHelpers';
 import {
   applyPendingCritChanceBuff,
   consumePendingCritChanceBonus,
@@ -191,6 +209,15 @@ function buildBattleCritterState(
     indexes.itemById,
     indexes.equipmentEffectById,
   );
+  const equippedAbilityId =
+    typeof member.equippedAbilityId === 'string' &&
+    member.equippedAbilityId.trim().length > 0 &&
+    derived.unlockedAbilityIds.includes(member.equippedAbilityId.trim()) &&
+    indexes.abilityById.has(member.equippedAbilityId.trim())
+      ? member.equippedAbilityId.trim()
+      : null;
+  const equippedAbility = equippedAbilityId ? indexes.abilityById.get(equippedAbilityId) ?? null : null;
+  const abilityStateDefaults = getAbilityBattleStateDefaults(equippedAbility, Math.max(1, adjustedStats.hp), Math.max(1, adjustedStats.hp));
   const equippedItemIds = member.equippedItems
     .map((entry) => indexes.itemById.get(entry.itemId))
     .filter((item): item is GameItemDefinition => Boolean(item && item.category === 'equipment'))
@@ -209,6 +236,10 @@ function buildBattleCritterState(
     attack: Math.max(1, adjustedStats.attack),
     defense: Math.max(1, adjustedStats.defense),
     speed: Math.max(1, adjustedStats.speed),
+    equippedAbilityId,
+    equippedAbility,
+    damagedBuffDamageTriggerReady: abilityStateDefaults.damageTriggerReady,
+    damagedBuffEffectTriggerReady: abilityStateDefaults.effectTriggerReady,
     attackModifier: 1,
     defenseModifier: 1,
     speedModifier: 1,
@@ -528,7 +559,7 @@ function advanceTurnResolution(state: DuelBattleState, context: ResolveContext):
   }
   const resolution = state.turnResolution;
   if (resolution.nextActionIndex >= resolution.queue.length) {
-    finishTurnResolution(state);
+    finishTurnResolution(state, context);
     return { ok: true };
   }
 
@@ -552,7 +583,7 @@ function advanceTurnResolution(state: DuelBattleState, context: ResolveContext):
   }
 
   if (state.phase !== 'resolving-turn') {
-    finishTurnResolution(state);
+    finishTurnResolution(state, context);
     return { ok: true, executedEntry: entry, knockout, swapOccurred };
   }
   // Do not finish the turn here when this was the last action. Let the UI show this
@@ -666,14 +697,14 @@ function executeOrderedAction(
   resolveSkillAction(state, sideState, opponentState, action, context);
 }
 
-function finishTurnResolution(state: DuelBattleState): void {
+function finishTurnResolution(state: DuelBattleState, context: ResolveContext): void {
   state.player.pendingActions = null;
   state.opponent.pendingActions = null;
   state.turnResolution = null;
   clearGuardFlags(state.player);
   clearGuardFlags(state.opponent);
   if (state.phase !== 'finished') {
-    applyEndTurnEffects(state);
+    applyEndTurnEffects(state, context);
   }
   cleanupFaintedActiveSlots(state.player);
   cleanupFaintedActiveSlots(state.opponent);
@@ -938,6 +969,7 @@ function applySkillDamage(
   skill: SkillDefinition,
   context: ResolveContext,
 ): number {
+  const defenderHpBefore = defender.currentHp;
   const consumedCritBonus = Math.max(
     0,
     Math.min(
@@ -1001,6 +1033,10 @@ function applySkillDamage(
       text: `${defender.name} was knocked out.`,
     });
   }
+  if (damageDealt > 0) {
+    applyGuardBuffOnSuccessfulGuardHit(state, attacker, defender, damageDealt, context);
+    applyDamagedBuffDamageTriggerIfNeeded(state, defender, defenderHpBefore, context);
+  }
   return damageDealt;
 }
 
@@ -1049,6 +1085,10 @@ function applySkillEffectsFromResolution(
   dealtDamage: number,
 ): void {
   const skillEffectLookup = Object.fromEntries(context.indexes.skillEffectById.entries());
+  const actorFamiliesBefore = getCritterEffectTriggerFamilies(actor, skillEffectLookup);
+  const targetFamiliesBefore = target
+    ? getCritterEffectTriggerFamilies(target, skillEffectLookup)
+    : new Set<AbilityEffectTriggerFamily>();
   const supportTarget =
     skill.type === 'support' && target && target.side === actor.side && !target.fainted
       ? target
@@ -1192,6 +1232,10 @@ function applySkillEffectsFromResolution(
       });
     }
   }
+  applyDamagedBuffEffectTriggerIfNeeded(state, actor, actorFamiliesBefore, context);
+  if (target) {
+    applyDamagedBuffEffectTriggerIfNeeded(state, target, targetFamiliesBefore, context);
+  }
 }
 
 function applyOnHitStatusEffects(
@@ -1207,6 +1251,7 @@ function applyOnHitStatusEffects(
     return;
   }
   const skillEffectLookup = Object.fromEntries(context.indexes.skillEffectById.entries());
+  const familiesBefore = getCritterEffectTriggerFamilies(target, skillEffectLookup);
 
   const applyToxic = (sourceName: string, potencyBase: number, potencyPerTurn: number, statusEffectId?: string): void => {
     if (target.persistentStatus) {
@@ -1333,6 +1378,7 @@ function applyOnHitStatusEffects(
       applyFlinch(sourceName, effect.effectId);
     }
   }
+  applyDamagedBuffEffectTriggerIfNeeded(state, target, familiesBefore, context);
 }
 
 function resolvePersistentHealStateFromAttachment(
@@ -1380,6 +1426,262 @@ function clearPersistentHealState(critter: DuelBattleCritterState): void {
     delete critter.activeEffectSourceById[effectId];
     delete critter.activeEffectValueById[effectId];
   }
+  refreshDamagedBuffTriggerReadiness(critter, Object.fromEntries([]));
+}
+
+function getCritterEffectTriggerFamilies(
+  critter: DuelBattleCritterState,
+  skillEffectLookupById: Record<string, Pick<SkillEffectDefinition, 'effect_type'>>,
+): Set<AbilityEffectTriggerFamily> {
+  return resolveEffectTriggerFamiliesForTarget(critter, skillEffectLookupById);
+}
+
+function refreshDamagedBuffTriggerReadiness(
+  critter: DuelBattleCritterState,
+  skillEffectLookupById: Record<string, Pick<SkillEffectDefinition, 'effect_type'>>,
+): void {
+  const damagedAttachment = getDamagedBuffTemplateAttachment(critter.equippedAbility);
+  if (!damagedAttachment) {
+    critter.damagedBuffDamageTriggerReady = false;
+    critter.damagedBuffEffectTriggerReady = false;
+    return;
+  }
+  if (damagedAttachment.triggerType === 'damage') {
+    if (!isDamagedBuffThresholdSatisfied(critter.currentHp, critter.maxHp, damagedAttachment.belowPercent ?? 0.5)) {
+      critter.damagedBuffDamageTriggerReady = true;
+    }
+    critter.damagedBuffEffectTriggerReady = false;
+    return;
+  }
+  if (
+    !hasAnyConfiguredEffectTriggerFamily(
+      getCritterEffectTriggerFamilies(critter, skillEffectLookupById),
+      damagedAttachment.triggerFamilies ?? [],
+    )
+  ) {
+    critter.damagedBuffEffectTriggerReady = true;
+  }
+  critter.damagedBuffDamageTriggerReady = false;
+}
+
+function applyPassiveEffectAttachmentToCritter(
+  state: DuelBattleState,
+  critter: DuelBattleCritterState,
+  attachment: SkillEffectAttachment | null | undefined,
+  sourceName: string,
+  context: ResolveContext,
+): void {
+  if (!attachment?.effectId || critter.fainted || critter.currentHp <= 0) {
+    return;
+  }
+  const effect = context.indexes.skillEffectById.get(attachment.effectId);
+  if (!effect) {
+    return;
+  }
+  const normalizedSource = sourceName.trim() || effect.effect_name || effect.effect_id;
+  const buffPercent = Math.max(
+    0,
+    Math.min(
+      1,
+      typeof attachment.buffPercent === 'number'
+        ? attachment.buffPercent
+        : typeof effect.buffPercent === 'number'
+          ? effect.buffPercent
+          : 0.1,
+    ),
+  );
+  pushLog(state, {
+    turn: state.turnNumber,
+    kind: 'status',
+    text: `${critter.name}'s ${normalizedSource} activated.`,
+  });
+  if (effect.effect_type === 'atk_buff') {
+    critter.attackModifier = clampBattleModifier(critter.attackModifier + buffPercent);
+    recordActiveEffect(critter, effect.effect_id, normalizedSource, buffPercent);
+    pushLog(state, { turn: state.turnNumber, kind: 'status', text: `${critter.name}'s attack rose.` });
+  } else if (effect.effect_type === 'def_buff') {
+    critter.defenseModifier = clampBattleModifier(critter.defenseModifier + buffPercent);
+    recordActiveEffect(critter, effect.effect_id, normalizedSource, buffPercent);
+    pushLog(state, { turn: state.turnNumber, kind: 'status', text: `${critter.name}'s defense rose.` });
+  } else if (effect.effect_type === 'speed_buff') {
+    critter.speedModifier = clampBattleModifier(critter.speedModifier + buffPercent);
+    recordActiveEffect(critter, effect.effect_id, normalizedSource, buffPercent);
+    pushLog(state, { turn: state.turnNumber, kind: 'status', text: `${critter.name}'s speed rose.` });
+  } else if (effect.effect_type === 'self_atk_debuff' || effect.effect_type === 'target_atk_debuff') {
+    critter.attackModifier = clampBattleModifier(critter.attackModifier - buffPercent);
+    recordActiveEffect(critter, effect.effect_id, normalizedSource, buffPercent);
+    pushLog(state, { turn: state.turnNumber, kind: 'status', text: `${critter.name}'s attack fell.` });
+  } else if (effect.effect_type === 'self_def_debuff' || effect.effect_type === 'target_def_debuff') {
+    critter.defenseModifier = clampBattleModifier(critter.defenseModifier - buffPercent);
+    recordActiveEffect(critter, effect.effect_id, normalizedSource, buffPercent);
+    pushLog(state, { turn: state.turnNumber, kind: 'status', text: `${critter.name}'s defense fell.` });
+  } else if (effect.effect_type === 'self_speed_debuff' || effect.effect_type === 'target_speed_debuff') {
+    critter.speedModifier = clampBattleModifier(critter.speedModifier - buffPercent);
+    recordActiveEffect(critter, effect.effect_id, normalizedSource, buffPercent);
+    pushLog(state, { turn: state.turnNumber, kind: 'status', text: `${critter.name}'s speed fell.` });
+  } else if (effect.effect_type === 'crit_buff') {
+    applyPendingCritChanceBuff(critter, effect.effect_id, normalizedSource, buffPercent);
+    pushLog(state, { turn: state.turnNumber, kind: 'status', text: `${critter.name}'s crit chance rose.` });
+  } else if (effect.effect_type === 'persistent_heal') {
+    const persistent = resolvePersistentHealStateFromAttachment(attachment, normalizedSource);
+    if (persistent) {
+      applyPersistentHealState(critter, persistent);
+      pushLog(state, {
+        turn: state.turnNumber,
+        kind: 'status',
+        text: `${critter.name} gained end-of-turn healing for ${persistent.remainingTurns} turns.`,
+      });
+    }
+  } else if (effect.effect_type === 'inflict_toxic') {
+    if (!critter.persistentStatus) {
+      critter.persistentStatus = {
+        kind: 'toxic',
+        potencyBase: clampUnitInterval(attachment.toxicPotencyBase ?? 0.05, 0.05),
+        potencyPerTurn: clampUnitInterval(attachment.toxicPotencyPerTurn ?? 0.05, 0.05),
+        turnCount: 0,
+        source: sanitizeStatusSource(normalizedSource, normalizedSource),
+        effectId: effect.effect_id,
+      };
+      pushLog(state, { turn: state.turnNumber, kind: 'status', text: `${critter.name} was afflicted with Toxic!` });
+    }
+  } else if (effect.effect_type === 'inflict_stun') {
+    if (!critter.persistentStatus) {
+      critter.persistentStatus = {
+        kind: 'stun',
+        stunFailChance: clampUnitInterval(attachment.stunFailChance ?? 0.25, 0.25),
+        stunSlowdown: clampUnitInterval(attachment.stunSlowdown ?? 0.5, 0.5),
+        source: sanitizeStatusSource(normalizedSource, normalizedSource),
+        effectId: effect.effect_id,
+      };
+      pushLog(state, { turn: state.turnNumber, kind: 'status', text: `${critter.name} was stunned!` });
+    }
+  } else if (effect.effect_type === 'flinch_chance') {
+    if (!critter.actedThisTurn) {
+      critter.flinch = {
+        turnNumber: state.turnNumber,
+        source: sanitizeStatusSource(normalizedSource, normalizedSource),
+        effectId: effect.effect_id,
+      };
+      pushLog(state, { turn: state.turnNumber, kind: 'status', text: `${critter.name} flinched!` });
+    }
+  }
+  refreshDamagedBuffTriggerReadiness(critter, Object.fromEntries(context.indexes.skillEffectById.entries()));
+}
+
+function applyDamagedBuffEffectTriggerIfNeeded(
+  state: DuelBattleState,
+  critter: DuelBattleCritterState,
+  previousFamilies: Set<AbilityEffectTriggerFamily>,
+  context: ResolveContext,
+): void {
+  const damagedAttachment = getDamagedBuffTemplateAttachment(critter.equippedAbility);
+  if (!damagedAttachment || damagedAttachment.triggerType !== 'effect') {
+    return;
+  }
+  const lookup = Object.fromEntries(context.indexes.skillEffectById.entries());
+  const nextFamilies = getCritterEffectTriggerFamilies(critter, lookup);
+  if (
+    critter.damagedBuffEffectTriggerReady &&
+    didDamagedBuffGainConfiguredFamily(previousFamilies, nextFamilies, damagedAttachment.triggerFamilies ?? [])
+  ) {
+    critter.damagedBuffEffectTriggerReady = false;
+    const rewardAttachment = damagedAttachment.rewardEffectAttachment;
+    const procChance = Math.max(0, Math.min(1, rewardAttachment?.procChance ?? 1));
+    if (rewardAttachment && procChance > 0 && context.rng() < procChance) {
+      applyPassiveEffectAttachmentToCritter(state, critter, rewardAttachment, critter.equippedAbility?.name ?? 'Damaged Buff', context);
+    }
+  }
+  refreshDamagedBuffTriggerReadiness(critter, lookup);
+}
+
+function applyDamagedBuffDamageTriggerIfNeeded(
+  state: DuelBattleState,
+  critter: DuelBattleCritterState,
+  previousHp: number,
+  context: ResolveContext,
+): void {
+  const damagedAttachment = getDamagedBuffTemplateAttachment(critter.equippedAbility);
+  if (
+    !damagedAttachment ||
+    damagedAttachment.triggerType !== 'damage' ||
+    critter.fainted ||
+    critter.currentHp <= 0
+  ) {
+    refreshDamagedBuffTriggerReadiness(critter, Object.fromEntries(context.indexes.skillEffectById.entries()));
+    return;
+  }
+  if (
+    critter.damagedBuffDamageTriggerReady &&
+    didDamagedBuffCrossThreshold(previousHp, critter.currentHp, critter.maxHp, damagedAttachment.belowPercent ?? 0.5)
+  ) {
+    critter.damagedBuffDamageTriggerReady = false;
+    const rewardAttachment = damagedAttachment.rewardEffectAttachment;
+    const procChance = Math.max(0, Math.min(1, rewardAttachment?.procChance ?? 1));
+    if (rewardAttachment && procChance > 0 && context.rng() < procChance) {
+      applyPassiveEffectAttachmentToCritter(state, critter, rewardAttachment, critter.equippedAbility?.name ?? 'Damaged Buff', context);
+    }
+  }
+  refreshDamagedBuffTriggerReadiness(critter, Object.fromEntries(context.indexes.skillEffectById.entries()));
+}
+
+function applyGuardBuffOnSuccessfulGuardHit(
+  state: DuelBattleState,
+  attacker: DuelBattleCritterState | null,
+  defender: DuelBattleCritterState,
+  damageDealt: number,
+  context: ResolveContext,
+): void {
+  const guardAttachment = defender.equippedAbility?.templateAttachments.find((entry) => entry.templateType === 'guard-buff');
+  if (!guardAttachment || !defender.guardActive || !defender.guardSucceeded || damageDealt <= 0) {
+    return;
+  }
+  const abilityName = defender.equippedAbility?.name ?? 'Guard Buff';
+  if (guardAttachment.mode === 'recoil') {
+    if (!attacker || attacker.fainted || attacker.currentHp <= 0) {
+      return;
+    }
+    const recoilDamage = resolveGuardBuffRecoilDamage(
+      guardAttachment.recoilMode,
+      guardAttachment.recoilValue,
+      attacker.maxHp,
+      damageDealt,
+    );
+    const actualRecoil = Math.min(Math.max(0, Math.floor(recoilDamage)), Math.max(0, attacker.currentHp));
+    if (actualRecoil <= 0) {
+      return;
+    }
+    attacker.currentHp = Math.max(0, attacker.currentHp - actualRecoil);
+    attacker.fainted = attacker.currentHp <= 0;
+    pushLog(state, {
+      turn: state.turnNumber,
+      kind: 'status',
+      text: `${defender.name}'s ${abilityName} struck back for ${actualRecoil} damage.`,
+    });
+    if (attacker.fainted) {
+      attacker.flinch = null;
+      attacker.persistentStatus = null;
+      clearPersistentHealState(attacker);
+      pushLog(state, {
+        turn: state.turnNumber,
+        kind: 'knockout',
+        text: `${attacker.name} was knocked out.`,
+      });
+    }
+    return;
+  }
+  const procAttachment = guardAttachment.procEffectAttachment;
+  const procChance = Math.max(0, Math.min(1, procAttachment?.procChance ?? 1));
+  if (!procAttachment || procChance <= 0 || context.rng() >= procChance) {
+    return;
+  }
+  const target = guardAttachment.procTarget === 'attacker' ? attacker : defender;
+  if (!target || target.fainted || target.currentHp <= 0) {
+    return;
+  }
+  const lookup = Object.fromEntries(context.indexes.skillEffectById.entries());
+  const beforeFamilies = getCritterEffectTriggerFamilies(target, lookup);
+  applyPassiveEffectAttachmentToCritter(state, target, procAttachment, abilityName, context);
+  applyDamagedBuffEffectTriggerIfNeeded(state, target, beforeFamilies, context);
 }
 
 function getEquipmentPersistentHealConfigs(
@@ -1452,7 +1754,7 @@ function collectEndTurnCrittersInSpeedOrder(state: DuelBattleState): DuelBattleC
   return ordered;
 }
 
-function applyEndTurnEffects(state: DuelBattleState): void {
+function applyEndTurnEffects(state: DuelBattleState, context: ResolveContext): void {
   const sides: DuelBattleSideState[] = [state.player, state.opponent];
   for (const side of sides) {
     for (const entry of side.team) {
@@ -1466,9 +1768,9 @@ function applyEndTurnEffects(state: DuelBattleState): void {
     if (critter.persistentStatus?.kind === 'toxic') {
       const toxicDamage = resolveToxicTickDamage(critter.maxHp, critter.persistentStatus).damage;
       if (toxicDamage > 0) {
-        const beforeHp = critter.currentHp;
+        const hpBefore = critter.currentHp;
         critter.currentHp = Math.max(0, critter.currentHp - toxicDamage);
-        const dealtDamage = Math.max(0, beforeHp - critter.currentHp);
+        const dealtDamage = Math.max(0, hpBefore - critter.currentHp);
         if (dealtDamage > 0) {
           pushLog(state, {
             turn: state.turnNumber,
@@ -1488,6 +1790,7 @@ function applyEndTurnEffects(state: DuelBattleState): void {
           });
           continue;
         }
+        applyDamagedBuffDamageTriggerIfNeeded(state, critter, hpBefore, context);
       }
       if (critter.persistentStatus?.kind === 'toxic') {
         critter.persistentStatus.turnCount = Math.max(0, Math.floor(critter.persistentStatus.turnCount) + 1);
@@ -2013,6 +2316,7 @@ function resetVolatileBattleState(critter: DuelBattleCritterState): void {
   critter.damageSkillUseCountSinceSwitchIn = 0;
   critter.skillUseCountBySkillId = {};
   critter.firstActionableTurnNumber = 1;
+  refreshDamagedBuffTriggerReadiness(critter, {});
 }
 
 function prepareSwitchInTracking(critter: DuelBattleCritterState, firstActionableTurnNumber: number): void {
@@ -2021,6 +2325,7 @@ function prepareSwitchInTracking(critter: DuelBattleCritterState, firstActionabl
   critter.damageSkillUseCountSinceSwitchIn = 0;
   critter.skillUseCountBySkillId = {};
   critter.firstActionableTurnNumber = Math.max(1, Math.floor(firstActionableTurnNumber));
+  refreshDamagedBuffTriggerReadiness(critter, {});
 }
 
 function recordSkillUsage(

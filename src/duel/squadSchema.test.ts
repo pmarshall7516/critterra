@@ -102,6 +102,7 @@ function createDraft(partial: Partial<DuelSquadDraft>): DuelSquadDraft {
         {
           critterId: 1,
           level: 1,
+          equippedAbilityId: null,
           equippedSkillIds: ['jab', null, null, null],
           equippedItems: [],
         },
@@ -111,6 +112,7 @@ function createDraft(partial: Partial<DuelSquadDraft>): DuelSquadDraft {
 
 const catalogs: DuelCatalogContent = {
   critters: [createCritter(1, 'Alpha'), createCritter(2, 'Beta')],
+  abilities: [],
   skills: [createSkill('jab', 'Jab'), createSkill('blast', 'Blast')],
   items: [
     createEquipment('helm_a', 'Iron Helm', { slot: 'head' }),
@@ -132,12 +134,14 @@ describe('duel squad schema validation', () => {
         {
           critterId: 1,
           level: 1,
+          equippedAbilityId: null,
           equippedSkillIds: ['jab', null, null, null],
           equippedItems: [],
         },
         {
           critterId: 1,
           level: 1,
+          equippedAbilityId: null,
           equippedSkillIds: ['jab', null, null, null],
           equippedItems: [],
         },
@@ -156,6 +160,7 @@ describe('duel squad schema validation', () => {
         {
           critterId: 1,
           level: 1,
+          equippedAbilityId: null,
           equippedSkillIds: ['blast', null, null, null],
           equippedItems: [],
         },
@@ -174,6 +179,7 @@ describe('duel squad schema validation', () => {
         {
           critterId: 1,
           level: 5,
+          equippedAbilityId: null,
           equippedSkillIds: ['jab', 'blast', null, null],
           equippedItems: [
             { itemId: 'helm_a', slotIndex: 0 },
@@ -195,6 +201,7 @@ describe('duel squad schema validation', () => {
         {
           critterId: 1,
           level: 5,
+          equippedAbilityId: null,
           equippedSkillIds: ['jab', 'blast', null, null],
           equippedItems: [{ itemId: 'armor', slotIndex: 1 }],
         },
@@ -208,6 +215,7 @@ describe('duel squad schema validation', () => {
         {
           critterId: 1,
           level: 1,
+          equippedAbilityId: null,
           equippedSkillIds: ['jab', null, null, null],
           equippedItems: [{ itemId: 'armor', slotIndex: 0 }],
         },

@@ -158,33 +158,17 @@ export const critterwayRouteMap = createMap({
   warps: [
     {
       id: 'critterway_route_warp_1',
-      from: {
-        x: 3,
-        y: 0
-      },
-      fromPositions: [
-        {
-          x: 3,
-          y: 0
-        },
-        {
-          x: 4,
-          y: 0
-        },
-        {
-          x: 5,
-          y: 0
-        },
-        {
-          x: 6,
-          y: 0
-        }
-      ],
-      toMapId: 'germania',
       to: {
         x: 9,
         y: 19
       },
+      from: {
+        x: 3,
+        y: 0
+      },
+      label: 'To Germania',
+      toMapId: 'germania',
+      toFacing: 'up',
       toPositions: [
         {
           x: 9,
@@ -203,10 +187,26 @@ export const critterwayRouteMap = createMap({
           y: 19
         }
       ],
-      requireInteract: false,
+      fromPositions: [
+        {
+          x: 3,
+          y: 0
+        },
+        {
+          x: 4,
+          y: 0
+        },
+        {
+          x: 5,
+          y: 0
+        },
+        {
+          x: 6,
+          y: 0
+        }
+      ],
       requiredFacing: 'up',
-      label: 'To Germania',
-      toFacing: 'up'
+      requireInteract: false
     }
   ],
   encounterGroups: [
@@ -302,9 +302,90 @@ export const critterwayRouteMap = createMap({
           y: 1
         }
       ],
-      walkEncounterTableId: 'criterway-1',
+      walkEncounterTableId: 'critterway-1',
       fishEncounterTableId: null,
       walkFrequency: 0.3,
+      fishFrequency: 0
+    },
+    {
+      id: 'first-half-grass-2',
+      tilePositions: [
+        {
+          x: 8,
+          y: 1
+        },
+        {
+          x: 12,
+          y: 1
+        },
+        {
+          x: 13,
+          y: 1
+        },
+        {
+          x: 14,
+          y: 1
+        },
+        {
+          x: 15,
+          y: 4
+        },
+        {
+          x: 15,
+          y: 5
+        },
+        {
+          x: 15,
+          y: 6
+        },
+        {
+          x: 15,
+          y: 8
+        },
+        {
+          x: 14,
+          y: 11
+        },
+        {
+          x: 13,
+          y: 11
+        },
+        {
+          x: 11,
+          y: 11
+        },
+        {
+          x: 2,
+          y: 14
+        },
+        {
+          x: 12,
+          y: 15
+        },
+        {
+          x: 13,
+          y: 15
+        },
+        {
+          x: 14,
+          y: 15
+        },
+        {
+          x: 15,
+          y: 15
+        },
+        {
+          x: 16,
+          y: 15
+        },
+        {
+          x: 17,
+          y: 15
+        }
+      ],
+      walkEncounterTableId: 'critterway-2',
+      fishEncounterTableId: null,
+      walkFrequency: 0.33,
       fishFrequency: 0
     }
   ]

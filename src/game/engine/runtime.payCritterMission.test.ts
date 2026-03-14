@@ -96,6 +96,7 @@ function createProgressEntry(): PlayerCritterCollectionEntry {
     statBonus: { ...EMPTY_STATS },
     effectiveStats: { hp: 24, attack: 10, defense: 8, speed: 7 },
     unlockedAbilityIds: [],
+    equippedAbilityId: null,
     equippedSkillIds: [null, null, null, null],
     equippedEquipmentAnchors: [],
     lastProgressAt: null,

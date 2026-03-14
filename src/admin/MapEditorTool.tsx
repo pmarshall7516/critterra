@@ -363,6 +363,7 @@ function cloneDuelSquadDraftMembers(members: DuelSquadDraft['members']): DuelSqu
   return members.map((member) => ({
     critterId: member.critterId,
     level: member.level,
+    equippedAbilityId: member.equippedAbilityId ?? null,
     equippedSkillIds: [...member.equippedSkillIds],
     equippedItems: member.equippedItems.map((item) => ({
       itemId: item.itemId,
@@ -375,6 +376,7 @@ function cloneNpcBattleMembers(members: NpcBattleConfig['members']): NpcBattleCo
   return members.map((member) => ({
     critterId: member.critterId,
     level: member.level,
+    equippedAbilityId: member.equippedAbilityId ?? null,
     equippedSkillIds: [
       member.equippedSkillIds[0] ?? null,
       member.equippedSkillIds[1] ?? null,
@@ -408,6 +410,7 @@ function buildDefaultNpcBattleMembers(catalogs: DuelCatalogContent | null): Duel
   return [{
     critterId: firstCritter.id,
     level: 1,
+    equippedAbilityId: null,
     equippedSkillIds: [null, null, null, null],
     equippedItems: [],
   }];
@@ -449,6 +452,7 @@ function parseLegacyBattleTeamIdsToMembers(
     members.push({
       critterId: critter.id,
       level,
+      equippedAbilityId: null,
       equippedSkillIds: [null, null, null, null],
       equippedItems: [],
     });
@@ -10903,6 +10907,10 @@ function sanitizeNpcBattleConfig(raw: unknown): NpcBattleConfig | undefined {
       if (!Number.isFinite(critterId) || !Number.isFinite(level)) {
         return null;
       }
+      const equippedAbilityId =
+        typeof member.equippedAbilityId === 'string' && member.equippedAbilityId.trim()
+          ? sanitizeIdentifier(member.equippedAbilityId, '')
+          : null;
       const rawSkillSlots = Array.isArray(member.equippedSkillIds) ? member.equippedSkillIds : [];
       const equippedSkillIds: [string | null, string | null, string | null, string | null] = [null, null, null, null];
       for (let slot = 0; slot < 4; slot += 1) {
@@ -10933,6 +10941,7 @@ function sanitizeNpcBattleConfig(raw: unknown): NpcBattleConfig | undefined {
       return {
         critterId,
         level,
+        equippedAbilityId,
         equippedSkillIds,
         equippedItems,
       };

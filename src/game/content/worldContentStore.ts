@@ -23,6 +23,8 @@ import type { ShopDefinition } from '@/game/shops/types';
 import { sanitizeShopCatalog } from '@/game/shops/schema';
 import type { EquipmentEffectDefinition } from '@/game/equipmentEffects/types';
 import { sanitizeEquipmentEffectLibrary } from '@/game/equipmentEffects/schema';
+import type { AbilityDefinition } from '@/game/abilities/types';
+import { sanitizeAbilityLibrary } from '@/game/abilities/schema';
 
 const WORLD_CONTENT_STORAGE_KEY = 'critterra.world.content.v1';
 
@@ -60,6 +62,7 @@ export interface StoredWorldContent {
   items: GameItemDefinition[];
   shops: ShopDefinition[];
   equipmentEffects: EquipmentEffectDefinition[];
+  abilities: AbilityDefinition[];
 }
 
 interface BootstrapResponse {
@@ -77,9 +80,11 @@ interface BootstrapResponse {
     critterSkills?: unknown;
     skillEffects?: unknown;
     elementChart?: unknown;
+    gameElements?: unknown;
     items?: unknown;
     shops?: unknown;
     equipmentEffects?: unknown;
+    abilities?: unknown;
   };
 }
 
@@ -150,6 +155,22 @@ export function readStoredWorldContent(): StoredWorldContent | null {
       };
     });
     const gameElements = sanitizeGameElements((parsed as Partial<StoredWorldContent>).gameElements);
+    const skillEffects = sanitizeSkillEffectLibrary(parsed.skillEffects);
+    const knownEffectIds = new Set(skillEffects.map((effect) => effect.effect_id));
+    const effectTypeById = new Map(skillEffects.map((effect) => [effect.effect_id, effect.effect_type] as const));
+    const legacyEffectBuffPercentById = new Map(
+      skillEffects
+        .filter((effect) => typeof effect.buffPercent === 'number' && Number.isFinite(effect.buffPercent))
+        .map((effect) => [effect.effect_id, effect.buffPercent as number]),
+    );
+    const allowedElementIds = gameElements.length ? gameElements.map((entry) => entry.id) : undefined;
+    const abilities = sanitizeAbilityLibrary(
+      parsed.abilities,
+      knownEffectIds,
+      legacyEffectBuffPercentById,
+      effectTypeById,
+      allowedElementIds,
+    );
     return {
       maps: Array.isArray(parsed.maps) ? (parsed.maps as WorldMapInput[]) : [],
       savedPaintTiles,
@@ -165,15 +186,18 @@ export function readStoredWorldContent(): StoredWorldContent | null {
       npcCharacterLibrary: Array.isArray(parsed.npcCharacterLibrary)
         ? (parsed.npcCharacterLibrary as NpcCharacterTemplateEntry[])
         : [],
-      critters: sanitizeCritterDatabase(parsed.critters),
+      critters: sanitizeCritterDatabase(parsed.critters, {
+        allowedAbilityIds: abilities.map((ability) => ability.id),
+      }),
       encounterTables: sanitizeEncounterTableLibrary(parsed.encounterTables),
       critterSkills: sanitizeStoredSkills(parsed.critterSkills, parsed.skillEffects, gameElements),
-      skillEffects: sanitizeSkillEffectLibrary(parsed.skillEffects),
+      skillEffects,
       gameElements,
       elementChart: sanitizeElementChartWithElements(parsed.elementChart, gameElements.map((e) => e.id)),
       items: sanitizeItemCatalog(parsed.items),
       shops: sanitizeShopCatalog(parsed.shops),
       equipmentEffects: sanitizeEquipmentEffectLibrary(parsed.equipmentEffects),
+      abilities,
     };
   } catch {
     return null;
@@ -233,6 +257,13 @@ export async function hydrateWorldContentFromServer(): Promise<void> {
       .filter((effect) => typeof effect.buffPercent === 'number' && Number.isFinite(effect.buffPercent))
       .map((effect) => [effect.effect_id, effect.buffPercent as number]),
   );
+  const abilities = sanitizeAbilityLibrary(
+    (content as Record<string, unknown>).abilities,
+    knownEffectIds,
+    legacyEffectBuffPercentById,
+    effectTypeById,
+    gameElements.length ? gameElements.map((entry) => entry.id) : undefined,
+  );
   const rawTiles = Array.isArray(content.savedPaintTiles) ? content.savedPaintTiles : [];
   const savedPaintTiles = rawTiles.map((t) => {
     const entry = t as Record<string, unknown>;
@@ -266,7 +297,9 @@ export async function hydrateWorldContentFromServer(): Promise<void> {
     npcCharacterLibrary: Array.isArray(content.npcCharacterLibrary)
       ? (content.npcCharacterLibrary as NpcCharacterTemplateEntry[])
       : [],
-    critters: sanitizeCritterDatabase(content.critters),
+    critters: sanitizeCritterDatabase(content.critters, {
+      allowedAbilityIds: abilities.map((ability) => ability.id),
+    }),
     encounterTables: sanitizeEncounterTableLibrary(content.encounterTables),
     critterSkills: sanitizeSkillLibrary(
       content.critterSkills,
@@ -281,6 +314,7 @@ export async function hydrateWorldContentFromServer(): Promise<void> {
     items: sanitizeItemCatalog(content.items),
     shops: sanitizeShopCatalog(content.shops),
     equipmentEffects: sanitizeEquipmentEffectLibrary(content.equipmentEffects),
+    abilities,
   };
 
   persistWorldContent(next);

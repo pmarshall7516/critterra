@@ -796,7 +796,7 @@ export function MoveTool() {
   };
 
   return (
-    <section className="admin-layout admin-layout--single">
+    <section className="admin-layout admin-layout--single move-tool">
       <section className="admin-layout__left">
         <section className="admin-panel">
           <h3>Skills</h3>
@@ -817,7 +817,7 @@ export function MoveTool() {
               {isSaving ? 'Saving...' : 'Save Skills'}
             </button>
           </div>
-          <label className="admin-row">
+          <label className="admin-search-field">
             Search
             <input
               value={searchInput}
@@ -827,27 +827,30 @@ export function MoveTool() {
           </label>
           {status && <p className="admin-note">{status}</p>}
           {error && <p className="admin-note" style={{ color: '#f7b9b9' }}>{error}</p>}
-          <div className="admin-item-grid">
-            {filteredSkills.map((skill) => {
-              const elementColor = getSkillElementColor(skill.element, elementColorById[skill.element]);
-              const style = { ['--admin-skill-bg' as string]: elementColor };
-              return (
-                <button
-                  key={skill.skill_id}
-                  type="button"
-                  className={`secondary admin-skill-list-item ${elementColor ? 'admin-skill-list-item--colored' : ''} ${selectedSkillId === skill.skill_id ? 'is-selected' : ''}`}
-                  style={style}
-                  title={buildAdminSkillTooltip(skill, effectList)}
-                  onClick={() => {
-                    setSelectedSkillId(skill.skill_id);
-                    setDraft(skillToDraft(skill, effectList));
-                  }}
-                >
-                  <AdminSkillCellContent skill={skill} effectList={effectList} iconsBucketRoot={iconsBucketRoot} />
-                </button>
-              );
-            })}
-            {skills.length === 0 && <p className="admin-note">No skills yet. Create one and save.</p>}
+          <div className="move-tool__catalog-scroll">
+            <div className="admin-item-grid admin-item-grid--catalog">
+              {filteredSkills.map((skill) => {
+                const elementColor = getSkillElementColor(skill.element, elementColorById[skill.element]);
+                const style = { ['--admin-skill-bg' as string]: elementColor };
+                return (
+                  <button
+                    key={skill.skill_id}
+                    type="button"
+                    className={`secondary admin-skill-list-item ${elementColor ? 'admin-skill-list-item--colored' : ''} ${selectedSkillId === skill.skill_id ? 'is-selected' : ''}`}
+                    style={style}
+                    title={buildAdminSkillTooltip(skill, effectList)}
+                    onClick={() => {
+                      setSelectedSkillId(skill.skill_id);
+                      setDraft(skillToDraft(skill, effectList));
+                    }}
+                  >
+                    <AdminSkillCellContent skill={skill} effectList={effectList} iconsBucketRoot={iconsBucketRoot} />
+                  </button>
+                );
+              })}
+              {skills.length === 0 && <p className="admin-note">No skills yet. Create one and save.</p>}
+              {skills.length > 0 && filteredSkills.length === 0 && <p className="admin-note">No skills match that search.</p>}
+            </div>
           </div>
         </section>
       </section>

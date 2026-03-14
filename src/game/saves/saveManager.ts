@@ -6,7 +6,7 @@ import { createDefaultPlayerCritterProgress } from '@/game/critters/schema';
 import { createDefaultPlayerItemInventory } from '@/game/items/schema';
 import type { Direction } from '@/shared/types';
 
-export const SAVE_VERSION = 8;
+export const SAVE_VERSION = 10;
 const DEFAULT_RESPAWN_MAP_ID = 'user-house';
 const DEFAULT_RESPAWN_POSITION = { x: 5, y: 7 } as const;
 const DEFAULT_RESPAWN_FACING: Direction = 'down';

@@ -1,8 +1,10 @@
 import {
+  HEALING_ITEM_STATUS_CONDITION_KINDS,
   ITEM_CORE_CATEGORIES,
   ITEM_EFFECT_TYPES,
   PLAYER_ITEM_INVENTORY_VERSION,
   type GameItemDefinition,
+  type HealingItemStatusConditionKind,
   type ItemCategory,
   type ItemEffectConfig,
   type ItemEffectType,
@@ -20,6 +22,7 @@ import {
 
 const CORE_CATEGORY_SET = new Set<string>(ITEM_CORE_CATEGORIES);
 const EFFECT_TYPE_SET = new Set<string>(ITEM_EFFECT_TYPES);
+const HEALING_ITEM_STATUS_KIND_SET = new Set<HealingItemStatusConditionKind>(HEALING_ITEM_STATUS_CONDITION_KINDS);
 const EQUIPMENT_EFFECT_MODE_SET = new Set<EquipmentEffectMode>(EQUIPMENT_EFFECT_MODES);
 const EQUIPMENT_PERSISTENT_HEAL_MODE_SET = new Set<EquipmentPersistentHealMode>(EQUIPMENT_PERSISTENT_HEAL_MODES);
 
@@ -237,15 +240,23 @@ function sanitizeEffectConfig(effectType: ItemEffectType, raw: unknown): ItemEff
     };
   }
   if (effectType === 'heal_flat') {
+    const curesStatusKinds = sanitizeHealingStatusKinds(record.curesStatusKinds ?? record.cures_status_kinds);
+    const curesStatus =
+      Boolean(record.curesStatus ?? record.cures_status) || curesStatusKinds.length > 0;
     return {
       healAmount: clampInt(record.healAmount, 1, 9999, 20),
-      curesStatus: Boolean(record.curesStatus),
+      curesStatus,
+      ...(curesStatusKinds.length > 0 && { curesStatusKinds }),
     };
   }
   if (effectType === 'heal_percent') {
+    const curesStatusKinds = sanitizeHealingStatusKinds(record.curesStatusKinds ?? record.cures_status_kinds);
+    const curesStatus =
+      Boolean(record.curesStatus ?? record.cures_status) || curesStatusKinds.length > 0;
     return {
       healPercent: clampNumber(record.healPercent, 0.01, 1, 0.25),
-      curesStatus: Boolean(record.curesStatus),
+      curesStatus,
+      ...(curesStatusKinds.length > 0 && { curesStatusKinds }),
     };
   }
   return {
@@ -319,6 +330,18 @@ function sanitizeOptionalText(raw: unknown, maxLength: number): string | undefin
 function clampInt(value: unknown, min: number, max: number, fallback: number): number {
   const parsed = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback;
   return Math.max(min, Math.min(max, parsed));
+}
+
+function sanitizeHealingStatusKinds(raw: unknown): HealingItemStatusConditionKind[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const parsed = raw
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry, index, values) => entry.length > 0 && values.indexOf(entry) === index)
+    .filter((entry): entry is HealingItemStatusConditionKind => HEALING_ITEM_STATUS_KIND_SET.has(entry as HealingItemStatusConditionKind));
+  return HEALING_ITEM_STATUS_CONDITION_KINDS.filter((kind) => parsed.includes(kind));
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {

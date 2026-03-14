@@ -296,6 +296,7 @@ function cloneNpcBattleConfig(config: NpcBattleConfig | undefined): NpcBattleCon
     members: config.members.map((member) => ({
       critterId: member.critterId,
       level: member.level,
+      equippedAbilityId: member.equippedAbilityId ?? null,
       equippedSkillIds: [...member.equippedSkillIds] as [string | null, string | null, string | null, string | null],
       equippedItems: member.equippedItems.map((item) => ({
         itemId: item.itemId,

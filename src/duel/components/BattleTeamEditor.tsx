@@ -100,6 +100,7 @@ export function BattleTeamEditor({
               {
                 critterId: candidate.id,
                 level: 1,
+                equippedAbilityId: null,
                 equippedSkillIds: [null, null, null, null],
                 equippedItems: [],
               },
@@ -114,6 +115,8 @@ export function BattleTeamEditor({
         const critter = catalogIndexes.critterById.get(member.critterId);
         const maxLevel = critter ? Math.max(1, ...critter.levels.map((row) => row.level)) : 1;
         const derived = critter ? computeCritterDerivedProgress(critter, member.level) : null;
+        const unlockedAbilities = derived ? new Set(derived.unlockedAbilityIds) : new Set<string>();
+        const unlockedAbilityOptions = catalogs.abilities.filter((ability) => unlockedAbilities.has(ability.id));
         const unlockedSkills = derived ? new Set(derived.unlockedSkillIds) : new Set<string>();
         const unlockedSkillOptions = catalogs.skills.filter((skill) => unlockedSkills.has(skill.skill_id));
         const equipSlotCount = critter ? computeCritterUnlockedEquipSlots(critter, member.level) : 0;
@@ -137,6 +140,7 @@ export function BattleTeamEditor({
         );
         const speciesIssues = issueByPath.get(`members.${memberIndex}.critterId`) ?? [];
         const levelIssues = issueByPath.get(`members.${memberIndex}.level`) ?? [];
+        const abilityIssues = issueByPath.get(`members.${memberIndex}.equippedAbilityId`) ?? [];
         const skillIssues = getIssuesStartingWith(`members.${memberIndex}.equippedSkillIds`);
         const equipmentIssues = getIssuesStartingWith(`members.${memberIndex}.equippedItems`);
 
@@ -188,6 +192,7 @@ export function BattleTeamEditor({
                               ...entry,
                               critterId: nextCritterId,
                               level: 1,
+                              equippedAbilityId: null,
                               equippedSkillIds: [null, null, null, null],
                               equippedItems: [],
                             }
@@ -226,14 +231,21 @@ export function BattleTeamEditor({
                   onChange={(event) => {
                     const nextLevel = Number.parseInt(event.target.value, 10);
                     updateMembers((current) =>
-                      current.map((entry, index) =>
-                        index === memberIndex
-                          ? {
-                              ...entry,
-                              level: Number.isFinite(nextLevel) ? Math.max(1, Math.min(maxLevel, nextLevel)) : 1,
-                            }
-                          : entry,
-                      ),
+                      current.map((entry, index) => {
+                        if (index !== memberIndex) {
+                          return entry;
+                        }
+                        const normalizedLevel = Number.isFinite(nextLevel) ? Math.max(1, Math.min(maxLevel, nextLevel)) : 1;
+                        const nextDerived = critter ? computeCritterDerivedProgress(critter, normalizedLevel) : null;
+                        const canKeepAbility =
+                          entry.equippedAbilityId &&
+                          nextDerived?.unlockedAbilityIds.includes(entry.equippedAbilityId);
+                        return {
+                          ...entry,
+                          level: normalizedLevel,
+                          equippedAbilityId: canKeepAbility ? entry.equippedAbilityId : null,
+                        };
+                      }),
                     );
                   }}
                 />
@@ -255,6 +267,41 @@ export function BattleTeamEditor({
             </div>
 
             <div className={`duel-member-card__detail-grid${isCompact ? ' duel-member-card__detail-grid--compact' : ''}`}>
+              <section className="duel-member-card__skills">
+                <h5>Ability</h5>
+                <label className="duel-member-card__skill-slot">
+                  Passive
+                  <select
+                    value={member.equippedAbilityId ?? ''}
+                    onChange={(event) => {
+                      const nextAbilityId = event.target.value.trim() || null;
+                      updateMembers((current) =>
+                        current.map((entry, index) =>
+                          index === memberIndex
+                            ? {
+                                ...entry,
+                                equippedAbilityId: nextAbilityId,
+                              }
+                            : entry,
+                        ),
+                      );
+                    }}
+                  >
+                    <option value="">(Empty)</option>
+                    {unlockedAbilityOptions.map((ability) => (
+                      <option key={`member-${memberIndex}-ability-${ability.id}`} value={ability.id}>
+                        {ability.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {abilityIssues.map((issue, issueIndex) => (
+                  <p key={`member-${memberIndex}-ability-issue-${issueIndex}`} className="duel-field-error">
+                    {issue}
+                  </p>
+                ))}
+              </section>
+
               <section className="duel-member-card__skills">
                 <h5>Skills</h5>
                 <div className="duel-member-card__skill-grid">

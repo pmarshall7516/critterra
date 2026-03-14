@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { sanitizeItemCatalog, sanitizeItemDefinition } from '@/game/items/schema';
-import { ITEM_CORE_CATEGORIES, ITEM_EFFECT_TYPES, type GameItemDefinition } from '@/game/items/types';
+import {
+  HEALING_ITEM_STATUS_CONDITION_KINDS,
+  ITEM_CORE_CATEGORIES,
+  ITEM_EFFECT_TYPES,
+  type GameItemDefinition,
+  type HealingItemStatusConditionKind,
+} from '@/game/items/types';
 import { apiFetchJson } from '@/shared/apiClient';
 import { sanitizeEquipmentEffectLibrary } from '@/game/equipmentEffects/schema';
 import {
@@ -80,7 +86,18 @@ interface EquipmentEffectAttachmentDraft {
   flinchFirstOverallOnly: boolean;
 }
 
+interface HealingEditorState {
+  healAmount: number;
+  healPercent: number;
+  curesAllSupportedStatuses: boolean;
+  curesStatusKinds: HealingItemStatusConditionKind[];
+}
+
 const DEFAULT_ITEM_BUCKET = 'items';
+const HEALING_STATUS_KIND_LABEL: Record<HealingItemStatusConditionKind, string> = {
+  toxic: 'Toxic',
+  stun: 'Stun',
+};
 
 export function ItemTool() {
   const [items, setItems] = useState<GameItemDefinition[]>([]);
@@ -162,6 +179,9 @@ export function ItemTool() {
       .sort((left, right) => left.effect_id.localeCompare(right.effect_id))
       .slice(0, 16);
   }, [equipmentEffects, equipmentEffectSearchInput, selectedEquipmentEffectIds]);
+
+  const isHealingEffectType = draft.effectType === 'heal_flat' || draft.effectType === 'heal_percent';
+  const healingEditorState = useMemo(() => readHealingEditorStateFromDraft(draft), [draft]);
 
   const loadItems = async () => {
     setIsLoading(true);
@@ -454,7 +474,7 @@ export function ItemTool() {
             />
           </label>
         </div>
-        <div className="critter-database-list">
+        <div className="critter-database-list critter-database-list--item">
           {sortedItems
             .filter((item) => {
               const query = itemSearchInput.trim().toLowerCase();
@@ -473,20 +493,34 @@ export function ItemTool() {
               return (
                 <article
                   key={`item-${item.id}`}
-                  className={`critter-db-card ${isSelected ? 'is-selected' : ''} ${isPendingRemoval ? 'is-pending-remove' : ''}`}
+                  className={`critter-db-card critter-db-card--item ${isSelected ? 'is-selected' : ''} ${isPendingRemoval ? 'is-pending-remove' : ''}`}
                 >
                   <button type="button" className="critter-db-card__select" onClick={() => selectItem(item)}>
-                    <div className="critter-db-card__header">
-                      <span className="critter-db-card__id">{item.id}</span>
-                      <span className="critter-db-card__name">{item.name}</span>
-                    </div>
-                    <p className="critter-db-card__meta">
-                      {item.category}
-                      {isPendingRemoval ? ' | pending remove' : ''}
-                    </p>
-                    <div className="critter-db-card__stats">
-                      <span>{item.effectType}</span>
-                      <span>{item.consumable ? 'Consumable' : 'Reusable'}</span>
+                    {item.imageUrl ? (
+                      <img
+                        src={item.imageUrl}
+                        alt=""
+                        className="critter-db-card__sprite"
+                        loading="lazy"
+                        decoding="async"
+                      />
+                    ) : (
+                      <span className="critter-db-card__sprite critter-db-card__sprite--empty" aria-hidden />
+                    )}
+                    <div className="critter-db-card__body">
+                      <div className="critter-db-card__header">
+                        <span className="critter-db-card__name">{item.name}</span>
+                      </div>
+                      <p className="critter-db-card__meta">
+                        {item.category}
+                        {isPendingRemoval ? ' · pending remove' : ''}
+                      </p>
+                      <div className="critter-db-card__stats">
+                        <span>{item.effectType}</span>
+                        <span>{item.consumable ? 'Consumable' : 'Reusable'}</span>
+                        <span>Stack ×{item.maxStack}</span>
+                        <span>{item.isActive ? 'Active' : 'Inactive'}</span>
+                      </div>
                     </div>
                   </button>
                   <button
@@ -566,7 +600,9 @@ export function ItemTool() {
                   Effect Type
                   <select
                     value={draft.effectType}
-                    onChange={(event) => setDraft((current) => ({ ...current, effectType: event.target.value }))}
+                    onChange={(event) =>
+                      setDraft((current) => updateDraftForEffectType(current, event.target.value))
+                    }
                   >
                     {ITEM_EFFECT_TYPES.filter((type) => type !== 'equip_effect').map((type) => (
                       <option key={type} value={type}>
@@ -582,7 +618,7 @@ export function ItemTool() {
                     step="any"
                     value={draft.valueInput}
                     onChange={(event) => setDraft((current) => ({ ...current, valueInput: event.target.value }))}
-                    placeholder="heal_flat: healAmount | tool_action: power"
+                    placeholder="heal_flat/percent: healing value | tool_action: power"
                   />
                 </label>
               </>
@@ -1104,21 +1140,158 @@ export function ItemTool() {
             </>
           ) : (
             <>
-              <label>
-                Effect Config (JSON)
-                <textarea
-                  value={draft.effectConfigJson}
-                  onChange={(event) => setDraft((current) => ({ ...current, effectConfigJson: event.target.value }))}
-                  rows={8}
-                  className="admin-json"
-                />
-              </label>
-              <p className="admin-note">
-                Examples: tool <code>{'{"actionId":"fishing","requiresFacingTileKeyword":["water"]}'}</code>; heal flat{' '}
-                <code>{'{"healAmount":20}'}</code>; heal percent <code>{'{"healPercent":0.35}'}</code>.
-                Success Text supports <code>{'<Critter>'}</code> and <code>X</code> tokens. Value sync rules: <code>heal_flat</code>{' '}
-                updates <code>effectConfig.healAmount</code>, and <code>tool_action</code> updates <code>effectConfig.power</code>.
-              </p>
+              {isHealingEffectType ? (
+                <>
+                  <div className="admin-grid-2">
+                    {draft.effectType === 'heal_flat' ? (
+                      <label>
+                        Heal Amount (HP)
+                        <input
+                          type="number"
+                          min={1}
+                          max={9999}
+                          value={String(healingEditorState.healAmount)}
+                          onChange={(event) => {
+                            const parsed = Number.parseInt(event.target.value, 10);
+                            const nextAmount = Number.isFinite(parsed) ? Math.max(1, Math.min(9999, parsed)) : 20;
+                            setDraft((current) =>
+                              updateHealingDraftFromEditorState(current, (state) => ({
+                                ...state,
+                                healAmount: nextAmount,
+                              })),
+                            );
+                          }}
+                        />
+                      </label>
+                    ) : (
+                      <label>
+                        Heal Percent (0.01 - 1.00)
+                        <input
+                          type="number"
+                          min={0.01}
+                          max={1}
+                          step="0.01"
+                          value={String(healingEditorState.healPercent)}
+                          onChange={(event) => {
+                            const parsed = Number.parseFloat(event.target.value);
+                            const nextPercent = Number.isFinite(parsed) ? Math.max(0.01, Math.min(1, parsed)) : 0.25;
+                            setDraft((current) =>
+                              updateHealingDraftFromEditorState(current, (state) => ({
+                                ...state,
+                                healPercent: nextPercent,
+                              })),
+                            );
+                          }}
+                        />
+                      </label>
+                    )}
+                  </div>
+                  <div className="healing-status-cures">
+                    <h5 className="healing-status-cures__title">Cures Status Conditions</h5>
+                    <p className="healing-status-cures__intro">This item cures all statuses in the list below.</p>
+                    {healingEditorState.curesStatusKinds.length > 0 ? (
+                      <div className="healing-status-cures__list">
+                        {healingEditorState.curesStatusKinds.map((kind) => (
+                          <span key={kind} className="healing-status-cures__chip">
+                            {HEALING_STATUS_KIND_LABEL[kind]}
+                            <button
+                              type="button"
+                              className="healing-status-cures__chip-remove"
+                              aria-label={`Remove ${HEALING_STATUS_KIND_LABEL[kind]}`}
+                              onClick={() => {
+                                setDraft((current) =>
+                                  updateHealingDraftFromEditorState(current, (state) => ({
+                                    ...state,
+                                    curesStatusKinds: state.curesStatusKinds.filter((k) => k !== kind),
+                                    curesAllSupportedStatuses: false,
+                                  })),
+                                );
+                              }}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="healing-status-cures__empty">No statuses selected. Add statuses below or use Cure All.</p>
+                    )}
+                    <div className="healing-status-cures__add">
+                      <span className="healing-status-cures__add-label">Add status:</span>
+                      <div className="healing-status-cures__buttons">
+                        {HEALING_ITEM_STATUS_CONDITION_KINDS.map((kind) => {
+                          const isInList = healingEditorState.curesStatusKinds.includes(kind);
+                          return (
+                            <button
+                              key={kind}
+                              type="button"
+                              className="secondary healing-status-cures__status-btn"
+                              disabled={isInList}
+                              onClick={() => {
+                                if (isInList) return;
+                                setDraft((current) =>
+                                  updateHealingDraftFromEditorState(current, (state) => ({
+                                    ...state,
+                                    curesStatusKinds: [...state.curesStatusKinds, kind].sort(
+                                      (a, b) =>
+                                        HEALING_ITEM_STATUS_CONDITION_KINDS.indexOf(a) -
+                                        HEALING_ITEM_STATUS_CONDITION_KINDS.indexOf(b),
+                                    ),
+                                    curesAllSupportedStatuses: false,
+                                  })),
+                                );
+                              }}
+                            >
+                              {HEALING_STATUS_KIND_LABEL[kind]}
+                            </button>
+                          );
+                        })}
+                        <button
+                          type="button"
+                          className="secondary healing-status-cures__cure-all"
+                          onClick={() => {
+                            setDraft((current) =>
+                              updateHealingDraftFromEditorState(current, (state) => ({
+                                ...state,
+                                curesAllSupportedStatuses: false,
+                                curesStatusKinds: [...HEALING_ITEM_STATUS_CONDITION_KINDS],
+                              })),
+                            );
+                          }}
+                        >
+                          Cure All
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <p className="admin-note">
+                    Healing items with matching cures can be used even at full HP.
+                  </p>
+                  <label>
+                    Effect Config (JSON Preview)
+                    <textarea value={draft.effectConfigJson} rows={6} className="admin-json" readOnly />
+                  </label>
+                </>
+              ) : (
+                <>
+                  <label>
+                    Effect Config (JSON)
+                    <textarea
+                      value={draft.effectConfigJson}
+                      onChange={(event) => setDraft((current) => ({ ...current, effectConfigJson: event.target.value }))}
+                      rows={8}
+                      className="admin-json"
+                    />
+                  </label>
+                  <p className="admin-note">
+                    Examples: tool <code>{'{"actionId":"fishing","requiresFacingTileKeyword":["water"]}'}</code>; heal flat{' '}
+                    <code>{'{"healAmount":20}'}</code>; heal percent <code>{'{"healPercent":0.35}'}</code>.
+                    Success Text supports <code>{'<Critter>'}</code> and <code>X</code> tokens. Value sync rules: <code>heal_flat</code>{' '}
+                    updates <code>effectConfig.healAmount</code>, <code>heal_percent</code> updates <code>effectConfig.healPercent</code>, and{' '}
+                    <code>tool_action</code> updates <code>effectConfig.power</code>.
+                  </p>
+                </>
+              )}
             </>
           )}
         </section>
@@ -1459,6 +1632,134 @@ function clampFloat(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function updateDraftForEffectType(current: ItemDraft, nextEffectType: string): ItemDraft {
+  const next = {
+    ...current,
+    effectType: nextEffectType,
+  };
+  if (nextEffectType !== 'heal_flat' && nextEffectType !== 'heal_percent') {
+    return next;
+  }
+  return updateHealingDraftFromEditorState(next, (state) => state);
+}
+
+function readHealingEditorStateFromDraft(draft: ItemDraft): HealingEditorState {
+  const config = parseEffectConfigJsonObjectUnsafe(draft.effectConfigJson);
+  const legacyKinds = sanitizeHealingStatusKindsForDraft(config.cures_status_kinds);
+  const explicitKinds = sanitizeHealingStatusKindsForDraft(config.curesStatusKinds);
+  const curesAllSupportedStatuses =
+    explicitKinds.length === 0 &&
+    legacyKinds.length === 0 &&
+    (config.curesStatus === true || config.cures_status === true);
+  const curesStatusKinds =
+    explicitKinds.length > 0
+      ? explicitKinds
+      : legacyKinds.length > 0
+        ? legacyKinds
+        : [];
+  const parsedValueInput = parseOptionalNumberInput(draft.valueInput);
+  const healAmountValue =
+    typeof config.healAmount === 'number' && Number.isFinite(config.healAmount)
+      ? Math.floor(config.healAmount)
+      : typeof parsedValueInput === 'number' && Number.isFinite(parsedValueInput) && draft.effectType === 'heal_flat'
+        ? Math.floor(parsedValueInput)
+        : 20;
+  const healPercentValue =
+    typeof config.healPercent === 'number' && Number.isFinite(config.healPercent)
+      ? config.healPercent
+      : typeof parsedValueInput === 'number' && Number.isFinite(parsedValueInput) && draft.effectType === 'heal_percent'
+        ? parsedValueInput
+        : 0.25;
+  return {
+    healAmount: Math.max(1, Math.min(9999, healAmountValue)),
+    healPercent: Math.max(0.01, Math.min(1, healPercentValue)),
+    curesAllSupportedStatuses,
+    curesStatusKinds,
+  };
+}
+
+function updateHealingDraftFromEditorState(
+  draft: ItemDraft,
+  updater: (state: HealingEditorState) => HealingEditorState,
+): ItemDraft {
+  if (draft.effectType !== 'heal_flat' && draft.effectType !== 'heal_percent') {
+    return draft;
+  }
+  const nextState = updater(readHealingEditorStateFromDraft(draft));
+  const curesStatusKinds = sanitizeHealingStatusKindsForDraft(nextState.curesStatusKinds);
+  const curesStatus = nextState.curesAllSupportedStatuses || curesStatusKinds.length > 0;
+  const includeKinds = !nextState.curesAllSupportedStatuses && curesStatusKinds.length > 0;
+
+  if (draft.effectType === 'heal_flat') {
+    const healAmount = Math.max(1, Math.min(9999, Math.floor(nextState.healAmount)));
+    return {
+      ...draft,
+      valueInput: String(healAmount),
+      effectConfigJson: JSON.stringify(
+        {
+          healAmount,
+          curesStatus,
+          ...(includeKinds ? { curesStatusKinds } : {}),
+        },
+        null,
+        2,
+      ),
+    };
+  }
+
+  const healPercent = Math.max(0.01, Math.min(1, nextState.healPercent));
+  return {
+    ...draft,
+    valueInput: normalizeNumberInputText(healPercent),
+    effectConfigJson: JSON.stringify(
+      {
+        healPercent,
+        curesStatus,
+        ...(includeKinds ? { curesStatusKinds } : {}),
+      },
+      null,
+      2,
+    ),
+  };
+}
+
+function sanitizeHealingStatusKindsForDraft(raw: unknown): HealingItemStatusConditionKind[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const normalized = raw
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry, index, values) => entry.length > 0 && values.indexOf(entry) === index)
+    .filter((entry): entry is HealingItemStatusConditionKind =>
+      HEALING_ITEM_STATUS_CONDITION_KINDS.includes(entry as HealingItemStatusConditionKind),
+    );
+  return HEALING_ITEM_STATUS_CONDITION_KINDS.filter((kind) => normalized.includes(kind));
+}
+
+function parseEffectConfigJsonObjectUnsafe(raw: string): Record<string, unknown> {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function normalizeNumberInputText(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '';
+  }
+  return String(Number(value.toFixed(4)));
+}
+
 function parseEffectConfigJson(raw: string): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -1522,6 +1823,13 @@ function syncEffectConfigWithValue(
       delete next.healAmount;
     }
   }
+  if (effectType === 'heal_percent') {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      next.healPercent = Math.max(0.01, Math.min(1, value));
+    } else {
+      delete next.healPercent;
+    }
+  }
   if (effectType === 'tool_action') {
     if (typeof value === 'number' && Number.isFinite(value)) {
       next.power = Math.max(0, Math.min(1, value));
@@ -1546,6 +1854,12 @@ function deriveValueFromItem(item: GameItemDefinition): number | undefined {
     const effect = item.effectConfig as { power?: number };
     if (typeof effect.power === 'number' && Number.isFinite(effect.power)) {
       return Math.max(0, Math.min(1, effect.power));
+    }
+  }
+  if (item.effectType === 'heal_percent') {
+    const effect = item.effectConfig as { healPercent?: number };
+    if (typeof effect.healPercent === 'number' && Number.isFinite(effect.healPercent)) {
+      return Math.max(0.01, Math.min(1, effect.healPercent));
     }
   }
   return undefined;

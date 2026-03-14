@@ -4,6 +4,7 @@ import type { SkillDefinition, SkillEffectDefinition, ElementChart } from '@/gam
 import type { EquipmentEffectDefinition } from '@/game/equipmentEffects/types';
 import type { EquipmentEffectInstance } from '@/game/equipmentEffects/resolver';
 import type { FlinchStatusCondition, PersistentStatusCondition } from '@/game/battle/statusConditions';
+import type { AbilityDefinition } from '@/game/abilities/types';
 
 export type DuelBattleFormat = 'singles' | 'doubles' | 'triples';
 export type DuelControlMode = 'human' | 'random-agent';
@@ -18,6 +19,7 @@ export interface DuelSquadItem {
 export interface DuelSquadMember {
   critterId: number;
   level: number;
+  equippedAbilityId: string | null;
   equippedSkillIds: [string | null, string | null, string | null, string | null];
   equippedItems: DuelSquadItem[];
 }
@@ -33,6 +35,7 @@ export interface DuelSquad {
 
 export interface DuelCatalogContent {
   critters: CritterDefinition[];
+  abilities: AbilityDefinition[];
   items: GameItemDefinition[];
   skills: SkillDefinition[];
   skillEffects: SkillEffectDefinition[];
@@ -42,6 +45,7 @@ export interface DuelCatalogContent {
 
 export interface DuelCatalogIndexes {
   critterById: Map<number, CritterDefinition>;
+  abilityById: Map<string, AbilityDefinition>;
   itemById: Map<string, GameItemDefinition>;
   skillById: Map<string, SkillDefinition>;
   skillEffectById: Map<string, SkillEffectDefinition>;
@@ -115,6 +119,10 @@ export interface DuelBattleCritterState {
   attack: number;
   defense: number;
   speed: number;
+  equippedAbilityId: string | null;
+  equippedAbility: AbilityDefinition | null;
+  damagedBuffDamageTriggerReady: boolean;
+  damagedBuffEffectTriggerReady: boolean;
   attackModifier: number;
   defenseModifier: number;
   speedModifier: number;

@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { sanitizeAbilityLibrary } from '@/game/abilities/schema';
+import type { AbilityDefinition } from '@/game/abilities/types';
 import { sanitizeCritterDatabase, sanitizeCritterDefinition } from '@/game/critters/schema';
 import { sanitizeItemCatalog } from '@/game/items/schema';
 import { sanitizeSkillEffectLibrary, sanitizeSkillLibrary } from '@/game/skills/schema';
 import { sanitizeEquipmentEffectLibrary } from '@/game/equipmentEffects/schema';
 import {
-  CRITTER_ABILITY_KINDS,
   CRITTER_ELEMENTS,
   CRITTER_MISSION_TYPES,
   CRITTER_RARITIES,
@@ -55,6 +56,13 @@ interface SkillsListResponse {
   ok: boolean;
   critterSkills?: unknown;
   skillEffects?: unknown;
+  abilities?: unknown;
+  error?: string;
+}
+
+interface AbilitiesListResponse {
+  ok: boolean;
+  abilities?: unknown;
   error?: string;
 }
 
@@ -74,6 +82,29 @@ function formatSkillOptionLabel(skill: SkillDefinition): string {
   const letter = skill.type === 'damage' ? 'D' : 'S';
   const value = getSkillValueDisplayNumber(skill);
   return value != null ? `${skill.skill_name} - ${letter} - ${value}` : `${skill.skill_name} - ${letter}`;
+}
+
+function formatAbilityOptionLabel(ability: AbilityDefinition): string {
+  const templates = ability.templateAttachments.map((attachment) => attachment.templateType).join(', ');
+  return templates ? `${ability.name} - ${templates}` : ability.name;
+}
+
+function collectAbilityEffectIconUrls(
+  ability: AbilityDefinition,
+  effectList: AdminSkillEffectOption[],
+): string[] {
+  const urls: string[] = [];
+  for (const attachment of ability.templateAttachments) {
+    const effectId =
+      attachment.templateType === 'guard-buff'
+        ? attachment.procEffectAttachment?.effectId
+        : attachment.rewardEffectAttachment?.effectId;
+    const iconUrl = effectId ? effectList.find((effect) => effect.id === effectId)?.iconUrl : null;
+    if (iconUrl && !urls.includes(iconUrl)) {
+      urls.push(iconUrl);
+    }
+  }
+  return urls;
 }
 
 interface MissionDraft {
@@ -186,10 +217,14 @@ export function CritterTool() {
   const [selectedSpritePath, setSelectedSpritePath] = useState('');
   const [pendingRemovalIds, setPendingRemovalIds] = useState<Set<number>>(new Set());
   const [skillList, setSkillList] = useState<SkillDefinition[]>([]);
+  const [abilityList, setAbilityList] = useState<AbilityDefinition[]>([]);
   const [skillEffectList, setSkillEffectList] = useState<AdminSkillEffectOption[]>([]);
   const [skillSearchInputs, setSkillSearchInputs] = useState<Record<string, string>>({});
   const [skillDropdownOpen, setSkillDropdownOpen] = useState<Record<string, boolean>>({});
+  const [abilitySearchInputs, setAbilitySearchInputs] = useState<Record<string, string>>({});
+  const [abilityDropdownOpen, setAbilityDropdownOpen] = useState<Record<string, boolean>>({});
   const skillSearchInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const abilitySearchInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const [effectTemplates, setEffectTemplates] = useState<EffectTemplateOption[]>([]);
   const [missionEffectTemplateSearchInput, setMissionEffectTemplateSearchInput] = useState('');
   const [elementColorById, setElementColorById] = useState<Record<string, string>>({});
@@ -391,9 +426,10 @@ export function CritterTool() {
 
   const loadSkills = async () => {
     try {
-      const [result, loadedElements] = await Promise.all([
+      const [result, loadedElements, abilitiesResult] = await Promise.all([
         apiFetchJson<SkillsListResponse>('/api/admin/skills/list'),
         loadAdminGameElements(),
+        apiFetchJson<AbilitiesListResponse>('/api/admin/abilities/list'),
       ]);
       if (!result.ok) {
         throw new Error(result.error ?? result.data?.error ?? 'Unable to load skills.');
@@ -439,6 +475,17 @@ export function CritterTool() {
       )
         .filter((skill) => skill.skill_id.length > 0);
       setSkillList(list);
+      const rawAbilities = abilitiesResult.ok
+        ? abilitiesResult.data?.abilities
+        : result.data?.abilities;
+      const abilities = sanitizeAbilityLibrary(
+        rawAbilities,
+        knownEffectIds,
+        legacyEffectBuffPercentById,
+        effectTypeById,
+        allowedElementIds,
+      );
+      setAbilityList(abilities);
       const skillEffectTemplateOptions: EffectTemplateOption[] = skillEffects.map((effect) => ({
         id: effect.effect_id,
         name: effect.effect_name ?? effect.effect_id,
@@ -450,6 +497,7 @@ export function CritterTool() {
       });
     } catch (err) {
       setSkillList([]);
+      setAbilityList([]);
       setSkillEffectList([]);
       setStatus(
         err instanceof Error ? err.message : 'Skills could not be loaded. Check database connection and try Reload.',
@@ -983,106 +1031,6 @@ export function CritterTool() {
         </section>
 
         <section className="critter-editor-group">
-          <h4>Abilities</h4>
-          <div className="admin-row">
-            <button
-              type="button"
-              className="secondary"
-              onClick={() =>
-                setDraft((current) => ({
-                  ...current,
-                  abilities: [
-                    ...current.abilities,
-                    {
-                      id: `ability-${current.abilities.length + 1}`,
-                      name: `Ability ${current.abilities.length + 1}`,
-                      kind: 'passive',
-                      description: '',
-                    },
-                  ],
-                }))
-              }
-            >
-              Add Ability
-            </button>
-          </div>
-          <div className="saved-paint-list">
-            {draft.abilities.length === 0 && <p className="admin-note">No abilities configured yet.</p>}
-            {draft.abilities.map((ability, index) => (
-              <div key={`ability-${index}`} className="saved-paint-row">
-                <input
-                  value={ability.id}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      abilities: current.abilities.map((entry, entryIndex) =>
-                        entryIndex === index ? { ...entry, id: event.target.value } : entry,
-                      ),
-                    }))
-                  }
-                  placeholder="ability-id"
-                />
-                <input
-                  value={ability.name}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      abilities: current.abilities.map((entry, entryIndex) =>
-                        entryIndex === index ? { ...entry, name: event.target.value } : entry,
-                      ),
-                    }))
-                  }
-                  placeholder="Ability Name"
-                />
-                <select
-                  value={ability.kind}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      abilities: current.abilities.map((entry, entryIndex) =>
-                        entryIndex === index
-                          ? { ...entry, kind: event.target.value === 'active' ? 'active' : 'passive' }
-                          : entry,
-                      ),
-                    }))
-                  }
-                >
-                  {CRITTER_ABILITY_KINDS.map((kind) => (
-                    <option key={kind} value={kind}>
-                      {kind}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  value={ability.description}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      abilities: current.abilities.map((entry, entryIndex) =>
-                        entryIndex === index ? { ...entry, description: event.target.value } : entry,
-                      ),
-                    }))
-                  }
-                  placeholder="Ability description"
-                />
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() =>
-                    setDraft((current) => ({
-                      ...current,
-                      abilities: current.abilities.filter((_, entryIndex) => entryIndex !== index),
-                    }))
-                  }
-                >
-                  Remove
-                </button>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="critter-editor-group">
           <h4>Level Requirements</h4>
           <div className="admin-row">
             <button
@@ -1166,15 +1114,133 @@ export function CritterTool() {
                     />
                   </label>
                 </div>
-                <label>
-                  Ability Unlock IDs (comma separated)
-                  <input
-                    value={levelRow.abilityUnlockIdsInput}
-                    onChange={(event) =>
-                      updateLevelRow(levelIndex, (entry) => ({ ...entry, abilityUnlockIdsInput: event.target.value }))
-                    }
-                    placeholder="ability-id-a, ability-id-b"
-                  />
+                <label className="admin-effect-picker-wrap">
+                  <span>Ability Unlock IDs</span>
+                  {(() => {
+                    const levelKey = `ability-level-${levelIndex}`;
+                    const searchInput = abilitySearchInputs[levelKey] ?? '';
+                    const isOpen = abilityDropdownOpen[levelKey] ?? false;
+                    const selectedIds = levelRow.abilityUnlockIdsInput.split(',').map((entry) => entry.trim()).filter(Boolean);
+                    const filteredOptions = abilityList
+                      .filter((ability) => !selectedIds.includes(ability.id))
+                      .filter(
+                        (ability) =>
+                          !searchInput.trim() ||
+                          ability.id.toLowerCase().includes(searchInput.trim().toLowerCase()) ||
+                          ability.name.toLowerCase().includes(searchInput.trim().toLowerCase()) ||
+                          ability.description.toLowerCase().includes(searchInput.trim().toLowerCase()),
+                      )
+                      .sort((left, right) => left.id.localeCompare(right.id));
+                    return (
+                      <div
+                        className="admin-effect-picker"
+                        onClick={() => abilitySearchInputRefs.current[levelKey]?.focus()}
+                      >
+                        {selectedIds.map((id) => {
+                          const option = abilityList.find((ability) => ability.id === id);
+                          const iconUrls = option ? collectAbilityEffectIconUrls(option, skillEffectList) : [];
+                          return (
+                            <span
+                              key={id}
+                              className="admin-effect-picker__chip"
+                              title={option ? formatAbilityOptionLabel(option) : undefined}
+                            >
+                              {option ? option.name : id}
+                              {iconUrls.map((url, iconIndex) => (
+                                <img
+                                  key={`${id}-${url}-${iconIndex}`}
+                                  src={url}
+                                  alt=""
+                                  className="skill-cell__effect-icon"
+                                />
+                              ))}
+                              <button
+                                type="button"
+                                className="admin-effect-picker__chip-remove"
+                                aria-label={`Remove ${id}`}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  const next = selectedIds.filter((entry) => entry !== id).join(', ');
+                                  updateLevelRow(levelIndex, (entry) => ({ ...entry, abilityUnlockIdsInput: next }));
+                                }}
+                              >
+                                ×
+                              </button>
+                            </span>
+                          );
+                        })}
+                        <input
+                          ref={(element) => {
+                            abilitySearchInputRefs.current[levelKey] = element;
+                          }}
+                          type="text"
+                          className="admin-effect-picker__input"
+                          value={searchInput}
+                          onChange={(event) =>
+                            setAbilitySearchInputs((current) => ({ ...current, [levelKey]: event.target.value }))
+                          }
+                          onFocus={() => setAbilityDropdownOpen((current) => ({ ...current, [levelKey]: true }))}
+                          onBlur={() =>
+                            setTimeout(() => setAbilityDropdownOpen((current) => ({ ...current, [levelKey]: false })), 150)
+                          }
+                          placeholder={selectedIds.length === 0 ? 'Search abilities' : ''}
+                        />
+                        {isOpen && (
+                          <div className="admin-effect-picker__dropdown">
+                            {filteredOptions.length === 0 ? (
+                              <p className="admin-effect-picker__dropdown-empty">
+                                {abilityList.length === 0 ? 'No saved abilities loaded.' : 'No matching abilities.'}
+                              </p>
+                            ) : (
+                              filteredOptions.map((ability) => {
+                                const rowColor = elementColorById[ability.element];
+                                const iconUrls = collectAbilityEffectIconUrls(ability, skillEffectList);
+                                const elementLogoUrl = buildElementLogoUrlFromIconsBucket(ability.element, iconsBucketRoot);
+                                const rowStyle = rowColor ? ({ ['--admin-skill-bg' as string]: rowColor } as Record<string, string>) : undefined;
+                                return (
+                                  <button
+                                    key={ability.id}
+                                    type="button"
+                                    className={`admin-effect-picker__dropdown-item admin-effect-picker__dropdown-item--ability admin-skill-list-item ability-tool__saved-button ${rowColor ? 'admin-skill-list-item--colored' : ''}`}
+                                    style={rowStyle}
+                                    onMouseDown={(event) => {
+                                      event.preventDefault();
+                                      const next = [...selectedIds, ability.id].join(', ');
+                                      updateLevelRow(levelIndex, (entry) => ({ ...entry, abilityUnlockIdsInput: next }));
+                                      setAbilitySearchInputs((current) => ({ ...current, [levelKey]: '' }));
+                                    }}
+                                  >
+                                    {elementLogoUrl ? (
+                                      <img
+                                        src={elementLogoUrl}
+                                        alt={ability.element}
+                                        className="skill-cell__element-logo"
+                                        loading="lazy"
+                                        decoding="async"
+                                      />
+                                    ) : null}
+                                    <span className="ability-tool__saved-name">{ability.name}</span>
+                                    <span className="ability-tool__saved-meta">
+                                      {iconUrls.map((url, iconIndex) => (
+                                        <img
+                                          key={`${ability.id}-${url}-${iconIndex}`}
+                                          src={url}
+                                          alt=""
+                                          className="skill-cell__effect-icon"
+                                          loading="lazy"
+                                          decoding="async"
+                                        />
+                                      ))}
+                                    </span>
+                                  </button>
+                                );
+                              })
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </label>
                 <label className="admin-effect-picker-wrap">
                   <span>Skill Unlock IDs</span>

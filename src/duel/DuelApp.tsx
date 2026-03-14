@@ -1244,6 +1244,7 @@ export function DuelApp() {
         {
           critterId: firstCritter.id,
           level: 1,
+          equippedAbilityId: null,
           equippedSkillIds: [null, null, null, null],
           equippedItems: [],
         },
